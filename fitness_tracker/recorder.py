@@ -58,8 +58,9 @@ class Recorder:
             if self._start_ns is None:
                 self._start_ns = t_ns
             t_ns_zero = t_ns - self._start_ns
+            t_ms = t_ns_zero / 1_000_000
             t_sec = t_ns_zero / 1e9
             GLib.idle_add(self.on_bpm, t_sec, bpm)
             if self._recording:
-                self.db.insert_heart_rate(self._activity_id, t_ns_zero, bpm, rr, energy)
+                self.db.insert_heart_rate(self._activity_id, t_ms, bpm, rr, energy)
         await ble_task

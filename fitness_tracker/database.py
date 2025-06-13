@@ -25,7 +25,7 @@ class HeartRate(Base):
     __tablename__ = "heart_rate"
     id = Column(Integer, primary_key=True)
     activity_id = Column(Integer, ForeignKey("activities.id"), nullable=False)
-    timestamp_ns = Column(BigInteger, nullable=False)
+    timestamp_ms = Column(Integer, nullable=False)
     bpm = Column(Integer, nullable=False)
     rr_interval = Column(Float)
     energy_kj = Column(Float)
@@ -58,7 +58,7 @@ class DatabaseManager:
     def insert_heart_rate(
         self,
         activity_id: int,
-        timestamp_ns: int,
+        timestamp_ms: int,
         bpm: int,
         rr: float | None,
         energy: float | None,
@@ -66,7 +66,7 @@ class DatabaseManager:
         session = self.Session()
         hr = HeartRate(
             activity_id=activity_id,
-            timestamp_ns=timestamp_ns,
+            timestamp_ms=timestamp_ms,
             bpm=bpm,
             rr_interval=rr,
             energy_kj=energy,
@@ -106,7 +106,7 @@ class DatabaseManager:
             for hr in hrs:
                 new_hr = HeartRate(
                     activity_id=new_act.id,
-                    timestamp_ns=hr.timestamp_ns,
+                    timestamp_ms=hr.timestamp_ms,
                     bpm=hr.bpm,
                     rr_interval=hr.rr_interval,
                     energy_kj=hr.energy_kj,
