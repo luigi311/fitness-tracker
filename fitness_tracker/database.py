@@ -1,53 +1,59 @@
-import sqlite3
 from datetime import datetime
+from sqlalchemy import (
+    Column,
+    Integer,
+    BigInteger,
+    Float,
+    DateTime,
+    ForeignKey,
+    create_engine,
+)
+from sqlalchemy.orm import declarative_base, relationship, sessionmaker
 
-DB_PATH = "fitness.db"
+Base = declarative_base()
+
+
+class Activity(Base):
+    __tablename__ = "activities"
+    id = Column(Integer, primary_key=True)
+    start_time = Column(DateTime, nullable=False)
+    end_time = Column(DateTime)
+    heart_rates = relationship("HeartRate", back_populates="activity")
+
+
+class HeartRate(Base):
+    __tablename__ = "heart_rate"
+    id = Column(Integer, primary_key=True)
+    activity_id = Column(Integer, ForeignKey("activities.id"), nullable=False)
+    timestamp_ns = Column(BigInteger, nullable=False)
+    bpm = Column(Integer, nullable=False)
+    rr_interval = Column(Float)
+    energy_kj = Column(Float)
+    activity = relationship("Activity", back_populates="heart_rates")
+
 
 class DatabaseManager:
-    """Handles SQLite schema and CRUD for activities & heart rate."""
-    def __init__(self, path: str = DB_PATH):
-        self.conn = sqlite3.connect(
-            path,
-            detect_types=sqlite3.PARSE_DECLTYPES,
-            check_same_thread=False,
-        )
-        self._ensure_schema()
-
-    def _ensure_schema(self):
-        c = self.conn.cursor()
-        c.execute("""
-        CREATE TABLE IF NOT EXISTS activities (
-          id           INTEGER PRIMARY KEY AUTOINCREMENT,
-          start_time   TIMESTAMP NOT NULL,
-          end_time     TIMESTAMP
-        );
-        """)
-        c.execute("""
-        CREATE TABLE IF NOT EXISTS heart_rate (
-          id           INTEGER PRIMARY KEY AUTOINCREMENT,
-          activity_id  INTEGER NOT NULL REFERENCES activities(id),
-          timestamp_ns INTEGER NOT NULL,
-          bpm          INTEGER NOT NULL,
-          rr_interval  REAL,
-          energy_kj    REAL
-        );
-        """)
-        self.conn.commit()
+    def __init__(self, database_url: str):
+        # Create engine and tables locally
+        self.engine = create_engine(database_url, echo=False)
+        Base.metadata.create_all(self.engine)
+        self.Session = sessionmaker(bind=self.engine)
 
     def start_activity(self) -> int:
-        now = datetime.utcnow()
-        cur = self.conn.cursor()
-        cur.execute("INSERT INTO activities (start_time) VALUES (?)", (now,))
-        self.conn.commit()
-        return cur.lastrowid
+        session = self.Session()
+        act = Activity(start_time=datetime.utcnow())
+        session.add(act)
+        session.commit()
+        aid = act.id
+        session.close()
+        return aid
 
     def stop_activity(self, activity_id: int):
-        now = datetime.utcnow()
-        self.conn.execute(
-            "UPDATE activities SET end_time = ? WHERE id = ?",
-            (now, activity_id)
-        )
-        self.conn.commit()
+        session = self.Session()
+        act = session.get(Activity, activity_id)
+        act.end_time = datetime.utcnow()
+        session.commit()
+        session.close()
 
     def insert_heart_rate(
         self,
@@ -57,18 +63,56 @@ class DatabaseManager:
         rr: float | None,
         energy: float | None,
     ):
-        self.conn.execute(
-            """
-            INSERT INTO heart_rate
-              (activity_id, timestamp_ns, bpm, rr_interval, energy_kj)
-            VALUES (?, ?, ?, ?, ?)
-            """,
-            (activity_id, timestamp_ns, bpm, rr, energy),
+        session = self.Session()
+        hr = HeartRate(
+            activity_id=activity_id,
+            timestamp_ns=timestamp_ns,
+            bpm=bpm,
+            rr_interval=rr,
+            energy_kj=energy,
         )
-        # commit can be batched by caller
+        session.add(hr)
+        session.commit()
+        session.close()
 
-    def commit(self):
-        self.conn.commit()
+    def sync_to_postgres(self, postgres_url: str):
+        """
+        Sync new local activities & heart rates to remote Postgres.
+        Uses Activity.start_time to avoid duplicates.
+        """
+        # Setup remote engine & tables
+        remote_engine = create_engine(postgres_url, echo=False)
+        Base.metadata.create_all(remote_engine)
+        LocalSession = self.Session
+        RemoteSession = sessionmaker(bind=remote_engine)
 
-    def close(self):
-        self.conn.close()
+        local = LocalSession()
+        remote = RemoteSession()
+
+        # Cache remote start_times
+        existing = {a.start_time for a in remote.query(Activity).all()}
+
+        # Push any local activities not yet remote
+        for act in local.query(Activity).order_by(Activity.start_time):
+            if act.start_time in existing:
+                continue
+            # Create remote activity
+            new_act = Activity(start_time=act.start_time, end_time=act.end_time)
+            remote.add(new_act)
+            remote.commit()
+
+            # Push its samples
+            hrs = local.query(HeartRate).filter_by(activity_id=act.id)
+            for hr in hrs:
+                new_hr = HeartRate(
+                    activity_id=new_act.id,
+                    timestamp_ns=hr.timestamp_ns,
+                    bpm=hr.bpm,
+                    rr_interval=hr.rr_interval,
+                    energy_kj=hr.energy_kj,
+                )
+                remote.add(new_hr)
+            remote.commit()
+
+        local.close()
+        remote.close()

@@ -1,3 +1,6 @@
+from os.path import expanduser
+from pathlib import Path
+import threading
 import gi
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_gtk4agg import FigureCanvasGTK4Agg as FigureCanvas
@@ -17,11 +20,17 @@ class FitnessAppUI(Adw.Application):
         self._times: list[float] = []
         self._bpms: list[int] = []
         self._line = None
+        # Set up application directory
+        app_dir = Path(expanduser("~/.local/share/io.Luigi311.Fitness"))
+        app_dir.mkdir(parents=True, exist_ok=True)
+        self.database = app_dir / "fitness.db"
 
     def do_activate(self):
         if not self.window:
             self._build_ui()
-            self.recorder = Recorder(on_bpm_update=self._on_bpm)
+            self.recorder = Recorder(
+                on_bpm_update=self._on_bpm, database_url=f"sqlite:///{self.database}"
+            )
             self.recorder.start()
         self.window.present()
 
@@ -57,8 +66,12 @@ class FitnessAppUI(Adw.Application):
         self.stop_btn.set_label("Stop")
         self.stop_btn.get_style_context().add_class("destructive-action")
         self.stop_btn.set_sensitive(False)
+        self.sync_btn = Gtk.Button(label="Sync to Server")
+        self.sync_btn.get_style_context().add_class("secondary")
+
         ctrl_box.append(self.start_btn)
         ctrl_box.append(self.stop_btn)
+        ctrl_box.append(self.sync_btn)
         vbox.append(ctrl_box)
 
         # BPM display with markup
@@ -93,6 +106,7 @@ class FitnessAppUI(Adw.Application):
         # Connect signals
         self.start_btn.connect("clicked", self._on_start)
         self.stop_btn.connect("clicked", self._on_stop)
+        self.sync_btn.connect("clicked", self._on_sync)
 
         return vbox
 
@@ -120,7 +134,7 @@ class FitnessAppUI(Adw.Application):
         GLib.idle_add(self.bpm_label.set_markup, f'<span font="28">{bpm} BPM</span>')
 
         # Maintain sliding window
-        window = 60.0
+        window = 300.0
         self._times.append(time_s)
         self._bpms.append(bpm)
         cutoff = time_s - window
@@ -137,3 +151,29 @@ class FitnessAppUI(Adw.Application):
         self.ax.autoscale_view(scaley=True)
         self.fig.tight_layout()
         self.fig.canvas.draw_idle()
+
+    def _on_sync(self, button):
+        # disable while syncing
+        self.sync_btn.set_sensitive(False)
+        GLib.idle_add(self.bpm_label.set_markup, '<span font="16">Syncing...</span>')
+
+        # perform sync in a background thread so UI stays responsive
+        def do_sync():
+            # build your DSN however you like (env vars, settings dialog, etc.)
+            dsn = ""
+            if not dsn:
+                GLib.idle_add(
+                    self.bpm_label.set_markup,
+                    '<span font="16">No DSN configured</span>',
+                )
+                GLib.idle_add(self.sync_btn.set_sensitive, True)
+                return
+
+            self.recorder.db.sync_to_postgres(dsn)
+            # back on the main thread:
+            GLib.idle_add(
+                self.bpm_label.set_markup, '<span font="16">Sync complete</span>'
+            )
+            GLib.idle_add(self.sync_btn.set_sensitive, True)
+
+        threading.Thread(target=do_sync, daemon=True).start()
