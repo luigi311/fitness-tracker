@@ -62,7 +62,11 @@ class Recorder:
             if self._start_ns is None:
                 self._start_ns = t_ns
             # compute seconds since start
-            t_sec = (t_ns - self._start_ns) / 1e9
+            t_ns_zeroed = t_ns - self._start_ns
+            if t_ns_zeroed < 0:
+                # if we get a negative timestamp, skip this frame
+                continue
+            t_sec = t_ns_zeroed / 1e9
 
             # update UI with relative time
             GLib.idle_add(self.on_bpm, t_sec, bpm)
@@ -70,7 +74,7 @@ class Recorder:
             # write to DB if recording (store raw t_ns)
             if self._recording:
                 self.db.insert_heart_rate(
-                    self._activity_id, t_ns, bpm, rr, energy
+                    self._activity_id, t_ns_zeroed, bpm, rr, energy
                 )
                 if self.queue.qsize() % 20 == 0:
                     self.db.commit()
