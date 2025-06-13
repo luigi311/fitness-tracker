@@ -14,7 +14,7 @@ Adw.init()
 
 class FitnessAppUI(Adw.Application):
     def __init__(self):
-        super().__init__(application_id="com.example.Fitness")
+        super().__init__(application_id="io.Luigi311.Fitness")
         self.window = None
         self.recorder: Recorder | None = None
         self._times: list[float] = []
@@ -24,6 +24,14 @@ class FitnessAppUI(Adw.Application):
         app_dir = Path(expanduser("~/.local/share/io.Luigi311.Fitness"))
         app_dir.mkdir(parents=True, exist_ok=True)
         self.database = app_dir / "fitness.db"
+        self.config_file = app_dir / "config.ini"
+        # load existing DSN
+        from configparser import ConfigParser
+        cfg = ConfigParser()
+        self.postgres_dsn = ''
+        if self.config_file.exists():
+            cfg.read(self.config_file)
+            self.postgres_dsn = cfg.get('server', 'dsn', fallback='')
 
     def do_activate(self):
         if not self.window:
@@ -68,10 +76,14 @@ class FitnessAppUI(Adw.Application):
         self.stop_btn.set_sensitive(False)
         self.sync_btn = Gtk.Button(label="Sync to Server")
         self.sync_btn.get_style_context().add_class("secondary")
+        # Settings button (gear icon)
+        self.settings_btn = Gtk.Button.new_from_icon_name("emblem-system-symbolic")
+        self.settings_btn.set_tooltip_text("Configure server DSN")
 
         ctrl_box.append(self.start_btn)
         ctrl_box.append(self.stop_btn)
         ctrl_box.append(self.sync_btn)
+        ctrl_box.append(self.settings_btn)
         vbox.append(ctrl_box)
 
         # BPM display with markup
@@ -107,6 +119,7 @@ class FitnessAppUI(Adw.Application):
         self.start_btn.connect("clicked", self._on_start)
         self.stop_btn.connect("clicked", self._on_stop)
         self.sync_btn.connect("clicked", self._on_sync)
+        self.settings_btn.connect("clicked", self._on_settings)
 
         return vbox
 
@@ -160,8 +173,7 @@ class FitnessAppUI(Adw.Application):
         # perform sync in a background thread so UI stays responsive
         def do_sync():
             # build your DSN however you like (env vars, settings dialog, etc.)
-            dsn = ""
-            if not dsn:
+            if not self.postgres_dsn:
                 GLib.idle_add(
                     self.bpm_label.set_markup,
                     '<span font="16">No DSN configured</span>',
@@ -169,7 +181,7 @@ class FitnessAppUI(Adw.Application):
                 GLib.idle_add(self.sync_btn.set_sensitive, True)
                 return
 
-            self.recorder.db.sync_to_postgres(dsn)
+            self.recorder.db.sync_to_postgres(self.postgres_dsn)
             # back on the main thread:
             GLib.idle_add(
                 self.bpm_label.set_markup, '<span font="16">Sync complete</span>'
@@ -177,3 +189,37 @@ class FitnessAppUI(Adw.Application):
             GLib.idle_add(self.sync_btn.set_sensitive, True)
 
         threading.Thread(target=do_sync, daemon=True).start()
+
+    def _on_settings(self, _):
+        # Open a dialog to set the Postgres DSN
+        dialog = Gtk.Dialog(title="Server Settings", transient_for=self.window)
+        dialog.set_modal(True)
+        dialog.add_buttons(
+            "Cancel", Gtk.ResponseType.CANCEL,
+            "OK",     Gtk.ResponseType.OK,
+        )
+        content = dialog.get_content_area()
+        entry = Gtk.Entry()
+        entry.set_hexpand(True)
+        # prefill with current DSN
+        entry.set_text(self.postgres_dsn)
+        label = Gtk.Label(label="Postgres DSN:")
+        grid = Gtk.Grid(row_spacing=6, column_spacing=6)
+        grid.attach(label, 0, 0, 1, 1)
+        grid.attach(entry, 1, 0, 1, 1)
+        content.append(grid)
+        dialog.show()
+
+        # handle user response via signal (GTK4 uses responses)
+        def on_response(dialog_obj, response_id):
+            if response_id == Gtk.ResponseType.OK:
+                # save new DSN
+                self.postgres_dsn = entry.get_text()
+                from configparser import ConfigParser
+                cfg = ConfigParser()
+                cfg['server'] = {'dsn': self.postgres_dsn}
+                with open(self.config_file, 'w') as f:
+                    cfg.write(f)
+            dialog_obj.destroy()
+
+        dialog.connect("response", on_response)
