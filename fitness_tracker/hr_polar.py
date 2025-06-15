@@ -1,7 +1,10 @@
-from bleak import BleakScanner, BleakClient
-from bleakheart import HeartRate
-from fitness_tracker.hr_provider import HeartRateProvider
 import asyncio
+from bleak import BleakClient, BleakError
+from bleakheart import HeartRate
+from typing import AsyncGenerator, Callable
+from backoff import expo, on_exception
+
+from fitness_tracker.hr_provider import HeartRateProvider
 
 
 class PolarProvider(HeartRateProvider):
@@ -12,42 +15,59 @@ class PolarProvider(HeartRateProvider):
         return "polar" in name.lower()
 
     @staticmethod
-    async def connect_and_stream(device, frame_queue, on_disconnect):
+    @on_exception(expo, BleakError, max_tries=3)
+    async def _connect(device, disconnected_callback):
         """
-        Connect to Polar, decode raw BLE into (t_ns, bpm, rr, energy),
-        apply any Polar-specific scaling/unpacking, then emit:
-           ("SAMPLE", t_ms, bpm, rr, energy)
+        Try to connect to the device, retrying on BleakError up to 3 times.
+        Attach the provided disconnected_callback to the client so we get
+        notified immediately if the belt drops.
         """
-        def _on_disc(client):
-            on_disconnect()
-
-        # 1) Use a private queue so we can normalize each event
-        internal_q: asyncio.Queue = asyncio.Queue()
-
-        client = BleakClient(device, disconnected_callback=_on_disc)
+        client = BleakClient(device, disconnected_callback=disconnected_callback)
         await client.connect()
-        # tell HeartRate to push into our internal_q
-        hr = HeartRate(client, queue=internal_q, instant_rate=True, unpack=True)
+        return client
+
+    @staticmethod
+    async def stream(
+        device, on_disconnect: Callable[[str], None]
+    ) -> AsyncGenerator[tuple[int, int, int, float], None]:
+        """
+        Async generator yielding (t_ms, bpm, rr, energy).
+        - Retries connection on BleakError via backoff.
+        - Calls on_disconnect(...) immediately on BLE disconnect.
+        - Enqueues a ("QUIT",) so our loop unblocks and returns.
+        """
+        # 1) Prepare a single queue for both data and quit signals
+        q: asyncio.Queue = asyncio.Queue()
+
+        # 2) Define BLE disconnect handler
+        def _bleak_disc(_client):
+            # notify the UI
+            on_disconnect("⚠️  Device disconnected")
+            # unblock our read loop
+            q.put_nowait(("QUIT",))
+
+        # 3) Connect (with retries) and attach our disconnect callback
+        try:
+            client = await PolarProvider._connect(device, disconnected_callback=_bleak_disc)
+        except BleakError as e:
+            on_disconnect(f"❌  Failed to connect to {device.name}: {e}")
+            return
+
+        # 4) Start heart‐rate notifications into our queue
+        hr = HeartRate(client, queue=q, instant_rate=True, unpack=True)
         await hr.start_notify()
 
+        # 5) Consume queue and yield samples
         try:
             while True:
-                event = await internal_q.get()
-
-                # Assume event == ("QUIT",) on disconnect
+                event = await q.get()
                 if event[0] == "QUIT":
-                    # bubble up the quit
-                    frame_queue.put_nowait(("QUIT",))
                     break
 
-                # unpack the raw payload
+                # unpack ("DATA", t_ns, (bpm, rr), energy)
                 _, t_ns, (bpm, rr), energy = event
-
-                # Convert to milliseconds
                 t_ms = t_ns // 1_000_000
-
-                # re-emit with a uniform tag
-                frame_queue.put_nowait(("SAMPLE", t_ms, bpm, rr, energy))
+                yield t_ms, bpm, rr, energy
 
         finally:
             await client.disconnect()

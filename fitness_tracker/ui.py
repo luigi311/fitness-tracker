@@ -39,6 +39,12 @@ class FitnessAppUI(Adw.Application):
             self.device_name = cfg.get("tracker", "device_name", fallback="")
             self.device_address = cfg.get("tracker", "device_address", fallback="")
 
+    def show_toast(self, message: str):
+        print(f"⚠️  {message}")
+        # Create and display a toast on our overlay
+        toast = Adw.Toast.new(message)
+        self.toast_overlay.add_toast(toast)
+
     def do_activate(self):
         if not self.window:
             self._build_ui()
@@ -46,6 +52,7 @@ class FitnessAppUI(Adw.Application):
                 on_bpm_update=self._on_bpm,
                 database_url=f"sqlite:///{self.database}",
                 device_name=self.device_name,
+                on_error=self.show_toast,
                 device_address=self.device_address or None,
             )
             self.recorder.start()
