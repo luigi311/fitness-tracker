@@ -1,9 +1,11 @@
+import datetime
 from os.path import expanduser
 from pathlib import Path
 import threading
 import gi
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_gtk4agg import FigureCanvasGTK4Agg as FigureCanvas
+from fitness_tracker.database import Activity, HeartRate
 from fitness_tracker.recorder import Recorder
 from fitness_tracker.hr_provider import AVAILABLE_PROVIDERS
 
@@ -40,7 +42,7 @@ class FitnessAppUI(Adw.Application):
             self.device_address = cfg.get("tracker", "device_address", fallback="")
 
     def show_toast(self, message: str):
-        print(f"⚠️  {message}")
+        print(message)
         # Create and display a toast on our overlay
         toast = Adw.Toast.new(message)
         self.toast_overlay.add_toast(toast)
@@ -56,6 +58,8 @@ class FitnessAppUI(Adw.Application):
                 device_address=self.device_address or None,
             )
             self.recorder.start()
+            # Load history after recorder is initialized
+            threading.Thread(target=self._load_history, daemon=True).start()
         self.window.present()
 
     def _build_ui(self):
@@ -73,12 +77,19 @@ class FitnessAppUI(Adw.Application):
         self.stack.set_vexpand(True)
 
         # Add pages
-        self.stack.add_titled(
-            self._build_tracker_page(), "tracker", "Tracker"
-        ).set_icon_name("media-playback-start-symbolic")
-        self.stack.add_titled(
-            self._build_settings_page(), "settings", "Settings"
-        ).set_icon_name("emblem-system-symbolic")
+        tracker_page = self._build_tracker_page()
+        history_page = self._build_history_page()
+        settings_page = self._build_settings_page()
+
+        self.stack.add_titled(tracker_page, "tracker", "Tracker").set_icon_name(
+            "media-playback-start-symbolic"
+        )
+        self.stack.add_titled(history_page, "history", "History").set_icon_name(
+            "view-list-symbolic"
+        )
+        self.stack.add_titled(settings_page, "settings", "Settings").set_icon_name(
+            "emblem-system-symbolic"
+        )
 
         # Create bottom tab bar
         switcher_bar = Adw.ViewSwitcherBar()
@@ -334,3 +345,108 @@ class FitnessAppUI(Adw.Application):
         if isinstance(toast_overlay, Adw.ToastOverlay):
             toast = Adw.Toast.new("Settings saved successfully")
             GLib.idle_add(toast_overlay.add_toast, toast)
+
+    def _build_history_page(self) -> Gtk.Widget:
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        box.set_margin_top(12)
+        box.set_margin_bottom(12)
+        box.set_margin_start(12)
+        box.set_margin_end(12)
+
+        title = Gtk.Label(label="History")
+        title.set_halign(Gtk.Align.CENTER)
+        box.append(title)
+
+        # List of past activities
+        self.history_list = Gtk.ListBox()
+        self.history_list.set_vexpand(True)
+        box.append(self.history_list)
+
+        # Chart for selected activity
+        frame = Gtk.Frame(label="Activity Details")
+        self.history_fig = Figure(figsize=(6, 3))
+        self.history_ax = self.history_fig.add_subplot(111)
+        self.history_ax.set_xlabel("Time (s)")
+        self.history_ax.set_ylabel("BPM")
+        self.history_canvas = FigureCanvas(self.history_fig)
+        self.history_canvas.set_vexpand(True)
+        frame.set_child(self.history_canvas)
+        box.append(frame)
+
+        return box
+
+    def _load_history(self):
+        # guard to ensure recorder is ready
+        if not self.recorder:
+            return
+        Session = self.recorder.db.Session
+        with Session() as session:
+            activities = (
+                session.query(Activity).order_by(Activity.start_time.desc()).all()
+            )
+            for act in activities:
+                start = act.start_time
+                end = act.end_time or datetime.utcnow()
+                duration = end - start
+                hr_vals = [hr.bpm for hr in act.heart_rates]
+                avg_bpm = sum(hr_vals) / len(hr_vals) if hr_vals else 0
+                max_bpm = max(hr_vals) if hr_vals else 0
+                total_kj = sum(hr.energy_kj or 0 for hr in act.heart_rates)
+                GLib.idle_add(
+                    self._add_history_row,
+                    act.id,
+                    start,
+                    duration,
+                    avg_bpm,
+                    max_bpm,
+                    total_kj,
+                )
+
+    def _add_history_row(
+        self,
+        act_id: int,
+        start: datetime,
+        duration,
+        avg_bpm: float,
+        max_bpm: int,
+        total_kj: float,
+    ):
+        row = Adw.ActionRow()
+        row.set_title(start.strftime("%Y-%m-%d %H:%M"))
+        summary = (
+            f"Dur: {int(duration.total_seconds() // 60)}m {int(duration.total_seconds() % 60)}s, "
+            f"Avg: {int(avg_bpm)} BPM, Max: {max_bpm} BPM"
+        )
+        label = Gtk.Label(label=summary)
+        label.set_halign(Gtk.Align.END)
+        row.add_suffix(label)
+        row.set_activatable(True)
+        row.connect("activated", lambda r: self._show_activity_details(act_id))
+        self.history_list.append(row)
+
+    def _show_activity_details(self, act_id: int):
+        times = []
+        bpms = []
+        if not self.recorder:
+            return
+        Session = self.recorder.db.Session
+        with Session() as session:
+            hrs = (
+                session.query(HeartRate)
+                .filter_by(activity_id=act_id)
+                .order_by(HeartRate.timestamp_ms)
+                .all()
+            )
+            start_ms = None
+            for hr in hrs:
+                if start_ms is None:
+                    start_ms = hr.timestamp_ms
+                times.append((hr.timestamp_ms - start_ms) / 1000.0)
+                bpms.append(hr.bpm)
+
+        # Update chart
+        self.history_ax.clear()
+        self.history_ax.plot(times, bpms, lw=2)
+        self.history_ax.set_title("Activity detail")
+        self.history_fig.tight_layout()
+        self.history_canvas.draw_idle()
