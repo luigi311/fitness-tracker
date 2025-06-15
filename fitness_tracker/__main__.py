@@ -1,5 +1,5 @@
 import signal
-from .ui import FitnessAppUI
+from fitness_tracker.ui import FitnessAppUI
 
 
 def main():

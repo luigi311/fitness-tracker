@@ -1,7 +1,7 @@
 import asyncio
 import threading
-from .ble import scan_polar, connect_and_stream
-from .database import DatabaseManager, Activity, HeartRate
+from fitness_tracker.ble import scan_polar, connect_and_stream
+from fitness_tracker.database import DatabaseManager
 from typing import Callable
 from gi.repository import GLib
 
