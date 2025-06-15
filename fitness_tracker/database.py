@@ -1,4 +1,5 @@
 from datetime import datetime
+from zoneinfo import ZoneInfo
 from sqlalchemy import (
     Column,
     Integer,
@@ -17,8 +18,9 @@ Base = declarative_base()
 class Activity(Base):
     __tablename__ = "activities"
     id = Column(Integer, primary_key=True)
-    start_time = Column(DateTime, nullable=False)
-    end_time = Column(DateTime)
+    # timezone-aware UTC
+    start_time = Column(DateTime(timezone=True), nullable=False)
+    end_time = Column(DateTime(timezone=True))
 
     # ensure we never create two activities with the same start_time
     __table_args__ = (UniqueConstraint('start_time', name='uq_activities_start_time'),)
@@ -59,12 +61,11 @@ class DatabaseManager:
 
     def start_activity(self) -> int:
         with self.Session() as session:
-            # Create a new activity with the current time
-            act = Activity(start_time=datetime.utcnow())
+            # store UTC with tzinfo
+            act = Activity(start_time=datetime.now(tz=ZoneInfo("UTC")))
             session.add(act)
             session.commit()
-            aid = act.id
-            return aid
+            return int(act.id)
 
     def stop_activity(self, activity_id: int):
         # flush any leftover heart rates before closing
@@ -72,7 +73,7 @@ class DatabaseManager:
 
         with self.Session() as session:
             act = session.get(Activity, activity_id)
-            act.end_time = datetime.utcnow()
+            act.end_time = datetime.now(tz=ZoneInfo("UTC"))
             session.commit()
 
     def insert_heart_rate(
