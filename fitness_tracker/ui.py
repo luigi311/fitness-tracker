@@ -1,14 +1,16 @@
 import datetime
+from zoneinfo import ZoneInfo
 from os.path import expanduser
 from pathlib import Path
 import threading
-import gi
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_gtk4agg import FigureCanvasGTK4Agg as FigureCanvas
+
 from fitness_tracker.database import Activity, HeartRate
 from fitness_tracker.recorder import Recorder
 from fitness_tracker.hr_provider import AVAILABLE_PROVIDERS
 
+import gi
 gi.require_versions({"Gtk": "4.0", "Adw": "1"})
 from gi.repository import Adw, Gtk, GLib
 
@@ -412,7 +414,14 @@ class FitnessAppUI(Adw.Application):
         total_kj: float,
     ):
         row = Adw.ActionRow()
-        row.set_title(start.strftime("%Y-%m-%d %H:%M"))
+        # ensure UTC→local
+        if start.tzinfo is None:
+            # assume stored as UTC
+            start = start.replace(tzinfo=ZoneInfo("UTC"))
+        # astimezone() with no args converts to the system local tz
+        local = start.astimezone()
+        row.set_title(local.strftime("%Y-%m-%d %H:%M"))
+
         summary = (
             f"Dur: {int(duration.total_seconds() // 60)}m {int(duration.total_seconds() % 60)}s, "
             f"Avg: {int(avg_bpm)} BPM, Max: {max_bpm} BPM"
