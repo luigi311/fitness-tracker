@@ -1,16 +1,19 @@
 import asyncio
 import threading
-from fitness_tracker.ble import scan_polar, connect_and_stream
-from fitness_tracker.database import DatabaseManager
 from typing import Callable
 from gi.repository import GLib
+from fitness_tracker.database import DatabaseManager
+from fitness_tracker.hr_provider import AVAILABLE_PROVIDERS
+from bleak import BleakScanner
 
 
 class Recorder:
     def __init__(
         self,
         on_bpm_update: Callable[[float, int], None],
-        database_url: str = "sqlite:///fitness.db",
+        database_url: str,
+        device_name: str,
+        device_address: str | None = None,
     ):
         self.on_bpm = on_bpm_update
         self.db = DatabaseManager(database_url=database_url)
@@ -18,7 +21,9 @@ class Recorder:
         self.queue: asyncio.Queue = asyncio.Queue()
         self._recording = False
         self._activity_id = None
-        self._start_ns = None
+        self._start_ms = None
+        self.device_name = device_name
+        self.device_address = device_address
 
     def start(self):
         t = threading.Thread(target=self._run, daemon=True)
@@ -28,7 +33,7 @@ class Recorder:
         if not self._recording:
             self._activity_id = self.db.start_activity()
             self._recording = True
-            self._start_ns = None
+            self._start_ms = None
 
     def stop_recording(self):
         if self._recording:
@@ -40,27 +45,63 @@ class Recorder:
         self.loop.run_until_complete(self._workflow())
 
     async def _workflow(self):
-        dev = await scan_polar()
-        if not dev:
+         # 1) Try direct connect by address (fastest / exact), if provided
+        target = None
+        if self.device_address:
+            print(f"🔗  Trying address {self.device_address}…")
+            try:
+                target = await BleakScanner.find_device_by_address(
+                    self.device_address, timeout=5.0
+                )
+            except Exception:
+                target = None
+
+        # 2) Fallback to name‐based discovery
+        if not target:
+            print("🔍  Discovering by name…")
+            devices = await BleakScanner.discover(timeout=5.0)
+            target = next((d for d in devices if d.name == self.device_name), None)
+
+        if not target:
+            print("❌  No device found (address or name)")
+            GLib.idle_add(self.on_bpm, 0.0, -1)
+            return
+        
+        print("🔗  Connecting to", target.name)
+        provider_cls = next(
+            (p for p in AVAILABLE_PROVIDERS if p.matches(target.name)), None
+        )
+        if not provider_cls:
             GLib.idle_add(self.on_bpm, 0.0, -1)
             return
 
-        # start BLE stream
         ble_task = self.loop.create_task(
-            connect_and_stream(dev, self.queue, lambda: None)
+            provider_cls.connect_and_stream(target, self.queue, lambda: None)
         )
 
         while True:
-            tag, *data = await self.queue.get()
+            msg = await self.queue.get()
+            tag = msg[0]
             if tag == "QUIT":
                 break
-            t_ns, (bpm, rr), energy = data
-            if self._start_ns is None:
-                self._start_ns = t_ns
-            t_ns_zero = t_ns - self._start_ns
-            t_ms = t_ns_zero / 1_000_000
-            t_sec = t_ns_zero / 1e9
+
+            # SAMPLE messages carry exactly 5 fields:
+            # ("SAMPLE", t_ms, bpm, rr, energy)
+            _, t_ms, bpm, rr, energy = msg
+
+            # initialize start timestamp
+            if self._start_ms is None:
+                self._start_ms = t_ms
+
+            # compute offsets
+            delta_ms = t_ms - self._start_ms
+            t_sec = delta_ms / 1000.0
+
+            # 1) UI update
             GLib.idle_add(self.on_bpm, t_sec, bpm)
+
+            # 2) DB insert
             if self._recording:
                 self.db.insert_heart_rate(self._activity_id, t_ms, bpm, rr, energy)
+
         await ble_task

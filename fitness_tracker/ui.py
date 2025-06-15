@@ -5,9 +5,10 @@ import gi
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_gtk4agg import FigureCanvasGTK4Agg as FigureCanvas
 from fitness_tracker.recorder import Recorder
+from fitness_tracker.hr_provider import AVAILABLE_PROVIDERS
 
 gi.require_versions({"Gtk": "4.0", "Adw": "1"})
-from gi.repository import Adw, Gtk, GLib, Pango
+from gi.repository import Adw, Gtk, GLib
 
 Adw.init()
 
@@ -30,15 +31,22 @@ class FitnessAppUI(Adw.Application):
 
         cfg = ConfigParser()
         self.postgres_dsn = ""
+        self.device_map: dict[str, str] = {}
+        self.device_choices = []
         if self.config_file.exists():
             cfg.read(self.config_file)
             self.postgres_dsn = cfg.get("server", "dsn", fallback="")
+            self.device_name = cfg.get("tracker", "device_name", fallback="")
+            self.device_address = cfg.get("tracker", "device_address", fallback="")
 
     def do_activate(self):
         if not self.window:
             self._build_ui()
             self.recorder = Recorder(
-                on_bpm_update=self._on_bpm, database_url=f"sqlite:///{self.database}"
+                on_bpm_update=self._on_bpm,
+                database_url=f"sqlite:///{self.database}",
+                device_name=self.device_name,
+                device_address=self.device_address or None,
             )
             self.recorder.start()
         self.window.present()
@@ -47,9 +55,11 @@ class FitnessAppUI(Adw.Application):
         self.window = Adw.ApplicationWindow(application=self)
         self.window.set_title("Fitness Tracker")
         self.window.set_default_size(640, 520)
+        self.toast_overlay = Adw.ToastOverlay()
+        self.window.set_content(self.toast_overlay)
 
         toolbar_view = Adw.ToolbarView()
-        self.window.set_content(toolbar_view)
+        self.toast_overlay.set_child(toolbar_view)
 
         # Create ViewStack
         self.stack = Adw.ViewStack()
@@ -211,21 +221,109 @@ class FitnessAppUI(Adw.Application):
         self.dsn_entry.set_hexpand(True)
         self.dsn_entry.set_text(self.postgres_dsn)
 
+        device_label = Gtk.Label(label="Select Tracker Device:")
+        device_label.set_halign(Gtk.Align.START)
+
+        self.device_combo = Gtk.ComboBoxText()
+        self.device_combo.set_hexpand(True)
+
+        self.scan_status = Gtk.Label(label="Scanning for devices...")
+        self.scan_status.set_halign(Gtk.Align.START)
+
+        self.rescan_button = Gtk.Button(label="Rescan")
+        self.rescan_button.set_halign(Gtk.Align.END)
+        self.rescan_button.connect(
+            "clicked",
+            lambda _: threading.Thread(target=fill_devices, daemon=True).start(),
+        )
+
+        # Fill device list asynchronously
+        def fill_devices():
+            import asyncio
+            from bleak import BleakScanner
+
+            def update_status(text):
+                GLib.idle_add(self.scan_status.set_text, text)
+
+            async def _scan():
+                update_status("Scanning for devices…")
+                devices = await BleakScanner.discover(timeout=5.0)
+
+                # build name→address map
+                mapping: dict[str, str] = {}
+                for d in devices:
+                    if d.name and any(p.matches(d.name) for p in AVAILABLE_PROVIDERS):
+                        mapping.setdefault(d.name, d.address)
+                names = sorted(mapping.keys())
+                update_status(
+                    "No supported devices found" if not names else "Scan complete"
+                )
+                GLib.idle_add(self._update_device_combo, names)
+                # save the map and update UI
+                self.device_map = mapping
+                GLib.idle_add(self._update_device_combo, names)
+
+            asyncio.run(_scan())
+
+        if self.device_name:
+            # Seed the combo with the one saved name
+            self._update_device_combo([self.device_name])
+            self.scan_status.set_text(f"Current device: {self.device_name}")
+        else:
+            # No saved device yet
+            self.device_combo.remove_all()
+            self.scan_status.set_text(
+                "No device selected. Press Rescan to find devices."
+            )
+
         save_button = Gtk.Button(label="Save")
         save_button.set_halign(Gtk.Align.END)
         save_button.connect("clicked", self._on_save_settings)
 
         box.append(label)
         box.append(self.dsn_entry)
+        box.append(device_label)
+        box.append(self.device_combo)
+        box.append(self.scan_status)
+        box.append(self.rescan_button)
         box.append(save_button)
 
         return box
 
+    def _update_device_combo(self, names):
+        self.device_combo.remove_all()
+        for name in names:
+            self.device_combo.append_text(name)
+
+        # Ensure default matches saved device_name
+        if self.device_name and self.device_name in names:
+            self.device_combo.set_active(names.index(self.device_name))
+        else:
+            self.device_combo.set_active(-1 if not names else 0)
+
     def _on_save_settings(self, _button):
         self.postgres_dsn = self.dsn_entry.get_text()
+        self.device_name = self.device_combo.get_active_text() or ""
+        # only overwrite MAC if this name was in our last scan
+        if self.device_name in self.device_map:
+            self.device_address = self.device_map[self.device_name]
+
         from configparser import ConfigParser
 
         cfg = ConfigParser()
         cfg["server"] = {"dsn": self.postgres_dsn}
+        cfg["tracker"] = {
+            "device_name": self.device_name,
+            "device_address": self.device_address,
+        }
+
         with open(self.config_file, "w") as f:
             cfg.write(f)
+
+        # Show confirmation message as a toast
+        from gi.repository import Adw
+
+        toast_overlay = self.window.get_content()
+        if isinstance(toast_overlay, Adw.ToastOverlay):
+            toast = Adw.Toast.new("Settings saved successfully")
+            GLib.idle_add(toast_overlay.add_toast, toast)
