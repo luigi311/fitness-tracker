@@ -2,6 +2,8 @@ import datetime
 from zoneinfo import ZoneInfo
 from os.path import expanduser
 from pathlib import Path
+from configparser import ConfigParser
+
 import threading
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_gtk4agg import FigureCanvasGTK4Agg as FigureCanvas
@@ -30,16 +32,15 @@ class FitnessAppUI(Adw.Application):
         app_dir.mkdir(parents=True, exist_ok=True)
         self.database = app_dir / "fitness.db"
         self.config_file = app_dir / "config.ini"
-        # load existing DSN
-        from configparser import ConfigParser
 
+        # load existing configuration
         cfg = ConfigParser()
-        self.postgres_dsn = ""
+        self.database_dsn = ""
         self.device_map: dict[str, str] = {}
         self.device_choices = []
         if self.config_file.exists():
             cfg.read(self.config_file)
-            self.postgres_dsn = cfg.get("server", "dsn", fallback="")
+            self.database_dsn = cfg.get("server", "database_dsn", fallback="")
             self.device_name = cfg.get("tracker", "device_name", fallback="")
             self.device_address = cfg.get("tracker", "device_address", fallback="")
 
@@ -151,8 +152,7 @@ class FitnessAppUI(Adw.Application):
 
         # perform sync in a background thread so UI stays responsive
         def do_sync():
-            # build your DSN however you like (env vars, settings dialog, etc.)
-            if not self.postgres_dsn:
+            if not self.database_dsn:
                 GLib.idle_add(
                     self.bpm_label.set_markup,
                     '<span font="16">No DSN configured</span>',
@@ -160,8 +160,14 @@ class FitnessAppUI(Adw.Application):
                 GLib.idle_add(self.sync_btn.set_sensitive, True)
                 return
 
-            self.recorder.db.sync_to_postgres(self.postgres_dsn)
-            # back on the main thread:
+            self.recorder.db.sync_to_database(self.database_dsn)
+            
+            # clear & reload history on the main thread
+            GLib.idle_add(self._clear_history)
+            # reload in background
+            threading.Thread(target=self._load_history, daemon=True).start()
+
+            # then update UI status & re-enable button
             GLib.idle_add(
                 self.bpm_label.set_markup, '<span font="16">Sync complete</span>'
             )
@@ -234,12 +240,12 @@ class FitnessAppUI(Adw.Application):
         box.set_margin_start(12)
         box.set_margin_end(12)
 
-        label = Gtk.Label(label="Server DSN:")
+        label = Gtk.Label(label="Database DSN:")
         label.set_halign(Gtk.Align.START)
 
         self.dsn_entry = Gtk.Entry()
         self.dsn_entry.set_hexpand(True)
-        self.dsn_entry.set_text(self.postgres_dsn)
+        self.dsn_entry.set_text(self.database_dsn)
 
         device_label = Gtk.Label(label="Select Tracker Device:")
         device_label.set_halign(Gtk.Align.START)
@@ -322,7 +328,7 @@ class FitnessAppUI(Adw.Application):
             self.device_combo.set_active(-1 if not names else 0)
 
     def _on_save_settings(self, _button):
-        self.postgres_dsn = self.dsn_entry.get_text()
+        self.database_dsn = self.dsn_entry.get_text()
         self.device_name = self.device_combo.get_active_text() or ""
         # only overwrite MAC if this name was in our last scan
         if self.device_name in self.device_map:
@@ -331,7 +337,7 @@ class FitnessAppUI(Adw.Application):
         from configparser import ConfigParser
 
         cfg = ConfigParser()
-        cfg["server"] = {"dsn": self.postgres_dsn}
+        cfg["server"] = {"database_dsn": self.database_dsn}
         cfg["tracker"] = {
             "device_name": self.device_name,
             "device_address": self.device_address,
@@ -347,6 +353,13 @@ class FitnessAppUI(Adw.Application):
         if isinstance(toast_overlay, Adw.ToastOverlay):
             toast = Adw.Toast.new("Settings saved successfully")
             GLib.idle_add(toast_overlay.add_toast, toast)
+
+    def _clear_history(self):
+        """Remove all rows from the History list."""
+        # Must run on main GTK thread
+        if self.history_list:
+            self.history_list.remove_all()
+
 
     def _build_history_page(self) -> Gtk.Widget:
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)

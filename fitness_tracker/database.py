@@ -2,6 +2,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 from sqlalchemy import (
     Column,
+    BigInteger,
     Integer,
     Float,
     DateTime,
@@ -33,7 +34,7 @@ class HeartRate(Base):
 
     id = Column(Integer, primary_key=True)
     activity_id = Column(Integer, ForeignKey("activities.id"), nullable=False)
-    timestamp_ms = Column(Integer, nullable=False)
+    timestamp_ms = Column(BigInteger, nullable=False)
     bpm = Column(Integer, nullable=False)
     rr_interval = Column(Float)
     energy_kj = Column(Float)
@@ -109,60 +110,153 @@ class DatabaseManager:
         # clear the staging area
         self._pending_hr.clear()
 
-    def sync_to_postgres(self, postgres_url: str):
+    def sync_to_database(self, database_dsn: str):
         """
-        Sync new local activities & heart rates to remote Postgres.
-        Uses Activity.start_time to avoid duplicates.
+        Two-way sync between local SQLite and remote Database:
+        1) push new local activities → remote
+        2) pull new remote activities → local
         """
-        # flush any pending local HR samples
+        # 0) Flush any pending local heart-rate samples
         self._flush_pending()
 
-        # Setup remote engine & tables
-        remote_engine = create_engine(postgres_url, echo=False)
+        # 1) Setup engines & sessions
+        remote_engine = create_engine(database_dsn, echo=False)
         Base.metadata.create_all(remote_engine)
         LocalSession = self.Session
         RemoteSession = sessionmaker(bind=remote_engine)
 
+        # how many activities we process per batch
+        SYNC_BATCH_SIZE = 100
+
         with LocalSession() as local, RemoteSession() as remote:
-            # 1) find which start_times already exist remotely
-            existing = {a.start_time for a in remote.query(Activity).all()}
+            # ── Phase 1: Local → Remote ──────────────────────────────
+            def _sync_batch(batch: list[Activity]):
+                # find which of these start_times already exist remotely
+                existing = {
+                    t for (t,) in remote
+                        .query(Activity.start_time)
+                        .all()
+                }
 
-            # 2) for each new local activity, push activity + HRs
-            for act in local.query(Activity).order_by(Activity.start_time):
-                if act.start_time in existing:
-                    continue
-
-                # create the remote activity
-                new_act = Activity(
-                    start_time=act.start_time,
-                    end_time=act.end_time
-                )
-                remote.add(new_act)
-                # flush so new_act.id is populated, but don’t commit yet
-                remote.flush()
-
-                # fetch local heart rates for this activity
-                hrs = (
-                    local.query(HeartRate)
-                         .filter_by(activity_id=act.id)
-                         .order_by(HeartRate.timestamp_ms)
-                         .all()
-                )
-
-                # build mappings for INSERT
-                hr_mappings = [
-                    {
-                        "activity_id": new_act.id,
-                        "timestamp_ms": hr.timestamp_ms,
-                        "bpm": hr.bpm,
-                        "rr_interval": hr.rr_interval,
-                        "energy_kj": hr.energy_kj,
-                    }
-                    for hr in hrs
+                # convert to UTC for comparison
+                existing = {t.astimezone(ZoneInfo("UTC")) for t in existing}
+                # filter out any activities that already exist remotely
+                new_batch = [
+                    act for act in batch
+                    if act.start_time.replace(tzinfo=ZoneInfo("UTC")) not in existing
                 ]
 
-                if hr_mappings:
-                    remote.bulk_insert_mappings(HeartRate, hr_mappings)
+                for act in new_batch:
+                    if act.start_time in existing:
+                        continue
 
-            # finally, commit everything in one go
+                    # create the remote activity
+                    new_act = Activity(
+                        start_time=act.start_time,
+                        end_time=act.end_time,
+                    )
+                    remote.add(new_act)
+                    # flush to get new_act.id
+                    remote.flush()
+
+                    # pull local heart-rate rows
+                    hrs = (
+                        local.query(HeartRate)
+                             .filter_by(activity_id=act.id)
+                             .order_by(HeartRate.timestamp_ms)
+                             .all()
+                    )
+                    # bulk-insert into remote
+                    hr_maps = [
+                        {
+                            "activity_id": new_act.id,
+                            "timestamp_ms": hr.timestamp_ms,
+                            "bpm": hr.bpm,
+                            "rr_interval": hr.rr_interval,
+                            "energy_kj": hr.energy_kj,
+                        }
+                        for hr in hrs
+                    ]
+                    if hr_maps:
+                        remote.bulk_insert_mappings(HeartRate, hr_maps)
+
+            # page through local activities
+            batch = []
+            for act in local.query(Activity)\
+                             .order_by(Activity.start_time)\
+                             .yield_per(SYNC_BATCH_SIZE):
+                batch.append(act)
+                if len(batch) >= SYNC_BATCH_SIZE:
+                    _sync_batch(batch)
+                    batch.clear()
+            if batch:
+                _sync_batch(batch)
+
+            # commit everything local → remote
             remote.commit()
+
+            
+            # ── Phase 2: Remote → Local ──────────────────────────────
+            def _sync_remote_batch(batch: list[Activity]):
+                # find which of these start_times already exist locally
+                existing = {
+                    t for (t,) in local
+                        .query(Activity.start_time)
+                        .all()
+                }
+
+                # convert to UTC for comparison
+                existing = {t.replace(tzinfo=ZoneInfo("UTC")) for t in existing}
+                # filter out any activities that already exist locally
+                new_batch = [
+                    act for act in batch
+                    if act.start_time.astimezone(ZoneInfo("UTC")) not in existing
+                ]
+
+                for act in new_batch:
+                    if act.start_time in existing:
+                        continue
+
+                    # create the local activity
+                    new_act = Activity(
+                        start_time=act.start_time,
+                        end_time=act.end_time,
+                    )
+                    local.add(new_act)
+                    # flush to get new_act.id
+                    local.flush()
+
+                    # pull remote heart-rate rows
+                    hrs = (
+                        remote.query(HeartRate)
+                              .filter_by(activity_id=act.id)
+                              .order_by(HeartRate.timestamp_ms)
+                              .all()
+                    )
+                    # bulk-insert into local
+                    hr_maps = [
+                        {
+                            "activity_id": new_act.id,
+                            "timestamp_ms": hr.timestamp_ms,
+                            "bpm": hr.bpm,
+                            "rr_interval": hr.rr_interval,
+                            "energy_kj": hr.energy_kj,
+                        }
+                        for hr in hrs
+                    ]
+                    if hr_maps:
+                        local.bulk_insert_mappings(HeartRate, hr_maps)
+
+            # page through remote activities
+            batch = []
+            for act in remote.query(Activity)\
+                             .order_by(Activity.start_time)\
+                             .yield_per(SYNC_BATCH_SIZE):
+                batch.append(act)
+                if len(batch) >= SYNC_BATCH_SIZE:
+                    _sync_remote_batch(batch)
+                    batch.clear()
+            if batch:
+                _sync_remote_batch(batch)
+            # commit everything remote → local
+            local.commit()
