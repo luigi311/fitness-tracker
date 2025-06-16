@@ -514,6 +514,7 @@ class FitnessAppUI(Adw.Application):
                 bpms = [h.bpm for h in hrs]
                 label = (
                     self.activity_start_times[aid]
+                    .replace(tzinfo=ZoneInfo("UTC"))
                     .astimezone()
                     .strftime("%Y-%m-%d %H:%M")
                 )
