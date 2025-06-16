@@ -546,6 +546,26 @@ class FitnessAppUI(Adw.Application):
         )
         header_box.append(check)
 
+        # make the whole frame tappable—but only if the user doesn't move too far 
+        # to avoid accidental toggles   
+        click = Gtk.GestureClick.new()
+        start_point = {"x": 0.0, "y": 0.0}
+        THRESHOLD = 25  # max pixels of movement allowed
+
+        def on_pressed(gesture, n_press, x, y):
+            start_point["x"], start_point["y"] = x, y
+
+        def on_released(gesture, n_press, x, y):
+            dx = abs(x - start_point["x"])
+            dy = abs(y - start_point["y"])
+            # only toggle if movement was small (i.e. a tap, not a drag)
+            if dx <= THRESHOLD and dy <= THRESHOLD:
+                check.set_active(not check.get_active())
+
+        click.connect("pressed", on_pressed)
+        click.connect("released", on_released)
+        frame.add_controller(click)
+
         summary = (
             f"Dur: {int(duration.total_seconds()//60)}m {int(duration.total_seconds()%60)}s, "
             f"Avg: {int(avg_bpm)} BPM, Max: {max_bpm} BPM"
