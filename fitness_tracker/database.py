@@ -10,6 +10,7 @@ from sqlalchemy import (
     create_engine,
     UniqueConstraint,
     Index,
+    exc,
 )
 from sqlalchemy.orm import declarative_base, relationship, sessionmaker
 
@@ -118,6 +119,16 @@ class DatabaseManager:
         """
         # 0) Flush any pending local heart-rate samples
         self._flush_pending()
+
+         # 0.5) Make sure we can actually talk to the remote DB
+        try:
+            remote_engine = create_engine(database_dsn, echo=False)
+            # try a lightweight connection
+            with remote_engine.connect() as conn:
+                pass
+        except exc.SQLAlchemyError as e:
+            # cancel sync early if we can't reach the server
+            raise ConnectionError(f"❌  Could not connect to remote database: {e}")
 
         # 1) Setup engines & sessions
         remote_engine = create_engine(database_dsn, echo=False)

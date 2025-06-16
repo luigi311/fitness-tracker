@@ -180,7 +180,13 @@ class FitnessAppUI(Adw.Application):
                 GLib.idle_add(self.sync_btn.set_sensitive, True)
                 return
 
-            self.recorder.db.sync_to_database(self.database_dsn)
+            try:
+                self.recorder.db.sync_to_database(self.database_dsn)
+            except ConnectionError as e:
+                # Notify user and re-enable button
+                GLib.idle_add(self.show_toast, str(e))
+                GLib.idle_add(self.sync_btn.set_sensitive, True)
+                return
 
             # clear & reload history on the main thread
             GLib.idle_add(self._clear_history)
