@@ -1,21 +1,20 @@
 import datetime
-from zoneinfo import ZoneInfo
+import threading
+from configparser import ConfigParser
 from os.path import expanduser
 from pathlib import Path
-from configparser import ConfigParser
-
-import threading
-from matplotlib.figure import Figure
-from matplotlib.backends.backend_gtk4agg import FigureCanvasGTK4Agg as FigureCanvas
-
-from fitness_tracker.database import Activity, HeartRate
-from fitness_tracker.recorder import Recorder
-from fitness_tracker.hr_provider import AVAILABLE_PROVIDERS
+from zoneinfo import ZoneInfo
 
 import gi
+from matplotlib.backends.backend_gtk4agg import FigureCanvasGTK4Agg as FigureCanvas
+from matplotlib.figure import Figure
+
+from fitness_tracker.database import Activity, HeartRate
+from fitness_tracker.hr_provider import AVAILABLE_PROVIDERS
+from fitness_tracker.recorder import Recorder
 
 gi.require_versions({"Gtk": "4.0", "Adw": "1"})
-from gi.repository import Adw, Gtk, GLib
+from gi.repository import Adw, GLib, Gtk
 
 Adw.init()
 
@@ -30,6 +29,7 @@ else:
     _DARK_BG = "#f9f9f9"
     _DARK_FG = "#000000"
     _DARK_GRID = "#cccccc"
+
 
 class FitnessAppUI(Adw.Application):
     def __init__(self):
@@ -157,9 +157,7 @@ class FitnessAppUI(Adw.Application):
 
         # Update line data and axes
         self._line.set_data(self._times, self._bpms)
-        self.ax.set_xlim(
-            left=max(0, cutoff), right=time_s if time_s > cutoff else cutoff + 1
-        )
+        self.ax.set_xlim(left=max(0, cutoff), right=time_s if time_s > cutoff else cutoff + 1)
         self.ax.relim()
         self.ax.autoscale_view(scaley=True)
         self.fig.tight_layout()
@@ -194,9 +192,7 @@ class FitnessAppUI(Adw.Application):
             threading.Thread(target=self._load_history, daemon=True).start()
 
             # then update UI status & re-enable button
-            GLib.idle_add(
-                self.bpm_label.set_markup, '<span font="16">Sync complete</span>'
-            )
+            GLib.idle_add(self.bpm_label.set_markup, '<span font="16">Sync complete</span>')
             GLib.idle_add(self.sync_btn.set_sensitive, True)
 
         threading.Thread(target=do_sync, daemon=True).start()
@@ -348,6 +344,7 @@ class FitnessAppUI(Adw.Application):
         self.device_row.set_subtitle("Scanning for devices…")
 
         import asyncio
+
         from bleak import BleakScanner
 
         async def _scan():
@@ -388,16 +385,16 @@ class FitnessAppUI(Adw.Application):
         toast = Adw.Toast.new("Settings saved successfully")
         GLib.idle_add(self.toast_overlay.add_toast, toast)
 
-
     def _build_history_page(self) -> Gtk.Widget:
         vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
-        for margin in ("top", "bottom", "start", "end"): getattr(vbox, f"set_margin_{margin}")(12)
+        for margin in ("top", "bottom", "start", "end"):
+            getattr(vbox, f"set_margin_{margin}")(12)
 
         filter_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         filter_label = Gtk.Label(label="Show:")
         filter_box.append(filter_label)
         self.filter_combo = Gtk.ComboBoxText()
-        for key, text in [("week","Last 7 Days"),("month","This Month"),("all","All Time")]:
+        for key, text in [("week", "Last 7 Days"), ("month", "This Month"), ("all", "All Time")]:
             self.filter_combo.append(key, text)
         self.filter_combo.set_active_id(self.history_filter)
         self.filter_combo.connect("changed", self._on_filter_changed)
@@ -452,9 +449,7 @@ class FitnessAppUI(Adw.Application):
 
         last_date = None
         with Session() as session:
-            activities = (
-                session.query(Activity).order_by(Activity.start_time.desc()).all()
-            )
+            activities = session.query(Activity).order_by(Activity.start_time.desc()).all()
             for act in activities:
                 # Convert start to aware and local
                 start = act.start_time
@@ -546,8 +541,8 @@ class FitnessAppUI(Adw.Application):
         )
         header_box.append(check)
 
-        # make the whole frame tappable—but only if the user doesn't move too far 
-        # to avoid accidental toggles   
+        # make the whole frame tappable—but only if the user doesn't move too far
+        # to avoid accidental toggles
         click = Gtk.GestureClick.new()
         start_point = {"x": 0.0, "y": 0.0}
         THRESHOLD = 25  # max pixels of movement allowed
@@ -567,7 +562,7 @@ class FitnessAppUI(Adw.Application):
         frame.add_controller(click)
 
         summary = (
-            f"Dur: {int(duration.total_seconds()//60)}m {int(duration.total_seconds()%60)}s, "
+            f"Dur: {int(duration.total_seconds() // 60)}m {int(duration.total_seconds() % 60)}s, "
             f"Avg: {int(avg_bpm)} BPM, Max: {max_bpm} BPM"
         )
         summary_label = Gtk.Label(label=summary)
@@ -580,7 +575,7 @@ class FitnessAppUI(Adw.Application):
         if times and bpms:
             spark_fig = Figure(figsize=(2, 0.5), dpi=80)
             ax = spark_fig.add_axes([0, 0, 1, 1])
-            line_spark, = ax.plot(times, bpms, lw=1)
+            (line_spark,) = ax.plot(times, bpms, lw=1)
             ax.axis("off")
             # Dark-mode background
             spark_fig.patch.set_facecolor(_DARK_BG)
@@ -615,8 +610,14 @@ class FitnessAppUI(Adw.Application):
         Session = self.recorder.db.Session
         with Session() as session:
             for aid in sorted(self.selected_activities):
-                hrs = session.query(HeartRate).filter_by(activity_id=aid).order_by(HeartRate.timestamp_ms).all()
-                if not hrs: continue
+                hrs = (
+                    session.query(HeartRate)
+                    .filter_by(activity_id=aid)
+                    .order_by(HeartRate.timestamp_ms)
+                    .all()
+                )
+                if not hrs:
+                    continue
                 start_ms = hrs[0].timestamp_ms
                 times = [(h.timestamp_ms - start_ms) / 1000.0 for h in hrs]
                 bpms = [h.bpm for h in hrs]
@@ -629,7 +630,8 @@ class FitnessAppUI(Adw.Application):
             leg = self.history_ax.legend(frameon=True)
             leg.get_frame().set_facecolor(_DARK_BG)
             leg.get_frame().set_edgecolor(_DARK_GRID)
-            for text in leg.get_texts(): text.set_color(_DARK_FG)
+            for text in leg.get_texts():
+                text.set_color(_DARK_FG)
         else:
             self.history_ax.set_title("No activities selected", color=_DARK_FG)
 

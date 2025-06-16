@@ -1,8 +1,9 @@
 import asyncio
+from typing import AsyncGenerator, Callable
+
+from backoff import expo, on_exception
 from bleak import BleakClient, BleakError
 from bleakheart import HeartRate
-from typing import AsyncGenerator, Callable
-from backoff import expo, on_exception
 
 from fitness_tracker.hr_provider import HeartRateProvider
 

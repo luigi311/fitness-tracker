@@ -1,15 +1,16 @@
 from datetime import datetime
 from zoneinfo import ZoneInfo
+
 from sqlalchemy import (
-    Column,
     BigInteger,
-    Integer,
-    Float,
+    Column,
     DateTime,
+    Float,
     ForeignKey,
-    create_engine,
-    UniqueConstraint,
     Index,
+    Integer,
+    UniqueConstraint,
+    create_engine,
     exc,
 )
 from sqlalchemy.orm import declarative_base, relationship, sessionmaker
@@ -25,7 +26,7 @@ class Activity(Base):
     end_time = Column(DateTime(timezone=True))
 
     # ensure we never create two activities with the same start_time
-    __table_args__ = (UniqueConstraint('start_time', name='uq_activities_start_time'),)
+    __table_args__ = (UniqueConstraint("start_time", name="uq_activities_start_time"),)
 
     heart_rates = relationship("HeartRate", back_populates="activity")
 
@@ -44,8 +45,8 @@ class HeartRate(Base):
 
     # index for quick lookups by activity, and by activity+time
     __table_args__ = (
-        Index('ix_hr_activity_id', 'activity_id'),
-        Index('ix_hr_activity_time', 'activity_id', 'timestamp_ms'),
+        Index("ix_hr_activity_id", "activity_id"),
+        Index("ix_hr_activity_time", "activity_id", "timestamp_ms"),
     )
 
 
@@ -69,7 +70,7 @@ class DatabaseManager:
             session.commit()
             return int(act.id)
 
-    def stop_activity(self, activity_id: int):
+    def stop_activity(self, activity_id: int) -> None:
         # flush any leftover heart rates before closing
         self._flush_pending()
 
@@ -85,7 +86,7 @@ class DatabaseManager:
         bpm: int,
         rr: float | None,
         energy: float | None,
-    ):
+    ) -> None:
         # collect into pending list
         hr = HeartRate(
             activity_id=activity_id,
@@ -120,7 +121,7 @@ class DatabaseManager:
         # 0) Flush any pending local heart-rate samples
         self._flush_pending()
 
-         # 0.5) Make sure we can actually talk to the remote DB
+        # 0.5) Make sure we can actually talk to the remote DB
         try:
             remote_engine = create_engine(database_dsn, echo=False)
             # try a lightweight connection
@@ -143,17 +144,14 @@ class DatabaseManager:
             # ── Phase 1: Local → Remote ──────────────────────────────
             def _sync_batch(batch: list[Activity]):
                 # find which of these start_times already exist remotely
-                existing = {
-                    t for (t,) in remote
-                        .query(Activity.start_time)
-                        .all()
-                }
+                existing = {t for (t,) in remote.query(Activity.start_time).all()}
 
                 # convert to UTC for comparison
                 existing = {t.astimezone(ZoneInfo("UTC")) for t in existing}
                 # filter out any activities that already exist remotely
                 new_batch = [
-                    act for act in batch
+                    act
+                    for act in batch
                     if act.start_time.replace(tzinfo=ZoneInfo("UTC")) not in existing
                 ]
 
@@ -173,9 +171,9 @@ class DatabaseManager:
                     # pull local heart-rate rows
                     hrs = (
                         local.query(HeartRate)
-                             .filter_by(activity_id=act.id)
-                             .order_by(HeartRate.timestamp_ms)
-                             .all()
+                        .filter_by(activity_id=act.id)
+                        .order_by(HeartRate.timestamp_ms)
+                        .all()
                     )
                     # bulk-insert into remote
                     hr_maps = [
@@ -193,9 +191,9 @@ class DatabaseManager:
 
             # page through local activities
             batch = []
-            for act in local.query(Activity)\
-                             .order_by(Activity.start_time)\
-                             .yield_per(SYNC_BATCH_SIZE):
+            for act in (
+                local.query(Activity).order_by(Activity.start_time).yield_per(SYNC_BATCH_SIZE)
+            ):
                 batch.append(act)
                 if len(batch) >= SYNC_BATCH_SIZE:
                     _sync_batch(batch)
@@ -206,21 +204,17 @@ class DatabaseManager:
             # commit everything local → remote
             remote.commit()
 
-            
             # ── Phase 2: Remote → Local ──────────────────────────────
             def _sync_remote_batch(batch: list[Activity]):
                 # find which of these start_times already exist locally
-                existing = {
-                    t for (t,) in local
-                        .query(Activity.start_time)
-                        .all()
-                }
+                existing = {t for (t,) in local.query(Activity.start_time).all()}
 
                 # convert to UTC for comparison
                 existing = {t.replace(tzinfo=ZoneInfo("UTC")) for t in existing}
                 # filter out any activities that already exist locally
                 new_batch = [
-                    act for act in batch
+                    act
+                    for act in batch
                     if act.start_time.astimezone(ZoneInfo("UTC")) not in existing
                 ]
 
@@ -240,9 +234,9 @@ class DatabaseManager:
                     # pull remote heart-rate rows
                     hrs = (
                         remote.query(HeartRate)
-                              .filter_by(activity_id=act.id)
-                              .order_by(HeartRate.timestamp_ms)
-                              .all()
+                        .filter_by(activity_id=act.id)
+                        .order_by(HeartRate.timestamp_ms)
+                        .all()
                     )
                     # bulk-insert into local
                     hr_maps = [
@@ -260,9 +254,9 @@ class DatabaseManager:
 
             # page through remote activities
             batch = []
-            for act in remote.query(Activity)\
-                             .order_by(Activity.start_time)\
-                             .yield_per(SYNC_BATCH_SIZE):
+            for act in (
+                remote.query(Activity).order_by(Activity.start_time).yield_per(SYNC_BATCH_SIZE)
+            ):
                 batch.append(act)
                 if len(batch) >= SYNC_BATCH_SIZE:
                     _sync_remote_batch(batch)

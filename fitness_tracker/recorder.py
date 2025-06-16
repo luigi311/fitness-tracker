@@ -1,13 +1,16 @@
 import asyncio
 import threading
 from typing import Callable
-from fitness_tracker.database import DatabaseManager
-from fitness_tracker.hr_provider import AVAILABLE_PROVIDERS
-from bleak import BleakError, BleakScanner
 
 import gi
+from bleak import BleakError, BleakScanner
+
+from fitness_tracker.database import DatabaseManager
+from fitness_tracker.hr_provider import AVAILABLE_PROVIDERS
+
 gi.require_versions({"Gtk": "4.0", "Adw": "1"})
 from gi.repository import Adw, GLib
+
 
 class Recorder:
     def __init__(
@@ -65,7 +68,7 @@ class Recorder:
             self.db.insert_heart_rate(self._activity_id, t_ms, bpm, rr, energy)
 
     async def _workflow(self):
-         # 1) Try direct connect by address (fastest / exact), if provided
+        # 1) Try direct connect by address (fastest / exact), if provided
         target = None
 
         while True:
@@ -89,27 +92,21 @@ class Recorder:
                 GLib.idle_add(self.on_bpm, 0.0, -1)
                 await asyncio.sleep(5.0)
                 continue
-            
+
             print(f"✅  Found device: {target.name} ({target.address})")
-            provider_cls = next(
-                (p for p in AVAILABLE_PROVIDERS if p.matches(target.name)), None
-            )
+            provider_cls = next((p for p in AVAILABLE_PROVIDERS if p.matches(target.name)), None)
             if not provider_cls:
                 GLib.idle_add(self.on_bpm, 0.0, -1)
                 return
 
-        
             try:
-                async for t_ms, bpm, rr, energy in provider_cls.stream(
-                    target, self._on_ble_error
-                ):
+                async for t_ms, bpm, rr, energy in provider_cls.stream(target, self._on_ble_error):
                     self._handle_sample(t_ms, bpm, rr, energy)
             except BleakError as e:
                 self._on_ble_error(f"🔄  BLE error, will retry: {e}")
 
             # pause a bit before trying again
             await asyncio.sleep(5.0)
-
 
     def _on_ble_error(self, msg: str):
         # forward into the UI thread via the callback:

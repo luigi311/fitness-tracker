@@ -22,6 +22,51 @@ dependencies = [
 where = ["."]
 include = ["fitness_tracker*"]
 
+[dependency-groups]
+dev = [
+    "flatpak-pip-generator>=25.0.0",
+    "requirements-parser>=0.13.0",
+    "ruff>=0.11.13",
+    "ty>=0.0.1a10",
+]
+
 # Define a console script entry point
 [project.scripts]
 fitness-tracker = "fitness_tracker.__main__:main"
+
+
+[tool.ruff]
+line-length = 100
+indent-width = 4
+format.indent-style = "space"
+target-version = "py313"
+src = ["tests","hooks"]
+
+[tool.ruff.lint]
+pydocstyle.convention = "google"
+fixable = ["ALL"]
+select = ["ALL"]
+ignore = [
+    "FA102", # Flake8-future-annotations
+    "F401", # Disable fix for unused imports
+    "B904", # Allow raising exceptions without from e
+    "PLR0913", # too many arguments
+    "CPY", # Flake8-copyright
+    "T201", # Debugging print statements
+    "ERA", # Eradicate – detects commented-out code
+    "BLE001", # Catch-all exceptions
+    "D100", # missing docstring in public module
+    "D105", # undocumented magic method
+    "D107", # undocumented public init
+    "D203", # incorrect-blank-line-before-class
+    "D205", # line-between-summary-and-description
+    "D212", # multi-line-summary-first-line
+    "D407", # missing-dashed-underline-after-section
+    "S311", # rand-usage
+]
+
+[tool.ty.rules]
+unused-ignore-comment = "warn"
+redundant-cast = "ignore"
+possibly-unbound-attribute = "error"
+possibly-unbound-import = "error"
