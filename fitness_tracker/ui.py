@@ -19,6 +19,17 @@ from gi.repository import Adw, Gtk, GLib
 
 Adw.init()
 
+# Determine dark-mode status and define colors
+_style_manager = Adw.StyleManager.get_default()
+_IS_DARK = _style_manager.get_dark()
+if _IS_DARK:
+    _DARK_BG = "#2e3436"
+    _DARK_FG = "#ffffff"
+    _DARK_GRID = "#555555"
+else:
+    _DARK_BG = "#f9f9f9"
+    _DARK_FG = "#000000"
+    _DARK_GRID = "#cccccc"
 
 class FitnessAppUI(Adw.Application):
     def __init__(self):
@@ -217,7 +228,7 @@ class FitnessAppUI(Adw.Application):
 
         self.bpm_label = Gtk.Label()
         self.bpm_label.set_use_markup(True)
-        self.bpm_label.set_markup('<span font="28">— BPM —</span>')
+        self.bpm_label.set_markup(f'<span font="28" color="{_DARK_FG}">— BPM —</span>')
         self.bpm_label.set_halign(Gtk.Align.CENTER)
         self.bpm_label.set_valign(Gtk.Align.CENTER)
         vbox.append(self.bpm_label)
@@ -228,8 +239,14 @@ class FitnessAppUI(Adw.Application):
         (self._line,) = self.ax.plot([], [], lw=2)
         self.ax.set_xlabel("Time (s)")
         self.ax.set_ylabel("BPM")
-        self.ax.grid(alpha=0.3)
-        self.ax.set_facecolor("#f9f9f9")
+
+        # Dark/light styling
+        self.fig.patch.set_facecolor(_DARK_BG)
+        self.ax.set_facecolor(_DARK_BG)
+        self.ax.xaxis.label.set_color(_DARK_FG)
+        self.ax.yaxis.label.set_color(_DARK_FG)
+        self.ax.tick_params(colors=_DARK_FG)
+        self.ax.grid(color=_DARK_GRID)
 
         canvas = FigureCanvas(self.fig)
         canvas.set_vexpand(True)
@@ -368,47 +385,34 @@ class FitnessAppUI(Adw.Application):
 
     def _build_history_page(self) -> Gtk.Widget:
         vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
-        vbox.set_margin_top(12)
-        vbox.set_margin_bottom(12)
-        vbox.set_margin_start(12)
-        vbox.set_margin_end(12)
+        for margin in ("top", "bottom", "start", "end"): getattr(vbox, f"set_margin_{margin}")(12)
 
-        # Filter controls
         filter_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         filter_label = Gtk.Label(label="Show:")
-        filter_label.set_halign(Gtk.Align.START)
         filter_box.append(filter_label)
-
         self.filter_combo = Gtk.ComboBoxText()
-        self.filter_combo.append("week", "Last 7 Days")
-        self.filter_combo.append("month", "This Month")
-        self.filter_combo.append("all", "All Time")
+        for key, text in [("week","Last 7 Days"),("month","This Month"),("all","All Time")]:
+            self.filter_combo.append(key, text)
         self.filter_combo.set_active_id(self.history_filter)
         self.filter_combo.connect("changed", self._on_filter_changed)
         filter_box.append(self.filter_combo)
         vbox.append(filter_box)
 
-        # Scrollable container for history items
         scroller = Gtk.ScrolledWindow()
         scroller.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
         scroller.set_vexpand(True)
-        self.history_container = Gtk.Box(
-            orientation=Gtk.Orientation.VERTICAL, spacing=8
-        )
+        self.history_container = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         scroller.set_child(self.history_container)
         vbox.append(scroller)
 
-        # Activity Details chart below
         frame = Gtk.Frame(label="Activity Details")
         self.history_fig = Figure(figsize=(6, 3))
         self.history_ax = self.history_fig.add_subplot(111)
-        self.history_ax.set_xlabel("Time (s)")
-        self.history_ax.set_ylabel("BPM")
+        self._apply_chart_style(self.history_ax)
         self.history_canvas = FigureCanvas(self.history_fig)
         self.history_canvas.set_vexpand(True)
         frame.set_child(self.history_canvas)
         vbox.append(frame)
-
         return vbox
 
     def _on_filter_changed(self, combo: Gtk.ComboBoxText):
@@ -516,10 +520,7 @@ class FitnessAppUI(Adw.Application):
         times: list[float],
         bpms: list[int],
     ):
-        # Keep track of start times for plotting comparisons
         self.activity_start_times[act_id] = start
-
-        # Use a Frame as a card container since Adw.Card isn't available
         frame = Gtk.Frame()
         frame.set_margin_start(8)
         frame.set_margin_end(8)
@@ -553,8 +554,12 @@ class FitnessAppUI(Adw.Application):
         if times and bpms:
             spark_fig = Figure(figsize=(2, 0.5), dpi=80)
             ax = spark_fig.add_axes([0, 0, 1, 1])
-            ax.plot(times, bpms, lw=1)
+            line_spark, = ax.plot(times, bpms, lw=1)
             ax.axis("off")
+            # Dark-mode background
+            spark_fig.patch.set_facecolor(_DARK_BG)
+            ax.set_facecolor(_DARK_BG)
+
             spark_canvas = FigureCanvas(spark_fig)
             spark_canvas.set_size_request(200, 50)
             content.append(spark_canvas)
@@ -569,36 +574,38 @@ class FitnessAppUI(Adw.Application):
             self.selected_activities.discard(act_id)
         self._update_history_plot()
 
+    def _apply_chart_style(self, ax):
+        # apply both figure and axis backgrounds
+        ax.figure.patch.set_facecolor(_DARK_BG)
+        ax.set_facecolor(_DARK_BG)
+        ax.xaxis.label.set_color(_DARK_FG)
+        ax.yaxis.label.set_color(_DARK_FG)
+        ax.tick_params(colors=_DARK_FG)
+        ax.grid(color=_DARK_GRID)
+
     def _update_history_plot(self):
         self.history_ax.clear()
+        self._apply_chart_style(self.history_ax)
         Session = self.recorder.db.Session
         with Session() as session:
             for aid in sorted(self.selected_activities):
-                hrs = (
-                    session.query(HeartRate)
-                    .filter_by(activity_id=aid)
-                    .order_by(HeartRate.timestamp_ms)
-                    .all()
-                )
-                if not hrs:
-                    continue
+                hrs = session.query(HeartRate).filter_by(activity_id=aid).order_by(HeartRate.timestamp_ms).all()
+                if not hrs: continue
                 start_ms = hrs[0].timestamp_ms
                 times = [(h.timestamp_ms - start_ms) / 1000.0 for h in hrs]
                 bpms = [h.bpm for h in hrs]
-                label = (
-                    self.activity_start_times[aid]
-                    .replace(tzinfo=ZoneInfo("UTC"))
-                    .astimezone()
-                    .strftime("%Y-%m-%d %H:%M")
-                )
+                label = self.activity_start_times[aid].astimezone().strftime("%Y-%m-%d %H:%M")
                 self.history_ax.plot(times, bpms, lw=2, label=label)
 
         if self.selected_activities:
             self.history_ax.set_xlabel("Time (s)")
             self.history_ax.set_ylabel("BPM")
-            self.history_ax.legend()
+            leg = self.history_ax.legend(frameon=True)
+            leg.get_frame().set_facecolor(_DARK_BG)
+            leg.get_frame().set_edgecolor(_DARK_GRID)
+            for text in leg.get_texts(): text.set_color(_DARK_FG)
         else:
-            self.history_ax.set_title("No activities selected")
+            self.history_ax.set_title("No activities selected", color=_DARK_FG)
 
         self.history_fig.tight_layout()
         self.history_canvas.draw_idle()
