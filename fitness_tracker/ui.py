@@ -34,6 +34,8 @@ class FitnessAppUI(Adw.Application):
         # store each activity’s start-time so we can label the legend
         self.activity_start_times: dict[int, datetime.datetime] = {}
 
+        self.history_filter = "week"
+
         # Set up application directory
         app_dir = Path(expanduser("~/.local/share/io.Luigi311.Fitness"))
         app_dir.mkdir(parents=True, exist_ok=True)
@@ -361,30 +363,39 @@ class FitnessAppUI(Adw.Application):
             toast = Adw.Toast.new("Settings saved successfully")
             GLib.idle_add(toast_overlay.add_toast, toast)
 
-    def _clear_history(self):
-        """Remove all rows from the History list."""
-        # Must run on main GTK thread
-        if self.history_list:
-            self.history_list.remove_all()
-
     def _build_history_page(self) -> Gtk.Widget:
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
-        box.set_margin_top(12)
-        box.set_margin_bottom(12)
-        box.set_margin_start(12)
-        box.set_margin_end(12)
+        vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        vbox.set_margin_top(12)
+        vbox.set_margin_bottom(12)
+        vbox.set_margin_start(12)
+        vbox.set_margin_end(12)
 
-        title = Gtk.Label(label="History")
-        title.set_halign(Gtk.Align.CENTER)
-        box.append(title)
+        # Filter controls
+        filter_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        filter_label = Gtk.Label(label="Show:")
+        filter_label.set_halign(Gtk.Align.START)
+        filter_box.append(filter_label)
 
-        # List of past activities
-        self.history_list = Gtk.ListBox()
-        self.history_list.set_selection_mode(Gtk.SelectionMode.NONE)
-        self.history_list.set_vexpand(True)
-        box.append(self.history_list)
+        self.filter_combo = Gtk.ComboBoxText()
+        self.filter_combo.append("week", "Last 7 Days")
+        self.filter_combo.append("month", "This Month")
+        self.filter_combo.append("all", "All Time")
+        self.filter_combo.set_active_id(self.history_filter)
+        self.filter_combo.connect("changed", self._on_filter_changed)
+        filter_box.append(self.filter_combo)
+        vbox.append(filter_box)
 
-        # Chart for selected activity
+        # Scrollable container for history items
+        scroller = Gtk.ScrolledWindow()
+        scroller.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
+        scroller.set_vexpand(True)
+        self.history_container = Gtk.Box(
+            orientation=Gtk.Orientation.VERTICAL, spacing=8
+        )
+        scroller.set_child(self.history_container)
+        vbox.append(scroller)
+
+        # Activity Details chart below
         frame = Gtk.Frame(label="Activity Details")
         self.history_fig = Figure(figsize=(6, 3))
         self.history_ax = self.history_fig.add_subplot(111)
@@ -393,27 +404,85 @@ class FitnessAppUI(Adw.Application):
         self.history_canvas = FigureCanvas(self.history_fig)
         self.history_canvas.set_vexpand(True)
         frame.set_child(self.history_canvas)
-        box.append(frame)
+        vbox.append(frame)
 
-        return box
+        return vbox
+
+    def _on_filter_changed(self, combo: Gtk.ComboBoxText):
+        self.history_filter = combo.get_active_id()
+        # Clear existing UI elements on the main thread
+        GLib.idle_add(self._clear_history)
+        # Reload history in background
+        threading.Thread(target=self._load_history, daemon=True).start()
+
+    def _clear_history(self):
+        # GTK4: use get_first_child()/get_next_sibling() to iterate
+        child = self.history_container.get_first_child()
+        while child is not None:
+            next_child = child.get_next_sibling()
+            self.history_container.remove(child)
+            child = next_child
 
     def _load_history(self):
-        # guard to ensure recorder is ready
         if not self.recorder:
             return
         Session = self.recorder.db.Session
+
+        # Determine cutoff based on filter (use local now)
+        now = datetime.datetime.now().astimezone()
+        if self.history_filter == "week":
+            cutoff = now - datetime.timedelta(days=7)
+        elif self.history_filter == "month":
+            cutoff = now - datetime.timedelta(days=30)
+        else:
+            cutoff = None
+
+        last_date = None
         with Session() as session:
             activities = (
                 session.query(Activity).order_by(Activity.start_time.desc()).all()
             )
             for act in activities:
+                # Convert start to aware and local
                 start = act.start_time
-                end = act.end_time or datetime.utcnow()
+                if start.tzinfo is None:
+                    start = start.replace(tzinfo=ZoneInfo("UTC"))
+                start = start.astimezone()
+
+                # Skip if before cutoff
+                if cutoff and start < cutoff:
+                    continue
+
+                # Determine end, also aware and local
+                if act.end_time:
+                    end = act.end_time
+                    if end.tzinfo is None:
+                        end = end.replace(tzinfo=ZoneInfo("UTC"))
+                    end = end.astimezone()
+                else:
+                    end = datetime.datetime.now().astimezone()
+
+                # Group by calendar date
+                date_only = start.date()
+                if date_only != last_date:
+                    GLib.idle_add(self._add_history_group_header, date_only)
+                    last_date = date_only
+
+                # Metrics and sparkline data
+                hrs = list(act.heart_rates)
+                if hrs:
+                    start_ms = hrs[0].timestamp_ms
+                    times = [(hr.timestamp_ms - start_ms) / 1000.0 for hr in hrs]
+                    bpms = [hr.bpm for hr in hrs]
+                    avg_bpm = sum(bpms) / len(bpms)
+                    max_bpm = max(bpms)
+                    total_kj = sum(hr.energy_kj or 0 for hr in hrs)
+                else:
+                    times = []
+                    bpms = []
+                    avg_bpm = max_bpm = total_kj = 0
+
                 duration = end - start
-                hr_vals = [hr.bpm for hr in act.heart_rates]
-                avg_bpm = sum(hr_vals) / len(hr_vals) if hr_vals else 0
-                max_bpm = max(hr_vals) if hr_vals else 0
-                total_kj = sum(hr.energy_kj or 0 for hr in act.heart_rates)
                 GLib.idle_add(
                     self._add_history_row,
                     act.id,
@@ -422,78 +491,79 @@ class FitnessAppUI(Adw.Application):
                     avg_bpm,
                     max_bpm,
                     total_kj,
+                    times,
+                    bpms,
                 )
+
+    def _add_history_group_header(self, date: datetime.date):
+        header = Gtk.Label(label=date.strftime("%B %d, %Y"))
+        header.get_style_context().add_class("heading")
+        header.set_margin_top(12)
+        header.set_margin_bottom(6)
+        self.history_container.append(header)
 
     def _add_history_row(
         self,
         act_id: int,
-        start: datetime,
-        duration,
+        start: datetime.datetime,
+        duration: datetime.timedelta,
         avg_bpm: float,
         max_bpm: int,
         total_kj: float,
+        times: list[float],
+        bpms: list[int],
     ):
-        # store start-time for legend label later
+        # Keep track of start times for plotting comparisons
         self.activity_start_times[act_id] = start
 
-        row = Adw.ActionRow()
-        # ensure UTC→local
-        if start.tzinfo is None:
-            # assume stored as UTC
-            start = start.replace(tzinfo=ZoneInfo("UTC"))
-        # astimezone() with no args converts to the system local tz
-        local = start.astimezone()
-        row.set_title(local.strftime("%Y-%m-%d %H:%M"))
+        # Use a Frame as a card container since Adw.Card isn't available
+        frame = Gtk.Frame()
+        frame.set_margin_start(8)
+        frame.set_margin_end(8)
+        frame.set_margin_top(4)
+        frame.set_margin_bottom(4)
+
+        header_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+        title = Gtk.Label(label=start.strftime("%Y-%m-%d %H:%M"))
+        title.get_style_context().add_class("title")
+        header_box.append(title)
+        header_box.append(Gtk.Separator(orientation=Gtk.Orientation.VERTICAL))
+        check = Gtk.CheckButton()
+        check.set_active(act_id in self.selected_activities)
+        check.connect(
+            "toggled",
+            lambda cb, aid=act_id: self._on_history_card_toggled(aid, cb.get_active()),
+        )
+        header_box.append(check)
 
         summary = (
-            f"Dur: {int(duration.total_seconds() // 60)}m {int(duration.total_seconds() % 60)}s, "
-            f"Avg: {int(avg_bpm)} BPM"
+            f"Dur: {int(duration.total_seconds()//60)}m {int(duration.total_seconds()%60)}s, "
+            f"Avg: {int(avg_bpm)} BPM, Max: {max_bpm} BPM"
         )
-        label = Gtk.Label(label=summary)
-        label.set_halign(Gtk.Align.END)
-        row.add_suffix(label)
-        row.set_activatable(True)
+        summary_label = Gtk.Label(label=summary)
+        summary_label.set_halign(Gtk.Align.START)
 
-        # make it clickable
-        row.set_activatable(True)
-        row.connect("activated", lambda r, aid=act_id: self._toggle_history_row(r, aid))
+        content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        content.append(header_box)
+        content.append(summary_label)
 
-        self.history_list.append(row)
+        if times and bpms:
+            spark_fig = Figure(figsize=(2, 0.5), dpi=80)
+            ax = spark_fig.add_axes([0, 0, 1, 1])
+            ax.plot(times, bpms, lw=1)
+            ax.axis("off")
+            spark_canvas = FigureCanvas(spark_fig)
+            spark_canvas.set_size_request(200, 50)
+            content.append(spark_canvas)
 
-    def _show_activity_details(self, act_id: int):
-        times = []
-        bpms = []
-        if not self.recorder:
-            return
-        Session = self.recorder.db.Session
-        with Session() as session:
-            hrs = (
-                session.query(HeartRate)
-                .filter_by(activity_id=act_id)
-                .order_by(HeartRate.timestamp_ms)
-                .all()
-            )
-            start_ms = None
-            for hr in hrs:
-                if start_ms is None:
-                    start_ms = hr.timestamp_ms
-                times.append((hr.timestamp_ms - start_ms) / 1000.0)
-                bpms.append(hr.bpm)
+        frame.set_child(content)
+        self.history_container.append(frame)
 
-        # Update chart
-        self.history_ax.clear()
-        self.history_ax.plot(times, bpms, lw=2)
-        self.history_fig.tight_layout()
-        self.history_canvas.draw_idle()
-
-    def _toggle_history_row(self, row: Adw.ActionRow, act_id: int):
-        ctx = row.get_style_context()
-        if act_id in self.selected_activities:
-            self.selected_activities.remove(act_id)
-            ctx.remove_class("selected")
-        else:
+    def _on_history_card_toggled(self, act_id: int, selected: bool):
+        if selected:
             self.selected_activities.add(act_id)
-            ctx.add_class("selected")
+        else:
+            self.selected_activities.discard(act_id)
         self._update_history_plot()
 
     def _update_history_plot(self):
