@@ -13,6 +13,7 @@ from fitness_tracker.recorder import Recorder
 from fitness_tracker.hr_provider import AVAILABLE_PROVIDERS
 
 import gi
+
 gi.require_versions({"Gtk": "4.0", "Adw": "1"})
 from gi.repository import Adw, Gtk, GLib
 
@@ -27,6 +28,12 @@ class FitnessAppUI(Adw.Application):
         self._times: list[float] = []
         self._bpms: list[int] = []
         self._line = None
+
+        # keep track of which activities the user has ticked
+        self.selected_activities: set[int] = set()
+        # store each activity’s start-time so we can label the legend
+        self.activity_start_times: dict[int, datetime.datetime] = {}
+
         # Set up application directory
         app_dir = Path(expanduser("~/.local/share/io.Luigi311.Fitness"))
         app_dir.mkdir(parents=True, exist_ok=True)
@@ -161,7 +168,7 @@ class FitnessAppUI(Adw.Application):
                 return
 
             self.recorder.db.sync_to_database(self.database_dsn)
-            
+
             # clear & reload history on the main thread
             GLib.idle_add(self._clear_history)
             # reload in background
@@ -360,7 +367,6 @@ class FitnessAppUI(Adw.Application):
         if self.history_list:
             self.history_list.remove_all()
 
-
     def _build_history_page(self) -> Gtk.Widget:
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
         box.set_margin_top(12)
@@ -374,6 +380,7 @@ class FitnessAppUI(Adw.Application):
 
         # List of past activities
         self.history_list = Gtk.ListBox()
+        self.history_list.set_selection_mode(Gtk.SelectionMode.NONE)
         self.history_list.set_vexpand(True)
         box.append(self.history_list)
 
@@ -426,6 +433,9 @@ class FitnessAppUI(Adw.Application):
         max_bpm: int,
         total_kj: float,
     ):
+        # store start-time for legend label later
+        self.activity_start_times[act_id] = start
+
         row = Adw.ActionRow()
         # ensure UTC→local
         if start.tzinfo is None:
@@ -437,13 +447,17 @@ class FitnessAppUI(Adw.Application):
 
         summary = (
             f"Dur: {int(duration.total_seconds() // 60)}m {int(duration.total_seconds() % 60)}s, "
-            f"Avg: {int(avg_bpm)} BPM, Max: {max_bpm} BPM"
+            f"Avg: {int(avg_bpm)} BPM"
         )
         label = Gtk.Label(label=summary)
         label.set_halign(Gtk.Align.END)
         row.add_suffix(label)
         row.set_activatable(True)
-        row.connect("activated", lambda r: self._show_activity_details(act_id))
+
+        # make it clickable
+        row.set_activatable(True)
+        row.connect("activated", lambda r, aid=act_id: self._toggle_history_row(r, aid))
+
         self.history_list.append(row)
 
     def _show_activity_details(self, act_id: int):
@@ -469,6 +483,48 @@ class FitnessAppUI(Adw.Application):
         # Update chart
         self.history_ax.clear()
         self.history_ax.plot(times, bpms, lw=2)
-        self.history_ax.set_title("Activity detail")
+        self.history_fig.tight_layout()
+        self.history_canvas.draw_idle()
+
+    def _toggle_history_row(self, row: Adw.ActionRow, act_id: int):
+        ctx = row.get_style_context()
+        if act_id in self.selected_activities:
+            self.selected_activities.remove(act_id)
+            ctx.remove_class("selected")
+        else:
+            self.selected_activities.add(act_id)
+            ctx.add_class("selected")
+        self._update_history_plot()
+
+    def _update_history_plot(self):
+        self.history_ax.clear()
+        Session = self.recorder.db.Session
+        with Session() as session:
+            for aid in sorted(self.selected_activities):
+                hrs = (
+                    session.query(HeartRate)
+                    .filter_by(activity_id=aid)
+                    .order_by(HeartRate.timestamp_ms)
+                    .all()
+                )
+                if not hrs:
+                    continue
+                start_ms = hrs[0].timestamp_ms
+                times = [(h.timestamp_ms - start_ms) / 1000.0 for h in hrs]
+                bpms = [h.bpm for h in hrs]
+                label = (
+                    self.activity_start_times[aid]
+                    .astimezone()
+                    .strftime("%Y-%m-%d %H:%M")
+                )
+                self.history_ax.plot(times, bpms, lw=2, label=label)
+
+        if self.selected_activities:
+            self.history_ax.set_xlabel("Time (s)")
+            self.history_ax.set_ylabel("BPM")
+            self.history_ax.legend()
+        else:
+            self.history_ax.set_title("No activities selected")
+
         self.history_fig.tight_layout()
         self.history_canvas.draw_idle()
