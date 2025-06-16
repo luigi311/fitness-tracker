@@ -1,0 +1,23 @@
+app-id: io.Luigi311.Fitness
+runtime: org.gnome.Platform
+runtime-version: '47'
+sdk: org.gnome.Sdk
+command: fitness-tracker
+
+finish-args:
+  - --socket=system-bus
+  - --talk-name=org.bluez
+  - --share=network
+  - --filesystem=xdg-data
+
+modules:
+  - python3-requirements.json
+  - name: fitness-tracker
+    buildsystem: simple
+    build-commands:
+      # Bootstraps pip if it isn’t already there (won’t hurt if it is),
+      # then uses Python’s -m pip to install into /app.
+      - pip3 install --no-deps --prefix=/app .
+    sources:
+      - type: dir
+        path: .

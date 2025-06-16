@@ -1,0 +1,7 @@
+[Desktop Entry]
+Name=Fitness Tracker
+Comment=Heart-rate tracker with GTK UI
+Exec=fitness_tracker
+Icon=io.Luigi311.Fitness
+Type=Application
+Categories=Health;Utility;
