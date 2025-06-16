@@ -243,125 +243,128 @@ class FitnessAppUI(Adw.Application):
         return vbox
 
     def _build_settings_page(self) -> Gtk.Widget:
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
-        box.set_margin_top(12)
-        box.set_margin_bottom(12)
-        box.set_margin_start(12)
-        box.set_margin_end(12)
+        # General settings group
+        prefs_vbox = Adw.PreferencesGroup()
+        prefs_vbox.set_title("General Settings")
 
-        label = Gtk.Label(label="Database DSN:")
-        label.set_halign(Gtk.Align.START)
-
+        # Database DSN row
+        dsn_row = Adw.ActionRow()
+        dsn_row.set_title("Database DSN")
         self.dsn_entry = Gtk.Entry()
         self.dsn_entry.set_hexpand(True)
         self.dsn_entry.set_text(self.database_dsn)
+        dsn_row.add_suffix(self.dsn_entry)
+        prefs_vbox.add(dsn_row)
 
-        device_label = Gtk.Label(label="Select Tracker Device:")
-        device_label.set_halign(Gtk.Align.START)
+        # Tracker device group
+        dev_group = Adw.PreferencesGroup()
+        dev_group.set_title("Tracker Device")
 
+        # Device selection row with spinner + combo
+        self.device_row = Adw.ActionRow()
+        self.device_row.set_title("Select Device")
+        self.device_spinner = Gtk.Spinner()
+        self.device_spinner.set_halign(Gtk.Align.START)
+        # start spinner only if no preselected device
+        if not self.device_name:
+            self.device_spinner.start()
         self.device_combo = Gtk.ComboBoxText()
         self.device_combo.set_hexpand(True)
+        self.device_row.add_prefix(self.device_spinner)
+        self.device_row.add_suffix(self.device_combo)
+        dev_group.add(self.device_row)
 
-        self.scan_status = Gtk.Label(label="Scanning for devices...")
-        self.scan_status.set_halign(Gtk.Align.START)
-
+        # Rescan row
+        rescan_row = Adw.ActionRow()
+        rescan_row.set_title("Rescan for Devices")
         self.rescan_button = Gtk.Button(label="Rescan")
-        self.rescan_button.set_halign(Gtk.Align.END)
+        self.rescan_button.get_style_context().add_class("suggested-action")
         self.rescan_button.connect(
             "clicked",
-            lambda _: threading.Thread(target=fill_devices, daemon=True).start(),
+            lambda _: threading.Thread(target=self._fill_devices, daemon=True).start(),
         )
+        rescan_row.add_suffix(self.rescan_button)
+        dev_group.add(rescan_row)
 
-        # Fill device list asynchronously
-        def fill_devices():
-            import asyncio
-            from bleak import BleakScanner
+        # Save Settings row
+        save_row = Adw.ActionRow()
+        save_row.set_activatable(True)
+        save_row.set_title("Save Settings")
+        self.save_button = Gtk.Button(label="Save")
+        self.save_button.connect("clicked", self._on_save_settings)
+        save_row.add_suffix(self.save_button)
+        dev_group.add(save_row)
 
-            def update_status(text):
-                GLib.idle_add(self.scan_status.set_text, text)
+        # Layout container
+        container = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        container.set_margin_top(12)
+        container.set_margin_bottom(12)
+        container.set_margin_start(12)
+        container.set_margin_end(12)
+        container.append(prefs_vbox)
+        container.append(dev_group)
 
-            async def _scan():
-                update_status("Scanning for devices…")
-                devices = await BleakScanner.discover(timeout=5.0)
-
-                # build name→address map
-                mapping: dict[str, str] = {}
-                for d in devices:
-                    if d.name and any(p.matches(d.name) for p in AVAILABLE_PROVIDERS):
-                        mapping.setdefault(d.name, d.address)
-                names = sorted(mapping.keys())
-                update_status(
-                    "No supported devices found" if not names else "Scan complete"
-                )
-                GLib.idle_add(self._update_device_combo, names)
-                # save the map and update UI
-                self.device_map = mapping
-                GLib.idle_add(self._update_device_combo, names)
-
-            asyncio.run(_scan())
-
+        # If a device was saved in config, pre-populate and skip initial scan
         if self.device_name:
-            # Seed the combo with the one saved name
-            self._update_device_combo([self.device_name])
-            self.scan_status.set_text(f"Current device: {self.device_name}")
+            # stop spinner and set subtitle
+            self.device_spinner.stop()
+            # populate combo and select
+            self.device_combo.append_text(self.device_name)
+            self.device_combo.set_active(0)
+            # map remains empty until explicit rescan
+            self.device_map = {self.device_name: self.device_address}
         else:
-            # No saved device yet
-            self.device_combo.remove_all()
-            self.scan_status.set_text(
-                "No device selected. Press Rescan to find devices."
-            )
+            # Kick off initial scan in background
+            threading.Thread(target=self._fill_devices, daemon=True).start()
 
-        save_button = Gtk.Button(label="Save")
-        save_button.set_halign(Gtk.Align.END)
-        save_button.connect("clicked", self._on_save_settings)
+        return container
 
-        box.append(label)
-        box.append(self.dsn_entry)
-        box.append(device_label)
-        box.append(self.device_combo)
-        box.append(self.scan_status)
-        box.append(self.rescan_button)
-        box.append(save_button)
+    def _fill_devices(self):
+        # Indicate scanning
+        GLib.idle_add(self.device_spinner.start)
+        self.device_row.set_subtitle("Scanning for devices…")
 
-        return box
+        import asyncio
+        from bleak import BleakScanner
 
-    def _update_device_combo(self, names):
-        self.device_combo.remove_all()
-        for name in names:
-            self.device_combo.append_text(name)
+        async def _scan():
+            devices = await BleakScanner.discover(timeout=5.0)
+            mapping = {}
+            for d in devices:
+                if d.name and any(p.matches(d.name) for p in AVAILABLE_PROVIDERS):
+                    mapping.setdefault(d.name, d.address)
 
-        # Ensure default matches saved device_name
-        if self.device_name and self.device_name in names:
-            self.device_combo.set_active(names.index(self.device_name))
-        else:
-            self.device_combo.set_active(-1 if not names else 0)
+            names = sorted(mapping.keys())
+            # Update UI
+            GLib.idle_add(self.device_spinner.stop)
+            subtitle = "No supported devices found" if not names else ""
+            GLib.idle_add(self.device_row.set_subtitle, subtitle)
+            GLib.idle_add(self.device_combo.remove_all)
+            for name in names:
+                GLib.idle_add(self.device_combo.append_text, name)
+            # restore selection if saved
+            if self.device_name and self.device_name in names:
+                idx = names.index(self.device_name)
+                GLib.idle_add(self.device_combo.set_active, idx)
+            self.device_map = mapping
+
+        asyncio.run(_scan())
 
     def _on_save_settings(self, _button):
+        # Persist database DSN and tracker selection
         self.database_dsn = self.dsn_entry.get_text()
         self.device_name = self.device_combo.get_active_text() or ""
-        # only overwrite MAC if this name was in our last scan
         if self.device_name in self.device_map:
             self.device_address = self.device_map[self.device_name]
-
-        from configparser import ConfigParser
-
         cfg = ConfigParser()
         cfg["server"] = {"database_dsn": self.database_dsn}
-        cfg["tracker"] = {
-            "device_name": self.device_name,
-            "device_address": self.device_address,
-        }
-
+        cfg["tracker"] = {"device_name": self.device_name, "device_address": self.device_address}
         with open(self.config_file, "w") as f:
             cfg.write(f)
+        # Confirmation toast
+        toast = Adw.Toast.new("Settings saved successfully")
+        GLib.idle_add(self.toast_overlay.add_toast, toast)
 
-        # Show confirmation message as a toast
-        from gi.repository import Adw
-
-        toast_overlay = self.window.get_content()
-        if isinstance(toast_overlay, Adw.ToastOverlay):
-            toast = Adw.Toast.new("Settings saved successfully")
-            GLib.idle_add(toast_overlay.add_toast, toast)
 
     def _build_history_page(self) -> Gtk.Widget:
         vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
