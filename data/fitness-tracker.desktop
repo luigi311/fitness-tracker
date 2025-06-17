@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Fitness Tracker
+Comment=Track your workouts and heart rate on Linux
+Exec=fitness-tracker
+Icon=fitness-tracker
+Terminal=false
+Categories=Utility;Health;Fitness;
+StartupNotify=true
+X-Purism-FormFactor=Workstation;Mobile;
