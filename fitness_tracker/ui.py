@@ -56,6 +56,7 @@ class FitnessAppUI(Adw.Application):
         # load existing configuration
         cfg = ConfigParser()
         self.database_dsn = ""
+        self.device_name = ""
         self.device_map: dict[str, str] = {}
         self.device_choices = []
         if self.config_file.exists():
