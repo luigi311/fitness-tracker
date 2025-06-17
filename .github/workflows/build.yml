@@ -110,9 +110,11 @@ jobs:
         run: |
           VERSION=$(grep -E '^version\s*=' pyproject.toml | head -n1 | sed -E 's/version\s*=\s*"(.*)"/\1/')
           fpm -s dir -t ${{ matrix.package }} \
-            -n fitness_tracker \
+            -n fitness-tracker \
             -v "$VERSION" \
-            dist/fitness_tracker=/usr/bin/fitness_tracker 
+            dist/fitness_tracker=/usr/bin/fitness-tracker \
+            data/fitness-tracker.desktop=/usr/share/applications/fitness-tracker.desktop \
+            data/fitness-tracker.svg=/usr/share/icons/hicolor/scalable/apps/fitness-tracker.svg 
 
       - name: "Upload Package"
         uses: actions/upload-artifact@v4
