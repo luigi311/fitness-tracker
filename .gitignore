@@ -1,5 +1,8 @@
 **.db
 *.sh
+build
+build-dir
+.flatpak-builder
 
 # Python-generated files
 __pycache__/
