@@ -174,38 +174,32 @@ class FitnessAppUI(Adw.Application):
         self.fig.canvas.draw_idle()
 
     def _on_sync(self, button):
-        # disable while syncing
-        self.sync_btn.set_sensitive(False)
-        GLib.idle_add(self.bpm_label.set_markup, '<span font="16">Syncing...</span>')
+        # disable the Settings-page sync button
+        button.set_sensitive(False)
+        GLib.idle_add(self.show_toast, "Syncing…")
 
-        # perform sync in a background thread so UI stays responsive
         def do_sync():
             if not self.database_dsn:
-                GLib.idle_add(
-                    self.bpm_label.set_markup,
-                    '<span font="16">No DSN configured</span>',
-                )
-                GLib.idle_add(self.sync_btn.set_sensitive, True)
+                GLib.idle_add(self.show_toast, "No database DSN configured")
+                GLib.idle_add(button.set_sensitive, True)
                 return
 
             try:
                 self.recorder.db.sync_to_database(self.database_dsn)
             except ConnectionError as e:
-                # Notify user and re-enable button
-                GLib.idle_add(self.show_toast, str(e))
-                GLib.idle_add(self.sync_btn.set_sensitive, True)
+                GLib.idle_add(self.show_toast, f"Sync failed: {e}")
+                GLib.idle_add(button.set_sensitive, True)
                 return
 
-            # clear & reload history on the main thread
+            # refresh history after a successful sync
             GLib.idle_add(self._clear_history)
-            # reload in background
             threading.Thread(target=self._load_history, daemon=True).start()
 
-            # then update UI status & re-enable button
-            GLib.idle_add(self.bpm_label.set_markup, '<span font="16">Sync complete</span>')
-            GLib.idle_add(self.sync_btn.set_sensitive, True)
+            GLib.idle_add(self.show_toast, "Sync complete")
+            GLib.idle_add(button.set_sensitive, True)
 
         threading.Thread(target=do_sync, daemon=True).start()
+
 
     def _build_tracker_page(self) -> Gtk.Widget:
         vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
@@ -230,12 +224,8 @@ class FitnessAppUI(Adw.Application):
         self.stop_btn.get_style_context().add_class("destructive-action")
         self.stop_btn.set_sensitive(False)
 
-        self.sync_btn = Gtk.Button(label="Sync to Server")
-        self.sync_btn.get_style_context().add_class("secondary")
-
         ctrl_box.append(self.start_btn)
         ctrl_box.append(self.stop_btn)
-        ctrl_box.append(self.sync_btn)
         vbox.append(ctrl_box)
 
         self.bpm_label = Gtk.Label()
@@ -269,7 +259,6 @@ class FitnessAppUI(Adw.Application):
 
         self.start_btn.connect("clicked", self._on_start)
         self.stop_btn.connect("clicked", self._on_stop)
-        self.sync_btn.connect("clicked", self._on_sync)
 
         return vbox
 
@@ -338,7 +327,7 @@ class FitnessAppUI(Adw.Application):
         personal_group.add(max_row)
 
 
-        # Action group
+        # Save Button
         action_group = Adw.PreferencesGroup()
         action_group.set_title("Actions")
         save_row = Adw.ActionRow()
@@ -349,6 +338,16 @@ class FitnessAppUI(Adw.Application):
         self.save_button.connect("clicked", self._on_save_settings)
         save_row.add_suffix(self.save_button)
         action_group.add(save_row)
+
+        # Sync button
+        sync_row = Adw.ActionRow()
+        sync_row.set_title("Sync to Database")
+        sync_row.set_activatable(True)
+        self.sync_button = Gtk.Button(label="Sync")
+        self.sync_button.get_style_context().add_class("suggested-action")
+        self.sync_button.connect("clicked", self._on_sync)
+        sync_row.add_suffix(self.sync_button)
+        action_group.add(sync_row)
 
         # Layout container
         container = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
