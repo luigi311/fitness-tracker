@@ -56,14 +56,23 @@ class FitnessAppUI(Adw.Application):
         # load existing configuration
         cfg = ConfigParser()
         self.database_dsn = ""
+        
         self.device_name = ""
         self.device_map: dict[str, str] = {}
         self.device_choices = []
+
+        self.resting_hr: int = 60
+        self.max_hr: int = 180
+
         if self.config_file.exists():
             cfg.read(self.config_file)
             self.database_dsn = cfg.get("server", "database_dsn", fallback="")
+
             self.device_name = cfg.get("tracker", "device_name", fallback="")
             self.device_address = cfg.get("tracker", "device_address", fallback="")
+
+            self.resting_hr = cfg.getint("personal", "resting_hr", fallback=60)
+            self.max_hr = cfg.getint("personal", "max_hr", fallback=180)
 
     def show_toast(self, message: str):
         print(message)
@@ -239,6 +248,8 @@ class FitnessAppUI(Adw.Application):
         frame = Gtk.Frame(label="Live Heart Rate")
         self.fig = Figure(figsize=(6, 3))
         self.ax = self.fig.add_subplot(111)
+        # draw zones behind live data
+        self._draw_zones(self.ax)
         (self._line,) = self.ax.plot([], [], lw=2)
         self.ax.set_xlabel("Time (s)")
         self.ax.set_ylabel("BPM")
@@ -306,14 +317,38 @@ class FitnessAppUI(Adw.Application):
         rescan_row.add_suffix(self.rescan_button)
         dev_group.add(rescan_row)
 
-        # Save Settings row
+        # Personal info group (for HR, weight, height, etc.)
+        personal_group = Adw.PreferencesGroup()
+        personal_group.set_title("Personal Info")
+
+        # Resting HR
+        rest_row = Adw.ActionRow()
+        rest_row.set_title("Resting HR")
+        self.rest_spin = Gtk.SpinButton.new_with_range(30, 120, 1)
+        self.rest_spin.set_value(self.resting_hr)
+        rest_row.add_suffix(self.rest_spin)
+        personal_group.add(rest_row)
+
+        # Max HR
+        max_row = Adw.ActionRow()
+        max_row.set_title("Max HR")
+        self.max_spin = Gtk.SpinButton.new_with_range(100, 250, 1)
+        self.max_spin.set_value(self.max_hr)
+        max_row.add_suffix(self.max_spin)
+        personal_group.add(max_row)
+
+
+        # Action group
+        action_group = Adw.PreferencesGroup()
+        action_group.set_title("Actions")
         save_row = Adw.ActionRow()
-        save_row.set_activatable(True)
         save_row.set_title("Save Settings")
+        save_row.set_activatable(True)
         self.save_button = Gtk.Button(label="Save")
+        self.save_button.get_style_context().add_class("suggested-action")
         self.save_button.connect("clicked", self._on_save_settings)
         save_row.add_suffix(self.save_button)
-        dev_group.add(save_row)
+        action_group.add(save_row)
 
         # Layout container
         container = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
@@ -323,6 +358,8 @@ class FitnessAppUI(Adw.Application):
         container.set_margin_end(12)
         container.append(prefs_vbox)
         container.append(dev_group)
+        container.append(personal_group)
+        container.append(action_group)
 
         # If a device was saved in config, pre-populate and skip initial scan
         if self.device_name:
@@ -377,14 +414,49 @@ class FitnessAppUI(Adw.Application):
         self.device_name = self.device_combo.get_active_text() or ""
         if self.device_name in self.device_map:
             self.device_address = self.device_map[self.device_name]
+
+        self.resting_hr = self.rest_spin.get_value_as_int()
+        self.max_hr     = self.max_spin.get_value_as_int()
+
         cfg = ConfigParser()
+
         cfg["server"] = {"database_dsn": self.database_dsn}
         cfg["tracker"] = {"device_name": self.device_name, "device_address": self.device_address}
+        cfg["personal"]   = {"resting_hr": str(self.resting_hr), "max_hr": str(self.max_hr)}
+
         with open(self.config_file, "w") as f:
             cfg.write(f)
+
         # Confirmation toast
         toast = Adw.Toast.new("Settings saved successfully")
         GLib.idle_add(self.toast_overlay.add_toast, toast)
+
+    def _calculate_hr_zones(self) -> dict[str, tuple[float, float]]:
+        """
+        Returns a mapping of zone names to (lower_bpm, upper_bpm) using Karvonen formula.
+        """
+        hr_range = self.max_hr - self.resting_hr
+        intensities = [ ("Zone 1", 0.50, 0.60),
+                        ("Zone 2", 0.60, 0.70),
+                        ("Zone 3", 0.70, 0.80),
+                        ("Zone 4", 0.80, 0.90),
+                        ("Zone 5", 0.90, 1.00) ]
+        thresholds = {}
+        for name, low_pct, high_pct in intensities:
+            low  = self.resting_hr + hr_range * low_pct
+            high = self.resting_hr + hr_range * high_pct
+            thresholds[name] = (low, high)
+        return thresholds
+
+    def _draw_zones(self, ax: Figure.axes):
+        """
+        Draw horizontal colored bands on the given Axes for each HR zone.
+        """
+        zones = self._calculate_hr_zones()
+        colors = ["#28b0ff", "#a0e0a0", "#edf767", "#ffac2f", "#ff4343"]
+        alpha = 0.25
+        for (name, (low, high)), color in zip(zones.items(), colors):
+            ax.axhspan(low, high, facecolor=color, alpha=alpha)
 
     def _build_history_page(self) -> Gtk.Widget:
         vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
@@ -608,6 +680,10 @@ class FitnessAppUI(Adw.Application):
     def _update_history_plot(self):
         self.history_ax.clear()
         self._apply_chart_style(self.history_ax)
+
+        # draw zones behind historical lines
+        self._draw_zones(self.history_ax)
+
         Session = self.recorder.db.Session
         with Session() as session:
             for aid in sorted(self.selected_activities):
