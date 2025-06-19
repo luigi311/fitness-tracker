@@ -3,6 +3,7 @@ import threading
 from zoneinfo import ZoneInfo
 
 import gi
+import matplotlib.dates as mdates
 from matplotlib.backends.backend_gtk4agg import FigureCanvasGTK4Agg as FigureCanvas
 from matplotlib.figure import Figure
 
@@ -50,12 +51,20 @@ class HistoryPageUI:
         self.history_canvas.set_vexpand(True)
         frame.set_child(self.history_canvas)
         vbox.append(frame)
+
+        # Seed the initial summary plot
+        GLib.idle_add(self._update_history_plot)
+
         return vbox
 
     def _on_filter_changed(self, combo: Gtk.ComboBoxText):
         self.history_filter = combo.get_active_id()
         # Clear existing UI elements on the main thread
         GLib.idle_add(self._clear_history)
+
+        # redraw summary immediately
+        GLib.idle_add(self._update_history_plot)
+
         # Reload history in background
         threading.Thread(target=self.load_history, daemon=True).start()
 
@@ -260,7 +269,64 @@ class HistoryPageUI:
             for text in leg.get_texts():
                 text.set_color(self.app.DARK_FG)
         else:
-            self.history_ax.set_title("No activities selected", color=self.app.DARK_FG)
+            # determine cutoff like in load_history()
+            now = datetime.datetime.now().astimezone()
+            if self.history_filter == "week":
+                cutoff = now - datetime.timedelta(days=7)
+            elif self.history_filter == "month":
+                cutoff = now - datetime.timedelta(days=30)
+            else:
+                cutoff = None
+
+            # aggregate avg BPM per calendar date
+            daily: dict[datetime.date, list[int]] = {}
+            activities = session.query(Activity).order_by(Activity.start_time).all()
+            for act in activities:
+                # convert to aware/local
+                st = act.start_time
+                if st.tzinfo is None:
+                    st = st.replace(tzinfo=ZoneInfo("UTC"))
+                st = st.astimezone()
+                if cutoff and st < cutoff:
+                    continue
+                date = st.date()
+                # pull HR points
+                hrs = session.query(HeartRate).filter_by(activity_id=act.id).all()
+                for hr in hrs:
+                    daily.setdefault(date, []).append(hr.bpm)
+
+            # build date‐sorted lists
+            dates = sorted(daily.keys())
+            avg_bpms = [sum(daily[d]) / len(daily[d]) for d in dates]
+
+            if dates:
+                # plot date vs avg BPM
+                self.history_ax.plot(dates, avg_bpms, lw=2, marker="o")
+
+                # clamp x‐axis to the filter window
+                if cutoff:
+                    # for week/month: from cutoff→now
+                    self.history_ax.set_xlim(cutoff, now)
+                else:
+                    # for all time: from first date → last date
+                    self.history_ax.set_xlim(dates[0], dates[-1])
+
+                # nice automatic date ticks & formatting
+                locator = mdates.AutoDateLocator()
+                fmt     = mdates.ConciseDateFormatter(locator)
+                self.history_ax.xaxis.set_major_locator(locator)
+                self.history_ax.xaxis.set_major_formatter(fmt)
+                self.history_fig.autofmt_xdate()  # rotate labels
+
+                self.history_ax.set_xlabel("Date", color=self.app.DARK_FG)
+                self.history_ax.set_ylabel("Avg BPM", color=self.app.DARK_FG)
+                # rotate date labels for readability
+                for lbl in self.history_ax.get_xticklabels():
+                    lbl.set_rotation(45)
+                    lbl.set_color(self.app.DARK_FG)
+            else:
+                # truly empty
+                self.history_ax.set_title("No data in this time frame", color=self.app.DARK_FG)
 
         self.history_fig.tight_layout()
         self.history_canvas.draw_idle()
