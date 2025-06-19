@@ -37,6 +37,14 @@ class FitnessAppUI(Adw.Application):
             self.DARK_FG = "#000000"
             self.DARK_GRID = "#cccccc"
 
+        self.ZONE_COLORS = [
+            "#28b0ff",  # Zone 1
+            "#a0e0a0",  # Zone 2
+            "#edf767",  # Zone 3
+            "#ffac2f",  # Zone 4
+            "#ff4343",  # Zone 5
+        ]
+
         self.window = None
         self.recorder: Recorder | None = None
         self._times: list[float] = []
@@ -135,7 +143,7 @@ class FitnessAppUI(Adw.Application):
         toolbar_view.set_content(self.stack)
         toolbar_view.add_bottom_bar(switcher_bar)
 
-    def _calculate_hr_zones(self):
+    def calculate_hr_zones(self):
         """Returns a mapping of zone names to (lower_bpm, upper_bpm) using Karvonen formula."""
         hr_range = self.max_hr - self.resting_hr
         intensities = [
@@ -154,8 +162,8 @@ class FitnessAppUI(Adw.Application):
 
     def draw_zones(self, ax):
         """Draw horizontal colored bands on the given Axes for each HR zone."""
-        zones = self._calculate_hr_zones()
-        colors = ["#28b0ff", "#a0e0a0", "#edf767", "#ffac2f", "#ff4343"]
+        zones = self.calculate_hr_zones()
+        colors = self.ZONE_COLORS
         alpha = 0.25
         for (_, (low, high)), color in zip(zones.items(), colors):
             ax.axhspan(low, high, facecolor=color, alpha=alpha)

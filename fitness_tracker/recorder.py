@@ -58,14 +58,13 @@ class Recorder:
 
         # 2) compute elapsed seconds
         delta_ms = t_ms - self._start_ms
-        t_sec = delta_ms / 1_000.0
 
         # 3) always update the live UI
-        GLib.idle_add(self.on_bpm, t_sec, bpm)
+        GLib.idle_add(self.on_bpm, delta_ms, bpm)
 
         # 4) if we’re recording, persist to the DB
         if self._recording:
-            self.db.insert_heart_rate(self._activity_id, t_ms, bpm, rr, energy)
+            self.db.insert_heart_rate(self._activity_id, delta_ms, bpm, rr, energy)
 
     async def _workflow(self):
         # 1) Try direct connect by address (fastest / exact), if provided
