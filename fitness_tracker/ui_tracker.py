@@ -17,6 +17,7 @@ class TrackerPageUI:
         self.window = 10.0  # seconds shown in plot
         self.buffer = 2.5  # extra seconds of headroom
         self.window_ms = self.window * 1000.0
+        self.ymin = self.app.resting_hr - 20
         self.ymax = self.app.max_hr + 20
         self.prev_angle = None
         self._last_time_ms = None
@@ -102,14 +103,13 @@ class TrackerPageUI:
         self.fig.patch.set_facecolor(self.app.DARK_BG)
         self.ax.set_facecolor(self.app.DARK_BG)
         self.ax.xaxis.set_visible(False)
-        self.ax.set_ylabel("BPM")
         self.ax.yaxis.label.set_color(self.app.DARK_FG)
         self.ax.tick_params(colors=self.app.DARK_FG)
         self.ax.grid(color=self.app.DARK_GRID)
 
         # fixed limits
         self.ax.set_xlim(0, self.window + self.buffer)
-        self.ax.set_ylim(0, self.ymax)
+        self.ax.set_ylim(self.ymin, self.ymax)
 
         return tail, ship_marker
 
@@ -121,13 +121,12 @@ class TrackerPageUI:
         # hide X-axis
         self.ax.xaxis.set_visible(False)
 
-        self.ax.set_ylabel("BPM")
         self.ax.yaxis.label.set_color(self.app.DARK_FG)
         self.ax.tick_params(colors=self.app.DARK_FG)
         self.ax.grid(color=self.app.DARK_GRID)
 
         self.ax.set_xlim(0, self.window + self.buffer)
-        self.ax.set_ylim(0, self.ymax)
+        self.ax.set_ylim(self.ymin, self.ymax)
         self.ax.add_collection(self.tail)
         self.ax.add_line(self.ship_marker)
 
