@@ -53,7 +53,7 @@ class HistoryPageUI:
         vbox.append(frame)
 
         # Seed the initial summary plot
-        GLib.idle_add(self._update_history_plot)
+        GLib.idle_add(self.update_history_plot)
 
         return vbox
 
@@ -63,7 +63,7 @@ class HistoryPageUI:
         GLib.idle_add(self._clear_history)
 
         # redraw summary immediately
-        GLib.idle_add(self._update_history_plot)
+        GLib.idle_add(self.update_history_plot)
 
         # Reload history in background
         threading.Thread(target=self.load_history, daemon=True).start()
@@ -225,9 +225,11 @@ class HistoryPageUI:
             self.selected_activities.add(act_id)
         else:
             self.selected_activities.discard(act_id)
-        self._update_history_plot()
+        self.update_history_plot()
 
     def _apply_chart_style(self, ax):
+        # draw background HR zones based on current resting/max HR
+        self.app.draw_zones(ax)
         # apply both figure and axis backgrounds
         ax.figure.patch.set_facecolor(self.app.DARK_BG)
         ax.set_facecolor(self.app.DARK_BG)
@@ -236,12 +238,10 @@ class HistoryPageUI:
         ax.tick_params(colors=self.app.DARK_FG)
         ax.grid(color=self.app.DARK_GRID)
 
-    def _update_history_plot(self):
+    def update_history_plot(self):
+        # clear axes and re-apply styles
         self.history_ax.clear()
         self._apply_chart_style(self.history_ax)
-
-        # draw zones behind historical lines
-        self.app.draw_zones(self.history_ax)
 
         Session = self.app.recorder.db.Session
         with Session() as session:

@@ -83,6 +83,10 @@ class TrackerPageUI:
         # draw background HR zones
         self.app.draw_zones(self.ax)
 
+        # recompute Y‐limits based on current resting/max HR
+        ymin = self.app.resting_hr - 20
+        ymax = self.app.max_hr + 20
+
         # fading tail
         tail = LineCollection([], linewidths=2, zorder=2)
         self.ax.add_collection(tail)
@@ -109,11 +113,11 @@ class TrackerPageUI:
 
         # fixed limits
         self.ax.set_xlim(0, self.window + self.buffer)
-        self.ax.set_ylim(self.ymin, self.ymax)
+        self.ax.set_ylim(ymin, ymax)
 
         return tail, ship_marker
 
-    def _configure_axes(self):
+    def configure_axes(self):
         self.ax.clear()
         self.app.draw_zones(self.ax)
 
@@ -125,8 +129,12 @@ class TrackerPageUI:
         self.ax.tick_params(colors=self.app.DARK_FG)
         self.ax.grid(color=self.app.DARK_GRID)
 
+        # recompute limits
+        ymin = self.app.resting_hr - 20
+        ymax = self.app.max_hr + 20
         self.ax.set_xlim(0, self.window + self.buffer)
-        self.ax.set_ylim(self.ymin, self.ymax)
+        self.ax.set_ylim(ymin, ymax)
+
         self.ax.add_collection(self.tail)
         self.ax.add_line(self.ship_marker)
 
@@ -142,7 +150,7 @@ class TrackerPageUI:
         # Reset state
         self._last_time_ms = None
         self.prev_angle = None
-        self._configure_axes()
+        self.configure_axes()
 
         self._times.clear()
         self._bpms.clear()

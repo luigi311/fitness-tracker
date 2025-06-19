@@ -184,6 +184,12 @@ class SettingsPageUI:
         toast = Adw.Toast.new("Settings saved successfully")
         GLib.idle_add(self.app.toast_overlay.add_toast, toast)
 
+        # Immediately refresh the live‐tracker axes so zone bands update
+        GLib.idle_add(self.app.tracker.configure_axes)
+        GLib.idle_add(self.app.tracker.fig.canvas.draw_idle)
+        GLib.idle_add(self.app.history.update_history_plot)
+        GLib.idle_add(self.app.history.history_canvas.draw_idle)
+
     def _on_sync(self, button: Gtk.Button):
         # disable the Settings-page sync button
         button.set_sensitive(False)
