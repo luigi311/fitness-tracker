@@ -1,39 +1,42 @@
-import datetime
 import threading
 from configparser import ConfigParser
 from os.path import expanduser
 from pathlib import Path
-from zoneinfo import ZoneInfo
+from typing import TYPE_CHECKING
 
 import gi
-from matplotlib.backends.backend_gtk4agg import FigureCanvasGTK4Agg as FigureCanvas
-from matplotlib.figure import Figure
 
-from fitness_tracker.database import Activity, HeartRate
-from fitness_tracker.hr_provider import AVAILABLE_PROVIDERS
 from fitness_tracker.recorder import Recorder
+from fitness_tracker.ui_history import HistoryPageUI
+from fitness_tracker.ui_settings import SettingsPageUI
+from fitness_tracker.ui_tracker import TrackerPageUI
 
 gi.require_versions({"Gtk": "4.0", "Adw": "1"})
-from gi.repository import Adw, GLib, Gtk
+from gi.repository import Adw  # noqa: E402
+
+if TYPE_CHECKING:
+    import datetime
 
 Adw.init()
 
 # Determine dark-mode status and define colors
 _style_manager = Adw.StyleManager.get_default()
 _IS_DARK = _style_manager.get_dark()
-if _IS_DARK:
-    _DARK_BG = "#2e3436"
-    _DARK_FG = "#ffffff"
-    _DARK_GRID = "#555555"
-else:
-    _DARK_BG = "#f9f9f9"
-    _DARK_FG = "#000000"
-    _DARK_GRID = "#cccccc"
 
 
 class FitnessAppUI(Adw.Application):
     def __init__(self):
         super().__init__(application_id="io.Luigi311.Fitness")
+
+        if _IS_DARK:
+            self.DARK_BG = "#2e3436"
+            self.DARK_FG = "#ffffff"
+            self.DARK_GRID = "#555555"
+        else:
+            self.DARK_BG = "#f9f9f9"
+            self.DARK_FG = "#000000"
+            self.DARK_GRID = "#cccccc"
+
         self.window = None
         self.recorder: Recorder | None = None
         self._times: list[float] = []
@@ -54,25 +57,24 @@ class FitnessAppUI(Adw.Application):
         self.config_file = app_dir / "config.ini"
 
         # load existing configuration
-        cfg = ConfigParser()
+        self.cfg = ConfigParser()
         self.database_dsn = ""
-        
+
         self.device_name = ""
-        self.device_map: dict[str, str] = {}
-        self.device_choices = []
+        self.device_address = ""
 
         self.resting_hr: int = 60
         self.max_hr: int = 180
 
         if self.config_file.exists():
-            cfg.read(self.config_file)
-            self.database_dsn = cfg.get("server", "database_dsn", fallback="")
+            self.cfg.read(self.config_file)
+            self.database_dsn = self.cfg.get("server", "database_dsn", fallback="")
 
-            self.device_name = cfg.get("tracker", "device_name", fallback="")
-            self.device_address = cfg.get("tracker", "device_address", fallback="")
+            self.device_name = self.cfg.get("tracker", "device_name", fallback="")
+            self.device_address = self.cfg.get("tracker", "device_address", fallback="")
 
-            self.resting_hr = cfg.getint("personal", "resting_hr", fallback=60)
-            self.max_hr = cfg.getint("personal", "max_hr", fallback=180)
+            self.resting_hr = self.cfg.getint("personal", "resting_hr", fallback=60)
+            self.max_hr = self.cfg.getint("personal", "max_hr", fallback=180)
 
     def show_toast(self, message: str):
         print(message)
@@ -84,7 +86,7 @@ class FitnessAppUI(Adw.Application):
         if not self.window:
             self._build_ui()
             self.recorder = Recorder(
-                on_bpm_update=self._on_bpm,
+                on_bpm_update=self.tracker.on_bpm,
                 database_url=f"sqlite:///{self.database}",
                 device_name=self.device_name,
                 on_error=self.show_toast,
@@ -92,7 +94,7 @@ class FitnessAppUI(Adw.Application):
             )
             self.recorder.start()
             # Load history after recorder is initialized
-            threading.Thread(target=self._load_history, daemon=True).start()
+            threading.Thread(target=self.history.load_history, daemon=True).start()
         self.window.present()
 
     def _build_ui(self):
@@ -109,607 +111,51 @@ class FitnessAppUI(Adw.Application):
         self.stack = Adw.ViewStack()
         self.stack.set_vexpand(True)
 
-        # Add pages
-        tracker_page = self._build_tracker_page()
-        history_page = self._build_history_page()
-        settings_page = self._build_settings_page()
+        # instead of calling your own private _build_* methods, do:
+        self.tracker = TrackerPageUI(self)
+        self.history = HistoryPageUI(self)
+        self.settings = SettingsPageUI(self)
 
-        self.stack.add_titled(tracker_page, "tracker", "Tracker").set_icon_name(
-            "media-playback-start-symbolic"
+        tracker = self.tracker.build_page()
+        history = self.history.build_page()
+        settings = self.settings.build_page()
+
+        self.stack.add_titled(tracker, "tracker", "Tracker").set_icon_name(
+            "media-playback-start-symbolic",
         )
-        self.stack.add_titled(history_page, "history", "History").set_icon_name(
-            "view-list-symbolic"
-        )
-        self.stack.add_titled(settings_page, "settings", "Settings").set_icon_name(
-            "emblem-system-symbolic"
+        self.stack.add_titled(history, "history", "History").set_icon_name("view-list-symbolic")
+        self.stack.add_titled(settings, "settings", "Settings").set_icon_name(
+            "emblem-system-symbolic",
         )
 
-        # Create bottom tab bar
         switcher_bar = Adw.ViewSwitcherBar()
         switcher_bar.set_stack(self.stack)
-        switcher_bar.set_reveal(True)  # ensure it’s always visible
+        switcher_bar.set_reveal(True)
 
-        # Attach content and bottom bar
         toolbar_view.set_content(self.stack)
         toolbar_view.add_bottom_bar(switcher_bar)
 
-    def _on_start(self, button: Gtk.Button):
-        self.start_btn.set_sensitive(False)
-        self.stop_btn.set_sensitive(True)
-        self._times.clear()
-        self._bpms.clear()
-        self._line.set_data([], [])
-        self.ax.relim()
-        self.ax.autoscale_view()
-        self.fig.tight_layout()
-        self.fig.canvas.draw_idle()
-        if self.recorder:
-            self.recorder.start_recording()
-
-    def _on_stop(self, button: Gtk.Button):
-        self.stop_btn.set_sensitive(False)
-        self.start_btn.set_sensitive(True)
-        if self.recorder:
-            self.recorder.stop_recording()
-
-    def _on_bpm(self, time_s: float, bpm: int):
-        # Update the BPM label
-        GLib.idle_add(self.bpm_label.set_markup, f'<span font="28">{bpm} BPM</span>')
-
-        # Maintain sliding window
-        window = 300.0
-        self._times.append(time_s)
-        self._bpms.append(bpm)
-        cutoff = time_s - window
-        while self._times and self._times[0] < cutoff:
-            self._times.pop(0)
-            self._bpms.pop(0)
-
-        # Update line data and axes
-        self._line.set_data(self._times, self._bpms)
-        self.ax.set_xlim(left=max(0, cutoff), right=time_s if time_s > cutoff else cutoff + 1)
-        self.ax.relim()
-        self.ax.autoscale_view(scaley=True)
-        self.fig.tight_layout()
-        self.fig.canvas.draw_idle()
-
-    def _on_sync(self, button):
-        # disable the Settings-page sync button
-        button.set_sensitive(False)
-        GLib.idle_add(self.show_toast, "Syncing…")
-
-        def do_sync():
-            if not self.database_dsn:
-                GLib.idle_add(self.show_toast, "No database DSN configured")
-                GLib.idle_add(button.set_sensitive, True)
-                return
-
-            try:
-                self.recorder.db.sync_to_database(self.database_dsn)
-            except ConnectionError as e:
-                GLib.idle_add(self.show_toast, f"Sync failed: {e}")
-                GLib.idle_add(button.set_sensitive, True)
-                return
-
-            # refresh history after a successful sync
-            GLib.idle_add(self._clear_history)
-            threading.Thread(target=self._load_history, daemon=True).start()
-
-            GLib.idle_add(self.show_toast, "Sync complete")
-            GLib.idle_add(button.set_sensitive, True)
-
-        threading.Thread(target=do_sync, daemon=True).start()
-
-
-    def _build_tracker_page(self) -> Gtk.Widget:
-        vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
-        vbox.set_margin_top(12)
-        vbox.set_margin_bottom(12)
-        vbox.set_margin_start(12)
-        vbox.set_margin_end(12)
-
-        title = Gtk.Label(label="Fitness Tracker")
-        title.set_halign(Gtk.Align.CENTER)
-        vbox.append(title)
-
-        ctrl_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-        ctrl_box.set_halign(Gtk.Align.CENTER)
-
-        self.start_btn = Gtk.Button.new_from_icon_name("media-record-symbolic")
-        self.start_btn.set_label("Start")
-        self.start_btn.get_style_context().add_class("suggested-action")
-
-        self.stop_btn = Gtk.Button.new_from_icon_name("media-playback-stop-symbolic")
-        self.stop_btn.set_label("Stop")
-        self.stop_btn.get_style_context().add_class("destructive-action")
-        self.stop_btn.set_sensitive(False)
-
-        ctrl_box.append(self.start_btn)
-        ctrl_box.append(self.stop_btn)
-        vbox.append(ctrl_box)
-
-        self.bpm_label = Gtk.Label()
-        self.bpm_label.set_use_markup(True)
-        self.bpm_label.set_markup(f'<span font="28" color="{_DARK_FG}">— BPM —</span>')
-        self.bpm_label.set_halign(Gtk.Align.CENTER)
-        self.bpm_label.set_valign(Gtk.Align.CENTER)
-        vbox.append(self.bpm_label)
-
-        frame = Gtk.Frame(label="Live Heart Rate")
-        self.fig = Figure(figsize=(6, 3))
-        self.ax = self.fig.add_subplot(111)
-        # draw zones behind live data
-        self._draw_zones(self.ax)
-        (self._line,) = self.ax.plot([], [], lw=2)
-        self.ax.set_xlabel("Time (s)")
-        self.ax.set_ylabel("BPM")
-
-        # Dark/light styling
-        self.fig.patch.set_facecolor(_DARK_BG)
-        self.ax.set_facecolor(_DARK_BG)
-        self.ax.xaxis.label.set_color(_DARK_FG)
-        self.ax.yaxis.label.set_color(_DARK_FG)
-        self.ax.tick_params(colors=_DARK_FG)
-        self.ax.grid(color=_DARK_GRID)
-
-        canvas = FigureCanvas(self.fig)
-        canvas.set_vexpand(True)
-        frame.set_child(canvas)
-        vbox.append(frame)
-
-        self.start_btn.connect("clicked", self._on_start)
-        self.stop_btn.connect("clicked", self._on_stop)
-
-        return vbox
-
-    def _build_settings_page(self) -> Gtk.Widget:
-        # General settings group
-        prefs_vbox = Adw.PreferencesGroup()
-        prefs_vbox.set_title("General Settings")
-
-        # Database DSN row
-        dsn_row = Adw.ActionRow()
-        dsn_row.set_title("Database DSN")
-        self.dsn_entry = Gtk.Entry()
-        self.dsn_entry.set_hexpand(True)
-        self.dsn_entry.set_text(self.database_dsn)
-        dsn_row.add_suffix(self.dsn_entry)
-        prefs_vbox.add(dsn_row)
-
-        # Tracker device group
-        dev_group = Adw.PreferencesGroup()
-        dev_group.set_title("Tracker Device")
-
-        # Device selection row with spinner + combo
-        self.device_row = Adw.ActionRow()
-        self.device_row.set_title("Select Device")
-        self.device_spinner = Gtk.Spinner()
-        self.device_spinner.set_halign(Gtk.Align.START)
-        # start spinner only if no preselected device
-        if not self.device_name:
-            self.device_spinner.start()
-        self.device_combo = Gtk.ComboBoxText()
-        self.device_combo.set_hexpand(True)
-        self.device_row.add_prefix(self.device_spinner)
-        self.device_row.add_suffix(self.device_combo)
-        dev_group.add(self.device_row)
-
-        # Rescan row
-        rescan_row = Adw.ActionRow()
-        rescan_row.set_title("Rescan for Devices")
-        self.rescan_button = Gtk.Button(label="Rescan")
-        self.rescan_button.get_style_context().add_class("suggested-action")
-        self.rescan_button.connect(
-            "clicked",
-            lambda _: threading.Thread(target=self._fill_devices, daemon=True).start(),
-        )
-        rescan_row.add_suffix(self.rescan_button)
-        dev_group.add(rescan_row)
-
-        # Personal info group (for HR, weight, height, etc.)
-        personal_group = Adw.PreferencesGroup()
-        personal_group.set_title("Personal Info")
-
-        # Resting HR
-        rest_row = Adw.ActionRow()
-        rest_row.set_title("Resting HR")
-        self.rest_spin = Gtk.SpinButton.new_with_range(30, 120, 1)
-        self.rest_spin.set_value(self.resting_hr)
-        rest_row.add_suffix(self.rest_spin)
-        personal_group.add(rest_row)
-
-        # Max HR
-        max_row = Adw.ActionRow()
-        max_row.set_title("Max HR")
-        self.max_spin = Gtk.SpinButton.new_with_range(100, 250, 1)
-        self.max_spin.set_value(self.max_hr)
-        max_row.add_suffix(self.max_spin)
-        personal_group.add(max_row)
-
-
-        # Save Button
-        action_group = Adw.PreferencesGroup()
-        action_group.set_title("Actions")
-        save_row = Adw.ActionRow()
-        save_row.set_title("Save Settings")
-        save_row.set_activatable(True)
-        self.save_button = Gtk.Button(label="Save")
-        self.save_button.get_style_context().add_class("suggested-action")
-        self.save_button.connect("clicked", self._on_save_settings)
-        save_row.add_suffix(self.save_button)
-        action_group.add(save_row)
-
-        # Sync button
-        sync_row = Adw.ActionRow()
-        sync_row.set_title("Sync to Database")
-        sync_row.set_activatable(True)
-        self.sync_button = Gtk.Button(label="Sync")
-        self.sync_button.get_style_context().add_class("suggested-action")
-        self.sync_button.connect("clicked", self._on_sync)
-        sync_row.add_suffix(self.sync_button)
-        action_group.add(sync_row)
-
-        # Layout container
-        container = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
-        container.set_margin_top(12)
-        container.set_margin_bottom(12)
-        container.set_margin_start(12)
-        container.set_margin_end(12)
-        container.append(prefs_vbox)
-        container.append(dev_group)
-        container.append(personal_group)
-        container.append(action_group)
-
-        # If a device was saved in config, pre-populate and skip initial scan
-        if self.device_name:
-            # stop spinner and set subtitle
-            self.device_spinner.stop()
-            # populate combo and select
-            self.device_combo.append_text(self.device_name)
-            self.device_combo.set_active(0)
-            # map remains empty until explicit rescan
-            self.device_map = {self.device_name: self.device_address}
-        else:
-            # Kick off initial scan in background
-            threading.Thread(target=self._fill_devices, daemon=True).start()
-
-        return container
-
-    def _fill_devices(self):
-        # Indicate scanning
-        GLib.idle_add(self.device_spinner.start)
-        self.device_row.set_subtitle("Scanning for devices…")
-
-        import asyncio
-
-        from bleak import BleakScanner
-
-        async def _scan():
-            devices = await BleakScanner.discover(timeout=5.0)
-            mapping = {}
-            for d in devices:
-                if d.name and any(p.matches(d.name) for p in AVAILABLE_PROVIDERS):
-                    mapping.setdefault(d.name, d.address)
-
-            names = sorted(mapping.keys())
-            # Update UI
-            GLib.idle_add(self.device_spinner.stop)
-            subtitle = "No supported devices found" if not names else ""
-            GLib.idle_add(self.device_row.set_subtitle, subtitle)
-            GLib.idle_add(self.device_combo.remove_all)
-            for name in names:
-                GLib.idle_add(self.device_combo.append_text, name)
-            # restore selection if saved
-            if self.device_name and self.device_name in names:
-                idx = names.index(self.device_name)
-                GLib.idle_add(self.device_combo.set_active, idx)
-            self.device_map = mapping
-
-        asyncio.run(_scan())
-
-    def _on_save_settings(self, _button):
-        # Persist database DSN and tracker selection
-        self.database_dsn = self.dsn_entry.get_text()
-        self.device_name = self.device_combo.get_active_text() or ""
-        if self.device_name in self.device_map:
-            self.device_address = self.device_map[self.device_name]
-
-        self.resting_hr = self.rest_spin.get_value_as_int()
-        self.max_hr     = self.max_spin.get_value_as_int()
-
-        cfg = ConfigParser()
-
-        cfg["server"] = {"database_dsn": self.database_dsn}
-        cfg["tracker"] = {"device_name": self.device_name, "device_address": self.device_address}
-        cfg["personal"]   = {"resting_hr": str(self.resting_hr), "max_hr": str(self.max_hr)}
-
-        with open(self.config_file, "w") as f:
-            cfg.write(f)
-
-        # Confirmation toast
-        toast = Adw.Toast.new("Settings saved successfully")
-        GLib.idle_add(self.toast_overlay.add_toast, toast)
-
-    def _calculate_hr_zones(self) -> dict[str, tuple[float, float]]:
-        """
-        Returns a mapping of zone names to (lower_bpm, upper_bpm) using Karvonen formula.
-        """
+    def _calculate_hr_zones(self):
+        """Returns a mapping of zone names to (lower_bpm, upper_bpm) using Karvonen formula."""
         hr_range = self.max_hr - self.resting_hr
-        intensities = [ ("Zone 1", 0.50, 0.60),
-                        ("Zone 2", 0.60, 0.70),
-                        ("Zone 3", 0.70, 0.80),
-                        ("Zone 4", 0.80, 0.90),
-                        ("Zone 5", 0.90, 1.00) ]
+        intensities = [
+            ("Zone 1", 0.50, 0.60),
+            ("Zone 2", 0.60, 0.70),
+            ("Zone 3", 0.70, 0.80),
+            ("Zone 4", 0.80, 0.90),
+            ("Zone 5", 0.90, 1.00),
+        ]
         thresholds = {}
         for name, low_pct, high_pct in intensities:
-            low  = self.resting_hr + hr_range * low_pct
+            low = self.resting_hr + hr_range * low_pct
             high = self.resting_hr + hr_range * high_pct
             thresholds[name] = (low, high)
         return thresholds
 
-    def _draw_zones(self, ax: Figure.axes):
-        """
-        Draw horizontal colored bands on the given Axes for each HR zone.
-        """
+    def draw_zones(self, ax):
+        """Draw horizontal colored bands on the given Axes for each HR zone."""
         zones = self._calculate_hr_zones()
         colors = ["#28b0ff", "#a0e0a0", "#edf767", "#ffac2f", "#ff4343"]
         alpha = 0.25
-        for (name, (low, high)), color in zip(zones.items(), colors):
+        for (_, (low, high)), color in zip(zones.items(), colors):
             ax.axhspan(low, high, facecolor=color, alpha=alpha)
-
-    def _build_history_page(self) -> Gtk.Widget:
-        vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
-        for margin in ("top", "bottom", "start", "end"):
-            getattr(vbox, f"set_margin_{margin}")(12)
-
-        filter_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-        filter_label = Gtk.Label(label="Show:")
-        filter_box.append(filter_label)
-        self.filter_combo = Gtk.ComboBoxText()
-        for key, text in [("week", "Last 7 Days"), ("month", "This Month"), ("all", "All Time")]:
-            self.filter_combo.append(key, text)
-        self.filter_combo.set_active_id(self.history_filter)
-        self.filter_combo.connect("changed", self._on_filter_changed)
-        filter_box.append(self.filter_combo)
-        vbox.append(filter_box)
-
-        scroller = Gtk.ScrolledWindow()
-        scroller.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
-        scroller.set_vexpand(True)
-        self.history_container = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
-        scroller.set_child(self.history_container)
-        vbox.append(scroller)
-
-        frame = Gtk.Frame(label="Activity Details")
-        self.history_fig = Figure(figsize=(6, 3))
-        self.history_ax = self.history_fig.add_subplot(111)
-        self._apply_chart_style(self.history_ax)
-        self.history_canvas = FigureCanvas(self.history_fig)
-        self.history_canvas.set_vexpand(True)
-        frame.set_child(self.history_canvas)
-        vbox.append(frame)
-        return vbox
-
-    def _on_filter_changed(self, combo: Gtk.ComboBoxText):
-        self.history_filter = combo.get_active_id()
-        # Clear existing UI elements on the main thread
-        GLib.idle_add(self._clear_history)
-        # Reload history in background
-        threading.Thread(target=self._load_history, daemon=True).start()
-
-    def _clear_history(self):
-        # GTK4: use get_first_child()/get_next_sibling() to iterate
-        child = self.history_container.get_first_child()
-        while child is not None:
-            next_child = child.get_next_sibling()
-            self.history_container.remove(child)
-            child = next_child
-
-    def _load_history(self):
-        if not self.recorder:
-            return
-        Session = self.recorder.db.Session
-
-        # Determine cutoff based on filter (use local now)
-        now = datetime.datetime.now().astimezone()
-        if self.history_filter == "week":
-            cutoff = now - datetime.timedelta(days=7)
-        elif self.history_filter == "month":
-            cutoff = now - datetime.timedelta(days=30)
-        else:
-            cutoff = None
-
-        last_date = None
-        with Session() as session:
-            activities = session.query(Activity).order_by(Activity.start_time.desc()).all()
-            for act in activities:
-                # Convert start to aware and local
-                start = act.start_time
-                if start.tzinfo is None:
-                    start = start.replace(tzinfo=ZoneInfo("UTC"))
-                start = start.astimezone()
-
-                # Skip if before cutoff
-                if cutoff and start < cutoff:
-                    continue
-
-                # Determine end, also aware and local
-                if act.end_time:
-                    end = act.end_time
-                    if end.tzinfo is None:
-                        end = end.replace(tzinfo=ZoneInfo("UTC"))
-                    end = end.astimezone()
-                else:
-                    end = datetime.datetime.now().astimezone()
-
-                # Group by calendar date
-                date_only = start.date()
-                if date_only != last_date:
-                    GLib.idle_add(self._add_history_group_header, date_only)
-                    last_date = date_only
-
-                # Metrics and sparkline data
-                hrs = list(act.heart_rates)
-                if hrs:
-                    start_ms = hrs[0].timestamp_ms
-                    times = [(hr.timestamp_ms - start_ms) / 1000.0 for hr in hrs]
-                    bpms = [hr.bpm for hr in hrs]
-                    avg_bpm = sum(bpms) / len(bpms)
-                    max_bpm = max(bpms)
-                    total_kj = sum(hr.energy_kj or 0 for hr in hrs)
-                else:
-                    times = []
-                    bpms = []
-                    avg_bpm = max_bpm = total_kj = 0
-
-                duration = end - start
-                GLib.idle_add(
-                    self._add_history_row,
-                    act.id,
-                    start,
-                    duration,
-                    avg_bpm,
-                    max_bpm,
-                    total_kj,
-                    times,
-                    bpms,
-                )
-
-    def _add_history_group_header(self, date: datetime.date):
-        header = Gtk.Label(label=date.strftime("%B %d, %Y"))
-        header.get_style_context().add_class("heading")
-        header.set_margin_top(12)
-        header.set_margin_bottom(6)
-        self.history_container.append(header)
-
-    def _add_history_row(
-        self,
-        act_id: int,
-        start: datetime.datetime,
-        duration: datetime.timedelta,
-        avg_bpm: float,
-        max_bpm: int,
-        total_kj: float,
-        times: list[float],
-        bpms: list[int],
-    ):
-        self.activity_start_times[act_id] = start
-        frame = Gtk.Frame()
-        frame.set_margin_start(8)
-        frame.set_margin_end(8)
-        frame.set_margin_top(4)
-        frame.set_margin_bottom(4)
-
-        header_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
-        title = Gtk.Label(label=start.strftime("%Y-%m-%d %H:%M"))
-        title.get_style_context().add_class("title")
-        header_box.append(title)
-        header_box.append(Gtk.Separator(orientation=Gtk.Orientation.VERTICAL))
-        check = Gtk.CheckButton()
-        check.set_active(act_id in self.selected_activities)
-        check.connect(
-            "toggled",
-            lambda cb, aid=act_id: self._on_history_card_toggled(aid, cb.get_active()),
-        )
-        header_box.append(check)
-
-        # make the whole frame tappable—but only if the user doesn't move too far
-        # to avoid accidental toggles
-        click = Gtk.GestureClick.new()
-        start_point = {"x": 0.0, "y": 0.0}
-        THRESHOLD = 25  # max pixels of movement allowed
-
-        def on_pressed(gesture, n_press, x, y):
-            start_point["x"], start_point["y"] = x, y
-
-        def on_released(gesture, n_press, x, y):
-            dx = abs(x - start_point["x"])
-            dy = abs(y - start_point["y"])
-            # only toggle if movement was small (i.e. a tap, not a drag)
-            if dx <= THRESHOLD and dy <= THRESHOLD:
-                check.set_active(not check.get_active())
-
-        click.connect("pressed", on_pressed)
-        click.connect("released", on_released)
-        frame.add_controller(click)
-
-        summary = (
-            f"Dur: {int(duration.total_seconds() // 60)}m {int(duration.total_seconds() % 60)}s, "
-            f"Avg: {int(avg_bpm)} BPM, Max: {max_bpm} BPM"
-        )
-        summary_label = Gtk.Label(label=summary)
-        summary_label.set_halign(Gtk.Align.START)
-
-        content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
-        content.append(header_box)
-        content.append(summary_label)
-
-        if times and bpms:
-            spark_fig = Figure(figsize=(2, 0.5), dpi=80)
-            ax = spark_fig.add_axes([0, 0, 1, 1])
-            (line_spark,) = ax.plot(times, bpms, lw=1)
-            ax.axis("off")
-            # Dark-mode background
-            spark_fig.patch.set_facecolor(_DARK_BG)
-            ax.set_facecolor(_DARK_BG)
-
-            spark_canvas = FigureCanvas(spark_fig)
-            spark_canvas.set_size_request(200, 50)
-            content.append(spark_canvas)
-
-        frame.set_child(content)
-        self.history_container.append(frame)
-
-    def _on_history_card_toggled(self, act_id: int, selected: bool):
-        if selected:
-            self.selected_activities.add(act_id)
-        else:
-            self.selected_activities.discard(act_id)
-        self._update_history_plot()
-
-    def _apply_chart_style(self, ax):
-        # apply both figure and axis backgrounds
-        ax.figure.patch.set_facecolor(_DARK_BG)
-        ax.set_facecolor(_DARK_BG)
-        ax.xaxis.label.set_color(_DARK_FG)
-        ax.yaxis.label.set_color(_DARK_FG)
-        ax.tick_params(colors=_DARK_FG)
-        ax.grid(color=_DARK_GRID)
-
-    def _update_history_plot(self):
-        self.history_ax.clear()
-        self._apply_chart_style(self.history_ax)
-
-        # draw zones behind historical lines
-        self._draw_zones(self.history_ax)
-
-        Session = self.recorder.db.Session
-        with Session() as session:
-            for aid in sorted(self.selected_activities):
-                hrs = (
-                    session.query(HeartRate)
-                    .filter_by(activity_id=aid)
-                    .order_by(HeartRate.timestamp_ms)
-                    .all()
-                )
-                if not hrs:
-                    continue
-                start_ms = hrs[0].timestamp_ms
-                times = [(h.timestamp_ms - start_ms) / 1000.0 for h in hrs]
-                bpms = [h.bpm for h in hrs]
-                label = self.activity_start_times[aid].astimezone().strftime("%Y-%m-%d %H:%M")
-                self.history_ax.plot(times, bpms, lw=2, label=label)
-
-        if self.selected_activities:
-            self.history_ax.set_xlabel("Time (s)")
-            self.history_ax.set_ylabel("BPM")
-            leg = self.history_ax.legend(frameon=True)
-            leg.get_frame().set_facecolor(_DARK_BG)
-            leg.get_frame().set_edgecolor(_DARK_GRID)
-            for text in leg.get_texts():
-                text.set_color(_DARK_FG)
-        else:
-            self.history_ax.set_title("No activities selected", color=_DARK_FG)
-
-        self.history_fig.tight_layout()
-        self.history_canvas.draw_idle()
