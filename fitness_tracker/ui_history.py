@@ -6,6 +6,7 @@ import gi
 import matplotlib.dates as mdates
 from matplotlib.backends.backend_gtk4agg import FigureCanvasGTK4Agg as FigureCanvas
 from matplotlib.figure import Figure
+from matplotlib.ticker import FuncFormatter
 
 from fitness_tracker.database import Activity, HeartRate
 
@@ -261,13 +262,42 @@ class HistoryPageUI:
                 self.history_ax.plot(times, bpms, lw=2, label=label)
 
         if self.selected_activities:
-            self.history_ax.set_xlabel("Time (s)")
-            self.history_ax.set_ylabel("BPM")
+            self.history_ax.set_xlabel("Time (s)", color=self.app.DARK_FG)
+            self.history_ax.set_ylabel("BPM", color=self.app.DARK_FG)
+
+            # after plotting all series, compute the longest:
+            global_max = 0.0
+            for aid in self.selected_activities:
+                hrs = (
+                    session.query(HeartRate)
+                        .filter_by(activity_id=aid)
+                        .order_by(HeartRate.timestamp_ms)
+                        .all()
+                )
+                if not hrs:
+                    continue
+                start_ms = hrs[0].timestamp_ms
+                end_ms   = hrs[-1].timestamp_ms
+                dur_sec  = (end_ms - start_ms) / 1000.0
+                global_max = max(global_max, dur_sec)
+
+            # now clamp from 0 → longest
+            self.history_ax.set_xlim(0, global_max)
+
+
+            # format ticks as MM:SS
+            def mmss(x, pos):
+                m, s = divmod(int(x), 60)
+                return f"{m:d}:{s:02d}"
+
+            self.history_ax.xaxis.set_major_formatter(FuncFormatter(mmss))
+
             leg = self.history_ax.legend(frameon=True)
             leg.get_frame().set_facecolor(self.app.DARK_BG)
             leg.get_frame().set_edgecolor(self.app.DARK_GRID)
             for text in leg.get_texts():
                 text.set_color(self.app.DARK_FG)
+
         else:
             # determine cutoff like in load_history()
             now = datetime.datetime.now().astimezone()
