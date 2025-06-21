@@ -106,7 +106,7 @@ class TrackerPageUI:
         # draw background HR zones
         self.app.draw_zones(self.ax)
 
-        # recompute Y‐limits based on current resting/max HR
+        # initial fixed limits (resting–20 → max+20)
         ymin = self.app.resting_hr - 20
         ymax = self.app.max_hr + 20
 
@@ -153,6 +153,7 @@ class TrackerPageUI:
         self.ax.grid(color=self.app.DARK_GRID)
 
         # recompute limits
+        # reset to initial limits on (re)start
         ymin = self.app.resting_hr - 20
         ymax = self.app.max_hr + 20
         self.ax.set_xlim(0, self.window + self.buffer)
@@ -262,6 +263,20 @@ class TrackerPageUI:
         r, g, b = self._zone_color(bpm)
         self.ship_marker.set_markerfacecolor((r, g, b, 1.0))
         self.ship_marker.set_markeredgecolor((r, g, b, 1.0))
+
+        # dynamic Y-limits
+        zones = self.app.calculate_hr_zones()
+        zone1_low, _ = zones["Zone 1"]
+
+        initial_ymin = self.app.resting_hr - 20
+        # look at the minimum BPM in our rolling window:
+        min_bpm = bpms.min()
+
+        # Set dynamic ymin: follow lowest point–10 if below Zone 1, else floor at Zone 1
+        dyn_ymin = max(initial_ymin, min_bpm - 10) if min_bpm < zone1_low else zone1_low
+
+        dyn_ymax = self.app.max_hr + 20
+        self.ax.set_ylim(dyn_ymin, dyn_ymax)
 
         # Redraw (limits are fixed)
         self.fig.canvas.draw_idle()
