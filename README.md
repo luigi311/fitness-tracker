@@ -8,7 +8,7 @@ An open-source application for tracking heart-rate data from Bluetooth Low Energ
 * **Session Recording**: Start and stop recording sessions; data is stored locally in SQLite.
 * **History & Visualization**: Browse past activities by day, week, month, or all time with summary stats (duration, avg/max BPM) and sparkline previews.
 * **Two-Way Sync**: Push local sessions to a remote database and pull remote sessions back to your local store.
-* **Configurable**: Set custom database DSN, select your BLE device.
+* **Configurable**: Set custom database DSN, select your BLE device, set your resting and max heart rate.
 * **Dark & Light Mode**: Automatic theme adaptation based on your system preferences.
 
 ## Prerequisites
@@ -23,6 +23,7 @@ An open-source application for tracking heart-rate data from Bluetooth Low Energ
 
 1. **Set Database DSN**: In Settings, enter your remote database DSN (e.g., PostgreSQL URL) to enable syncing.
 2. **Select BLE Device**: Choose your heart-rate monitor and save settings.
+3. **Set Resting and Max Heart Rate**: Set your heart rate values so it can be used to calculate your zones for zone targeting
 
 ## Usage
 
@@ -35,16 +36,8 @@ An open-source application for tracking heart-rate data from Bluetooth Low Energ
 * **View History**: Switch to the **History** tab, filter by Last 7 Days, This Month, or All Time. Tick sessions to overlay detailed plots.
 
 ## Screenshots
-
-![Tracker](docs/screenshots/tracker_page.png)
-![History](docs/screenshots/history_page.png)
-
-## Contributing
-
-Contributions are welcome!
-
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/my-feature`)
-3. Commit your changes (`git commit -m 'Add awesome feature'`)
-4. Push to the branch (`git push origin feature/my-feature`)
-5. Open a Pull Request
+<p>
+  <img src="docs/screenshots/tracker.png" width="360" alt="Tracker" />&nbsp;
+  <img src="docs/screenshots/history_average.png" width="360" alt="History Averages" />&nbsp;
+  <img src="docs/screenshots/history_comparison.png" width="360" alt="History Comparison" />
+</p>
