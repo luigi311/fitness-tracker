@@ -1,5 +1,7 @@
 import asyncio
 import threading
+from collections import deque
+from statistics import median
 from typing import Callable
 
 import gi
@@ -32,6 +34,9 @@ class Recorder:
         self.device_name = device_name
         self.device_address = device_address
 
+        # Rolling 3 bpm for smoothinng out hr readings
+        self._bpm_history: deque[int] = deque(maxlen=3)
+
     def start(self):
         t = threading.Thread(target=self._run, daemon=True)
         t.start()
@@ -59,12 +64,16 @@ class Recorder:
         # 2) compute elapsed seconds
         delta_ms = t_ms - self._start_ms
 
+        # 2.1) smooth out the bpm using a rolling median
+        self._bpm_history.append(bpm)
+        smoothed_bpm = int(median(self._bpm_history))
+
         # 3) always update the live UI
-        GLib.idle_add(self.on_bpm, delta_ms, bpm)
+        GLib.idle_add(self.on_bpm, delta_ms, smoothed_bpm)
 
         # 4) if we’re recording, persist to the DB
         if self._recording:
-            self.db.insert_heart_rate(self._activity_id, delta_ms, bpm, rr, energy)
+            self.db.insert_heart_rate(self._activity_id, delta_ms, smoothed_bpm, rr, energy)
 
     async def _workflow(self):
         # 1) Try direct connect by address (fastest / exact), if provided
