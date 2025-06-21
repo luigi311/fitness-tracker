@@ -22,6 +22,10 @@ class TrackerPageUI:
         self.prev_angle = None
         self._last_time_ms = None
 
+        self.sum_bpms = 0.0
+        self.count_bpms = 0
+        self.max_bpm = 0
+
         # rolling buffers for timestamps (ms) and BPM
         self._times = deque()
         self._bpms = deque()
@@ -69,6 +73,25 @@ class TrackerPageUI:
         canvas.set_vexpand(True)
         frame.set_child(canvas)
         vbox.append(frame)
+
+        # Stats
+        stats_frame = Gtk.Frame(label="Session Stats")
+        stats_grid = Gtk.Grid(column_spacing=12, row_spacing=6)
+        stats_frame.set_child(stats_grid)
+
+        stats_grid.attach(Gtk.Label(label="Elapsed Time:"), 0, 0, 1, 1)
+        self.time_label = Gtk.Label(label="00:00")
+        stats_grid.attach(self.time_label, 1, 0, 1, 1)
+
+        stats_grid.attach(Gtk.Label(label="Average BPM:"), 0, 1, 1, 1)
+        self.avg_label = Gtk.Label(label="—")
+        stats_grid.attach(self.avg_label, 1, 1, 1, 1)
+
+        stats_grid.attach(Gtk.Label(label="Max BPM:"), 0, 2, 1, 1)
+        self.max_label = Gtk.Label(label="—")
+        stats_grid.attach(self.max_label, 1, 2, 1, 1)
+
+        vbox.append(stats_frame)
 
         # Signals
         self.app.start_btn.connect("clicked", self._on_start)
@@ -157,6 +180,15 @@ class TrackerPageUI:
         self.tail.set_segments([])
         self.ship_marker.set_data([], [])
 
+        self.sum_bpms = 0.0
+        self.count_bpms = 0
+        self.max_bpm = 0
+
+        # reset stats labels
+        GLib.idle_add(self.time_label.set_text, "00:00")
+        GLib.idle_add(self.avg_label.set_text, "—")
+        GLib.idle_add(self.max_label.set_text, "—")
+
         self.fig.canvas.draw_idle()
         self.app.start_btn.set_sensitive(False)
         self.app.stop_btn.set_sensitive(True)
@@ -175,7 +207,19 @@ class TrackerPageUI:
             return
         self._last_time_ms = time_ms
 
-        # Update label
+        # update session metrics
+        self.sum_bpms += bpm
+        self.count_bpms += 1
+        self.max_bpm = max(self.max_bpm, bpm)
+
+        # update labels
+        elapsed_s = time_ms / 1000.0
+        mins, secs = divmod(int(elapsed_s), 60)
+        avg = int(self.sum_bpms / self.count_bpms)
+
+        GLib.idle_add(self.time_label.set_text, f"{mins:02}:{secs:02}")
+        GLib.idle_add(self.avg_label.set_text, str(avg))
+        GLib.idle_add(self.max_label.set_text, str(self.max_bpm))
         GLib.idle_add(self.bpm_label.set_markup, f'<span font="28">{bpm} BPM</span>')
 
         # Append & trim
