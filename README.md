@@ -4,7 +4,7 @@ An open-source application for tracking heart-rate data from Bluetooth Low Energ
 
 ## Features
 
-* **Live Heart-Rate Monitoring**: Stream BPM, RR intervals, and energy (kJ) from supported BLE chest straps (e.g., Polar).
+* **Live Heart-Rate Monitoring**: Stream BPM, RR intervals, and energy (kJ) from supported BLE chest straps.
 * **Session Recording**: Start and stop recording sessions; data is stored locally in SQLite.
 * **History & Visualization**: Browse past activities by day, week, month, or all time with summary stats (duration, avg/max BPM) and sparkline previews.
 * **Two-Way Sync**: Push local sessions to a remote database and pull remote sessions back to your local store.
@@ -17,7 +17,7 @@ An open-source application for tracking heart-rate data from Bluetooth Low Energ
 
 ## Supported Devices
 
-* Polar H10 (Supported by [BleakHeart](https://github.com/fsmeraldi/bleakheart))
+* Any dedicated BLE heart rate monitor that follows the BLE GATT standard (Handled by [BleakHeart](https://github.com/fsmeraldi/bleakheart))
 
 ## Configuration
 

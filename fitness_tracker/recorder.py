@@ -8,7 +8,7 @@ import gi
 from bleak import BleakError, BleakScanner
 
 from fitness_tracker.database import DatabaseManager
-from fitness_tracker.hr_provider import AVAILABLE_PROVIDERS
+from fitness_tracker.hr_provider import HEART_RATE_SERVICE_UUID, connect_and_stream
 
 gi.require_versions({"Gtk": "4.0", "Adw": "1"})
 from gi.repository import Adw, GLib
@@ -57,29 +57,31 @@ class Recorder:
         self.loop.run_until_complete(self._workflow())
 
     def _handle_sample(self, t_ms: int, bpm: int, rr: float | None, energy: float | None):
-        # 1) initialize the session start
+        # initialize the session start
         if self._start_ms is None:
             self._start_ms = t_ms
 
-        # 2) compute elapsed seconds
+        # Elapsed ms
         delta_ms = t_ms - self._start_ms
 
-        # 2.1) smooth out the bpm using a rolling median
+        # Smooth out the bpm using a rolling median
         self._bpm_history.append(bpm)
         smoothed_bpm = int(median(self._bpm_history))
 
-        # 3) always update the live UI
+        # Update the live UI
         GLib.idle_add(self.on_bpm, delta_ms, smoothed_bpm)
 
-        # 4) if we’re recording, persist to the DB
+        # Persist to the DB if recording
         if self._recording:
-            self.db.insert_heart_rate(self._activity_id, delta_ms, smoothed_bpm, rr, energy)
+            self.db.insert_heart_rate(
+                self._activity_id, delta_ms, smoothed_bpm, rr, energy
+            )
 
     async def _workflow(self):
-        # 1) Try direct connect by address (fastest / exact), if provided
         target = None
 
         while True:
+            # If we have a device address, try to connect directly
             if self.device_address:
                 print(f"🔗  Trying address {self.device_address}…")
                 try:
@@ -89,7 +91,7 @@ class Recorder:
                 except Exception:
                     target = None
 
-            # 2) Fallback to name‐based discovery
+            # Fallback to name‐based discovery
             if not target:
                 print("🔍  Discovering by name…")
                 devices = await BleakScanner.discover(timeout=5.0)
@@ -101,21 +103,19 @@ class Recorder:
                 await asyncio.sleep(5.0)
                 continue
 
-            print(f"✅  Found device: {target.name} ({target.address})")
-            provider_cls = next((p for p in AVAILABLE_PROVIDERS if p.matches(target.name)), None)
-            if not provider_cls:
-                GLib.idle_add(self.on_bpm, 0.0, -1)
-                return
+            print(f"✅  Found device: {getattr(target, 'name', target)} ({target.address})")
 
+            # Connect and stream
             try:
-                async for t_ms, bpm, rr, energy in provider_cls.stream(target, self._on_ble_error):
+                async for t_ms, bpm, rr, energy in connect_and_stream(
+                    target, self.queue, self._on_ble_error
+                ):
                     self._handle_sample(t_ms, bpm, rr, energy)
             except BleakError as e:
                 self._on_ble_error(f"🔄  BLE error, will retry: {e}")
 
-            # pause a bit before trying again
+            # pause before retry
             await asyncio.sleep(5.0)
 
     def _on_ble_error(self, msg: str):
-        # forward into the UI thread via the callback:
         GLib.idle_add(lambda: self.on_error(msg))

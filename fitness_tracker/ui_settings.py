@@ -5,7 +5,7 @@ from configparser import ConfigParser
 import gi
 from bleak import BleakScanner
 
-from fitness_tracker.hr_provider import AVAILABLE_PROVIDERS
+from fitness_tracker.hr_provider import HEART_RATE_SERVICE_UUID
 
 gi.require_versions({"Gtk": "4.0", "Adw": "1"})
 from gi.repository import Adw, GLib, Gtk  # noqa: E402
@@ -136,11 +136,11 @@ class SettingsPageUI:
         self.device_row.set_subtitle("Scanning for devices…")
 
         async def _scan():
-            devices = await BleakScanner.discover(timeout=5.0)
-            mapping = {}
-            for d in devices:
-                if d.name and any(p.matches(d.name) for p in AVAILABLE_PROVIDERS):
-                    mapping.setdefault(d.name, d.address)
+            devices = await BleakScanner.discover(
+                timeout=5.0,
+                service_uuids=[HEART_RATE_SERVICE_UUID],
+            )
+            mapping = {d.name: d.address for d in devices if d.name}
 
             names = sorted(mapping.keys())
             # Update UI
