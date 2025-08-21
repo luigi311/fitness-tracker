@@ -1,282 +1,474 @@
 from collections import deque
+import math
+import random
+import time
 
 import gi
-import matplotlib.colors as mcolors
 import numpy as np
 from matplotlib.backends.backend_gtk4agg import FigureCanvasGTK4Agg as FigureCanvas
-from matplotlib.collections import LineCollection
 from matplotlib.figure import Figure
 
 gi.require_versions({"Gtk": "4.0", "Adw": "1"})
-from gi.repository import GLib, Gtk
+from gi.repository import GLib, Gtk, Adw
 
+# ---------- Small reusable “metric cards” ----------
+
+class MetricCard(Gtk.Frame):
+    def __init__(self, title: str, unit: str | None = None):
+        super().__init__()
+        self.set_hexpand(True)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        for m in ("top", "bottom", "start", "end"):
+            getattr(box, f"set_margin_{m}")(12)
+
+        self.title = Gtk.Label(label=title)
+        self.title.add_css_class("caption")
+        self.title.set_xalign(0)
+
+        self.value = Gtk.Label(label="0")
+        self.value.add_css_class("title-1")
+        self.value.set_xalign(0)
+
+        self.unit = Gtk.Label(label=unit or "")
+        self.unit.add_css_class("dim-label")
+        self.unit.set_xalign(0)
+        self.unit.set_visible(bool(unit))
+
+        box.append(self.title)
+        box.append(self.value)
+        box.append(self.unit)
+        self.set_child(box)
+
+    def set(self, value_text: str, unit_text: str | None = None):
+        self.value.set_text(value_text)
+        if unit_text is not None:
+            self.unit.set_text(unit_text)
+            self.unit.set_visible(True)
+
+
+class TimerBlock(Gtk.Frame):
+    def __init__(self, emoji: str = "🏃"):
+        super().__init__()
+        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        for m in ("top", "bottom", "start", "end"):
+            getattr(box, f"set_margin_{m}")(16)
+
+        self.icon = Gtk.Label(label=emoji)
+        self.icon.add_css_class("title-1")
+        self.timer = Gtk.Label(label="00:00:00")
+        self.timer.add_css_class("title-1")
+        self.timer.set_xalign(0)
+
+        box.append(self.icon)
+        box.append(self.timer)
+        self.set_child(box)
+
+    def set_time(self, text: str):
+        self.timer.set_text(text)
+
+
+# ---------- Tracker Page ----------
 
 class TrackerPageUI:
     def __init__(self, app: "FitnessAppUI"):
         self.app = app
-        self.window = 10.0  # seconds shown in plot
-        self.buffer = 2.5  # extra seconds of headroom
-        self.window_ms = self.window * 1000.0
-        self.ymin = self.app.resting_hr - 20
-        self.ymax = self.app.max_hr + 20
-        self.prev_angle = None
-        self._last_time_ms = None
 
-        self.sum_bpms = 0.0
-        self.count_bpms = 0
-        self.max_bpm = 0
-
-        # rolling buffers for timestamps (ms) and BPM
+        # live buffers (ms + values)
+        self.window_sec = 60         # seconds in chart window
+        self.window_ms = self.window_sec * 1000.0
         self._times = deque()
         self._bpms = deque()
+        self._powers = deque()
 
+        self._last_ms = None
+        self._running = False
+
+        # stats
+        self._bpm_sum = 0.0
+        self._bpm_n = 0
+        self._bpm_max = 0
+
+        # test-mode signal id
+        self._test_source = None
+        self._start_monotonic = None
+
+    # ---- UI ----
     def build_page(self) -> Gtk.Widget:
-        vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
-        for edge in ("top", "bottom", "start", "end"):
-            vbox.set_property(f"margin_{edge}", 12)
+        outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=16)
+        for m in ("top", "bottom", "start", "end"):
+            getattr(outer, f"set_margin_{m}")(12)
 
         # Title
-        title = Gtk.Label(label="Fitness Tracker")
+        title = Gtk.Label(label="Tracker")
+        title.add_css_class("title-1")
         title.set_halign(Gtk.Align.CENTER)
-        vbox.append(title)
+        outer.append(title)
 
-        # Start / Stop
+        # Controls
         ctrl = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         ctrl.set_halign(Gtk.Align.CENTER)
-        self.app.start_btn = Gtk.Button.new_from_icon_name("media-record-symbolic")
-        self.app.start_btn.set_label("Start")
-        self.app.start_btn.get_style_context().add_class("suggested-action")
-        self.app.stop_btn = Gtk.Button.new_from_icon_name("media-playback-stop-symbolic")
-        self.app.stop_btn.set_label("Stop")
-        self.app.stop_btn.get_style_context().add_class("destructive-action")
+        self.app.start_btn = Gtk.Button.new_with_label("Start")
+        self.app.start_btn.add_css_class("suggested-action")
+        self.app.stop_btn = Gtk.Button.new_with_label("Stop")
+        self.app.stop_btn.add_css_class("destructive-action")
         self.app.stop_btn.set_sensitive(False)
         ctrl.append(self.app.start_btn)
         ctrl.append(self.app.stop_btn)
-        vbox.append(ctrl)
+        outer.append(ctrl)
 
-        # BPM label
-        self.bpm_label = Gtk.Label(use_markup=True)
-        self.bpm_label.set_markup(f'<span font="28" color="{self.app.DARK_FG}">— BPM —</span>')
-        self.bpm_label.set_halign(Gtk.Align.CENTER)
-        vbox.append(self.bpm_label)
+        # Metrics grid (match your new layout)
+        grid = Gtk.Grid(column_spacing=12, row_spacing=12)
 
-        # Plot frame
-        frame = Gtk.Frame(label="Live Heart Rate")
-        self.fig = Figure(figsize=(6, 3))
-        self.ax = self.fig.add_subplot(111)
+        # Row 0: [icon + timer] spans both columns
+        self.timer_block = TimerBlock("🏃")
+        grid.attach(self.timer_block, 0, 0, 2, 1)
 
-        # One-time styling + create tail & ship
-        self.tail, self.ship_marker = self._style_figure()
+        # Row 1: [Distance] [Pace]
+        self.card_distance = MetricCard("Distance", "mi")
+        self.card_pace     = MetricCard("Pace", "min/mi")
+        grid.attach(self.card_distance, 0, 1, 1, 1)
+        grid.attach(self.card_pace,     1, 1, 1, 1)
 
-        # Embed
+        # Row 2: [Cadence] [MPH]
+        self.card_cadence = MetricCard("Cadence", "spm")
+        self.card_mph     = MetricCard("MPH", None)
+        grid.attach(self.card_cadence, 0, 2, 1, 1)
+        grid.attach(self.card_mph,     1, 2, 1, 1)
+
+        # Row 3: [Heart Rate] [Power]
+        self.card_hr    = MetricCard("Heart Rate", "bpm")
+        self.card_power = MetricCard("Power", "W")
+        grid.attach(self.card_hr,    0, 3, 1, 1)
+        grid.attach(self.card_power, 1, 3, 1, 1)
+
+        outer.append(grid)
+
+        # Live chart (HR + Power)
+        frame = Gtk.Frame(label="Live HR / Power")
+        self.fig = Figure(figsize=(6, 3), dpi=96)
+        self.ax_hr = self.fig.add_subplot(111)
+        self._style_axes()
+
+        # Secondary Y for Power
+        self.ax_pw = self.ax_hr.twinx()
+        self._style_power_axis()
+
+        # Keep HR axis fixed to resting_hr-20 → max_hr+20
+        self.ax_hr.set_ylim(self.app.resting_hr - 20, self.app.max_hr + 20)
+        self.ax_hr.set_autoscaley_on(False)
+
+        # Allow autoscaling for Power axis with some headroom
+        self.ax_pw.set_autoscaley_on(True)
+        self.ax_pw.margins(y=0.15)
+
+        (self.line_hr,) = self.ax_hr.plot([], [], lw=2)
+        (self.line_pw,) = self.ax_pw.plot([], [], lw=2, linestyle="--", color="#00FFFF")
+
         canvas = FigureCanvas(self.fig)
         canvas.set_vexpand(True)
         frame.set_child(canvas)
-        vbox.append(frame)
+        outer.append(frame)
 
-        # Stats
-        stats_frame = Gtk.Frame(label="Session Stats")
-        stats_grid = Gtk.Grid(column_spacing=12, row_spacing=6)
-        stats_frame.set_child(stats_grid)
-
-        stats_grid.attach(Gtk.Label(label="Elapsed Time:"), 0, 0, 1, 1)
-        self.time_label = Gtk.Label(label="00:00")
-        stats_grid.attach(self.time_label, 1, 0, 1, 1)
-
-        stats_grid.attach(Gtk.Label(label="Average BPM:"), 0, 1, 1, 1)
-        self.avg_label = Gtk.Label(label="—")
-        stats_grid.attach(self.avg_label, 1, 1, 1, 1)
-
-        stats_grid.attach(Gtk.Label(label="Max BPM:"), 0, 2, 1, 1)
-        self.max_label = Gtk.Label(label="—")
-        stats_grid.attach(self.max_label, 1, 2, 1, 1)
-
-        vbox.append(stats_frame)
-
-        # Signals
+        # Wire buttons
         self.app.start_btn.connect("clicked", self._on_start)
         self.app.stop_btn.connect("clicked", self._on_stop)
 
-        # Tight layout once (avoids per-frame squeezing)
-        self.fig.tight_layout()
+        # Initial zeros
+        self._set_all_instant(0, 0, 0, 0, 0, 0)
 
-        return vbox
+        return outer
 
-    def _style_figure(self):
-        # draw background HR zones
-        self.app.draw_zones(self.ax)
+    # ---- Styling helpers ----
+    def _style_axes(self):
+        zones = self.app.calculate_hr_zones()
+        names = list(zones.keys())
+        bands = [(n, zones[n]) for n in names]
+        colors = self.app.ZONE_COLORS
 
-        # initial fixed limits (resting–20 → max+20)
-        ymin = self.app.resting_hr - 20
-        ymax = self.app.max_hr + 20
-
-        # fading tail
-        tail = LineCollection([], linewidths=2, zorder=2)
-        self.ax.add_collection(tail)
-
-        # rotating triangle “ship”
-        (ship_marker,) = self.ax.plot(
-            [],
-            [],
-            marker=(3, 0, 0),  # triangle, angle=0°
-            markersize=15,
-            markerfacecolor="white",
-            markeredgecolor="white",
-            zorder=3,
-        )
-        ship_marker.set_clip_on(False)
-
-        # styling
         self.fig.patch.set_facecolor(self.app.DARK_BG)
-        self.ax.set_facecolor(self.app.DARK_BG)
-        self.ax.xaxis.set_visible(False)
-        self.ax.yaxis.label.set_color(self.app.DARK_FG)
-        self.ax.tick_params(colors=self.app.DARK_FG)
-        self.ax.grid(color=self.app.DARK_GRID)
+        ax = self.ax_hr
+        ax.clear()
+        ax.set_facecolor(self.app.DARK_BG)
+        ax.grid(color=self.app.DARK_GRID, linewidth=0.8)
+        ax.tick_params(colors=self.app.DARK_FG)
 
-        # fixed limits
-        self.ax.set_xlim(0, self.window + self.buffer)
-        self.ax.set_ylim(ymin, ymax)
+        ax.set_xlim(0, self.window_sec)
 
-        return tail, ship_marker
-
-    def configure_axes(self):
-        self.ax.clear()
-        self.app.draw_zones(self.ax)
-
-        self.ax.set_facecolor(self.app.DARK_BG)
-        # hide X-axis
-        self.ax.xaxis.set_visible(False)
-
-        self.ax.yaxis.label.set_color(self.app.DARK_FG)
-        self.ax.tick_params(colors=self.app.DARK_FG)
-        self.ax.grid(color=self.app.DARK_GRID)
-
-        # recompute limits
-        # reset to initial limits on (re)start
         ymin = self.app.resting_hr - 20
         ymax = self.app.max_hr + 20
-        self.ax.set_xlim(0, self.window + self.buffer)
-        self.ax.set_ylim(ymin, ymax)
+        ax.set_ylim(ymin, ymax)
 
-        self.ax.add_collection(self.tail)
-        self.ax.add_line(self.ship_marker)
+        # Bands
+        for i, (_, (lo, hi)) in enumerate(bands):
+            ax.axhspan(lo, hi, facecolor=colors[i], alpha=0.35, zorder=0)
 
-    def _zone_color(self, hr: float) -> tuple[float, float, float]:
-        # Fresh thresholds → RGB
-        thresholds = self.app.calculate_hr_zones().items()
-        for (_, (lo, hi)), hexcol in zip(thresholds, self.app.ZONE_COLORS):
-            if lo <= hr < hi:
-                return mcolors.to_rgb(hexcol)
-        return mcolors.to_rgb(self.app.DARK_FG)
+        # Boundaries + ticks at zone edges (no mids)
+        tick_locs = sorted({y for _, (lo, hi) in bands for y in (lo, hi)})
+        for y in tick_locs:
+            ax.axhline(y, color=self.app.DARK_BG, linewidth=1.6, alpha=0.65, zorder=1)
 
-    def _on_start(self, button: Gtk.Button):
-        # Reset state
-        self._last_time_ms = None
-        self.prev_angle = None
-        self.configure_axes()
+        ax.set_yticks(tick_locs)
+        ax.set_yticklabels([f"{int(v)}" for v in tick_locs], color=self.app.DARK_FG)
 
+        # 10-second x ticks
+        ax.set_xticks(list(range(0, self.window_sec + 1, 10)))
+        ax.set_xlabel("Last 60s", color=self.app.DARK_FG)
+        ax.set_autoscaley_on(False)
+
+    def _style_power_axis(self):
+        ax = self.ax_pw
+        ax.tick_params(colors=self.app.DARK_FG)
+        ax.yaxis.label.set_color(self.app.DARK_FG)
+
+        ax.set_autoscaley_on(True)
+        ax.margins(y=0.15)
+
+        # Optional: initial view before data arrives
+        ax.set_ylim(0, 500)
+
+        # Make power visually secondary
+        for spine in ax.spines.values():
+            spine.set_alpha(0.35)
+
+    # ---- Start/Stop ----
+    def _on_start(self, *_):
+        self._running = True
+        self._start_monotonic = time.monotonic()
         self._times.clear()
         self._bpms.clear()
-        self.tail.set_segments([])
-        self.ship_marker.set_data([], [])
+        self._powers.clear()
+        self._last_ms = None
 
-        self.sum_bpms = 0.0
-        self.count_bpms = 0
-        self.max_bpm = 0
+        self._bpm_sum = 0.0
+        self._bpm_n = 0
+        self._bpm_max = 0
 
-        # reset stats labels
-        GLib.idle_add(self.time_label.set_text, "00:00")
-        GLib.idle_add(self.avg_label.set_text, "—")
-        GLib.idle_add(self.max_label.set_text, "—")
-
-        self.fig.canvas.draw_idle()
         self.app.start_btn.set_sensitive(False)
         self.app.stop_btn.set_sensitive(True)
+
+        # Start BLE recording if available (not in test mode)
         if self.app.recorder:
             self.app.recorder.start_recording()
 
-    def _on_stop(self, button: Gtk.Button):
+        # Kick off test generator when --test was used
+        if self.app.test_mode and self._test_source is None:
+            # HR simulation state
+            self._hrsim_last_ms = None
+            self._hrsim_bpm = float(self.app.resting_hr)
+            self._test_source = GLib.timeout_add(1000, self._tick_test)
+
+    def _on_stop(self, *_):
+        self._running = False
         self.app.stop_btn.set_sensitive(False)
         self.app.start_btn.set_sensitive(True)
+
         if self.app.recorder:
             self.app.recorder.stop_recording()
 
-    def on_bpm(self, time_ms: float, bpm: int):
-        # Drop out-of-order
-        if self._last_time_ms is not None and time_ms <= self._last_time_ms:
+        if self._test_source:
+            GLib.source_remove(self._test_source)
+            self._test_source = None
+
+    # ---- Public API used by Recorder (HR only) ----
+    def on_bpm(self, delta_ms: float, bpm: int):
+        """Called by Recorder with elapsed-ms + smoothed BPM."""
+        if not self._running:
             return
-        self._last_time_ms = time_ms
 
-        # update session metrics
-        self.sum_bpms += bpm
-        self.count_bpms += 1
-        self.max_bpm = max(self.max_bpm, bpm)
+        # Keep a monotonic elapsed time in ms
+        t_ms = delta_ms
+        self._push_sample(t_ms, bpm, self._current_power_for_time(t_ms))
 
-        # update labels
-        elapsed_s = time_ms / 1000.0
-        mins, secs = divmod(int(elapsed_s), 60)
-        avg = int(self.sum_bpms / self.count_bpms)
+    # ---- Internal: push combined HR/Power sample ----
+    def _push_sample(self, t_ms: float, bpm: int, watts: float):
+        # Update stats
+        self._bpm_sum += bpm
+        self._bpm_n += 1
+        self._bpm_max = max(self._bpm_max, bpm)
 
-        GLib.idle_add(self.time_label.set_text, f"{mins:02}:{secs:02}")
-        GLib.idle_add(self.avg_label.set_text, str(avg))
-        GLib.idle_add(self.max_label.set_text, str(self.max_bpm))
-        GLib.idle_add(self.bpm_label.set_markup, f'<span font="28">{bpm} BPM</span>')
-
-        # Append & trim
-        self._times.append(time_ms)
+        # Trim window
+        cutoff = t_ms - self.window_ms
+        self._times.append(t_ms)
         self._bpms.append(bpm)
-        cutoff = time_ms - self.window_ms
+        self._powers.append(watts)
         while self._times and self._times[0] < cutoff:
-            self._times.popleft()
-            self._bpms.popleft()
+            self._times.popleft(); self._bpms.popleft(); self._powers.popleft()
 
-        if len(self._times) < 2:
-            return
+        # X in seconds from left edge of window
+        x = (np.array(self._times) - cutoff) / 1000.0
+        self.line_hr.set_data(x, np.array(self._bpms))
+        self.line_pw.set_data(x, np.array(self._powers))
 
-        # Build arrays & seconds-ago
-        times_ms = np.array(self._times)
-        bpms = np.array(self._bpms)
-        rel_s = (times_ms - cutoff) / 1000.0
+        if len(self._powers) >= 2:
+            # Robust autoscale with padding; clamps bottom at 0
+            p = np.array(self._powers)
+            pmin, pmax = float(p.min()), float(p.max())
+            if pmax == pmin:
+                pad = max(10.0, 0.1 * pmax)   # flat line edge case
+            else:
+                pad = max(10.0, 0.1 * (pmax - pmin))
+            self.ax_pw.set_ylim(max(0.0, pmin - pad), pmax + pad)
+        else:
+            # fall back early on
+            self.ax_pw.set_ylim(0, 500)
 
-        # Tail segments + fading colors
-        pts = np.vstack([rel_s, bpms]).T.reshape(-1, 1, 2)
-        segs = np.concatenate([pts[:-1], pts[1:]], axis=1)
-        mids = 0.5 * (bpms[:-1] + bpms[1:])
-        ages = time_ms - 0.5 * (times_ms[:-1] + times_ms[1:])
-        alphas = np.clip((self.window_ms - ages) / self.window_ms, 0, 1)
+        # Update instantaneous cards (distance, pace, etc.)
+        elapsed_s = max(0, int(t_ms // 1_000))
+        hh, rem = divmod(elapsed_s, 3600)
+        mm, ss = divmod(rem, 60)
+        self.timer_block.set_time(f"{hh:02d}:{mm:02d}:{ss:02d}")
 
-        colors = [(*self._zone_color(m), a) for m, a in zip(mids, alphas)]
-        self.tail.set_segments(segs)
-        self.tail.set_color(colors)
+        # In non-test mode, keep zeros for non-HR metrics
+        if self.app.test_mode:
+            mph = self._last_mph
+            cadence = self._last_cadence
+            dist_mi = self._integrated_distance_miles
+            pace_str = self._pace_from_mph(mph)
+        else:
+            mph = 0.0
+            cadence = 0
+            dist_mi = 0.0
+            pace_str = "0:00"
 
-        # Ship heading & position
-        dx = rel_s[-1] - rel_s[-2]
-        dy = bpms[-1] - bpms[-2]
-        raw = np.degrees(np.arctan2(dy, dx))
-        angle = (0.7 * self.prev_angle + 0.3 * raw) if self.prev_angle is not None else raw
-        self.prev_angle = angle
+        self._set_all_instant(dist_mi, pace_str, cadence, mph, bpm, int(watts))
 
-        last_x, last_y = rel_s[-1], bpms[-1]
-        self.ship_marker.set_marker((3, 0, angle - 90))
-        self.ship_marker.set_data([last_x], [last_y])
-        r, g, b = self._zone_color(bpm)
-        self.ship_marker.set_markerfacecolor((r, g, b, 1.0))
-        self.ship_marker.set_markeredgecolor((r, g, b, 1.0))
+        # Make HR line tint match the current zone (subtle)
+        _, _, _, rgb = self._zone_info(self._bpms[-1])
+        self.line_hr.set_color(rgb)
 
-        # dynamic Y-limits
-        zones = self.app.calculate_hr_zones()
-        zone1_low, _ = zones["Zone 1"]
-
-        initial_ymin = self.app.resting_hr - 20
-        # look at the minimum BPM in our rolling window:
-        min_bpm = bpms.min()
-
-        # Set dynamic ymin: follow lowest point–10 if below Zone 1, else floor at Zone 1
-        dyn_ymin = max(initial_ymin, min_bpm - 10) if min_bpm < zone1_low else zone1_low
-
-        dyn_ymax = self.app.max_hr + 20
-        self.ax.set_ylim(dyn_ymin, dyn_ymax)
-
-        # Redraw (limits are fixed)
+        # Redraw
         self.fig.canvas.draw_idle()
+
+    def _set_all_instant(self, dist_mi, pace_str, cadence, mph, bpm, watts):
+        self.card_distance.set(f"{dist_mi:.2f}")
+        self.card_pace.set(f"{pace_str}")
+        self.card_cadence.set(f"{int(cadence)}")
+        self.card_mph.set(f"{mph:.1f}")
+        self.card_hr.set(f"{int(bpm)}")
+        self.card_power.set(f"{int(watts)}")
+
+    # ---- Test-data generator (runs when --test) ----
+    def _tick_test(self):
+        if not self._running:
+            return False
+
+        # Elapsed time
+        t_now = time.monotonic()
+        t_ms = int((t_now - self._start_monotonic) * 1000)
+        t_min = t_ms / 60000.0
+        dt_s = 1.0
+        if self._hrsim_last_ms is not None:
+            dt_s = max(0.001, (t_ms - self._hrsim_last_ms) / 1000.0)
+        self._hrsim_last_ms = t_ms
+
+        # --- Power with 2-minute interval cycles (two 30s surges + two 30s recoveries) ---
+        cycle_len = 120.0  # seconds
+        phase = (t_min * 60) % cycle_len
+
+        if phase < 30:
+            # Surge 1
+            target_power = random.uniform(400, 600)
+            interval_intense = True
+        elif phase < 60:
+            # Recovery 1
+            target_power = random.uniform(180, 250)
+            interval_intense = False
+        elif phase < 90:
+            # Surge 2
+            target_power = random.uniform(350, 550)
+            interval_intense = True
+        else:
+            # Recovery 2
+            target_power = random.uniform(180, 240)
+            interval_intense = False
+
+        # Smooth power so it’s not jumpy
+        last_power = getattr(self, "_last_power", 250.0)
+        self._last_power = last_power + 0.4 * (target_power - last_power)
+
+        # --- Heart rate tied to intervals with realistic kinetics ---
+        zones = self.app.calculate_hr_zones()
+        z2_lo, _ = zones["Zone 3"]
+        # Targets
+        if interval_intense:
+            # Aim near max during surges
+            hr_target = self.app.max_hr - random.uniform(0, 3)
+            tau = 10.0  # rise time constant (s): faster to go up
+        else:
+            # Recover toward lower Zone 2
+            hr_target = z2_lo - random.uniform(0, 5)
+            tau = 45.0  # decay time constant (s): slower to come down
+
+        # First-order response toward target
+        alpha = 1.0 - math.exp(-dt_s / tau)
+        self._hrsim_bpm += alpha * (hr_target - self._hrsim_bpm)
+
+        # Small organic jitter
+        self._hrsim_bpm += random.uniform(-0.8, 0.8)
+
+        # Clamp
+        self._hrsim_bpm = float(
+            max(self.app.resting_hr, min(self.app.max_hr, self._hrsim_bpm))
+        )
+        bpm = int(round(self._hrsim_bpm))
+
+        # --- Speed / cadence dummy (running) ---
+        self._last_mph = max(
+            2.0, min(10.0, getattr(self, "_last_mph", 6.8) + random.uniform(-0.3, 0.3))
+        )
+        self._last_cadence = max(
+            150, min(190, getattr(self, "_last_cadence", 172) + random.uniform(-2, 2))
+        )
+
+        # Integrate distance
+        dmiles = self._last_mph / 3600.0
+        self._integrated_distance_miles = getattr(self, "_integrated_distance_miles", 0.0) + dmiles
+
+        # Push the sample
+        self._push_sample(t_ms, bpm, self._last_power)
+        return True
+
+
+
+    # Helpers
+    def _zone_info(self, hr: float):
+        """
+        Return (zone_name, lo, hi, rgb_tuple) for a given HR.
+        Falls back to closest band if outside.
+        """
+        zones = self.app.calculate_hr_zones()
+        order = list(zones.keys())
+        for name, color in zip(order, self.app.ZONE_COLORS):
+            lo, hi = zones[name]
+            if lo <= hr < hi:
+                return name, lo, hi, self._rgb(color)
+        # below first or above last
+        first, last = order[0], order[-1]
+        if hr < zones[first][0]:
+            return first, *zones[first], self._rgb(self.app.ZONE_COLORS[0])
+        return last, *zones[last], self._rgb(self.app.ZONE_COLORS[-1])
+
+    def _rgb(self, hex_color: str):
+        # lightweight converter (no matplotlib.colors import needed here)
+        hex_color = hex_color.lstrip("#")
+        r = int(hex_color[0:2], 16) / 255.0
+        g = int(hex_color[2:4], 16) / 255.0
+        b = int(hex_color[4:6], 16) / 255.0
+        return (r, g, b)
+
+    @staticmethod
+    def _pace_from_mph(mph: float) -> str:
+        if mph <= 0.01:
+            return "0:00"
+        mins_per_mile = 60.0 / mph
+        m = int(mins_per_mile)
+        s = int(round((mins_per_mile - m) * 60))
+        if s == 60:
+            m += 1; s = 0
+        return f"{m}:{s:02d}"
+
+    def _current_power_for_time(self, _t_ms: float) -> float:
+        """When not in test mode, power is 0 (no sensor yet)."""
+        if self.app.test_mode:
+            return getattr(self, "_last_power", 0.0)
+        return 0.0

@@ -72,7 +72,6 @@ class HistoryPageUI:
     def load_history(self):
         if not self.app.recorder:
             return
-        Session = self.app.recorder.db.Session
 
         # Determine cutoff based on filter (use local now)
         now = datetime.datetime.now().astimezone()
@@ -84,7 +83,7 @@ class HistoryPageUI:
             cutoff = None
 
         last_date = None
-        with Session() as session:
+        with self.app.recorder.db.Session() as session:
             activities = session.query(Activity).order_by(Activity.start_time.desc()).all()
             for act in activities:
                 # Convert start to aware and local
@@ -244,8 +243,16 @@ class HistoryPageUI:
         self.history_ax.clear()
         self._apply_chart_style(self.history_ax)
 
-        Session = self.app.recorder.db.Session
-        with Session() as session:
+          # ---- TEST MODE / no recorder: draw placeholder and bail ----
+        if self.app.test_mode or not self.app.recorder:
+            self.history_ax.set_title("Test mode — no saved activities yet", color=self.app.DARK_FG)
+            self.history_ax.set_xlabel("")
+            self.history_ax.set_ylabel("BPM", color=self.app.DARK_FG)
+            self.history_fig.tight_layout()
+            self.history_canvas.draw_idle()
+            return
+
+        with self.app.recorder.db.Session() as session:
             for aid in sorted(self.selected_activities):
                 hrs = (
                     session.query(HeartRate)

@@ -25,8 +25,9 @@ _IS_DARK = _style_manager.get_dark()
 
 
 class FitnessAppUI(Adw.Application):
-    def __init__(self):
+    def __init__(self, test_mode: bool = False):
         super().__init__(application_id="io.Luigi311.Fitness")
+        self.test_mode = test_mode
 
         if _IS_DARK:
             self.DARK_BG = "#2e3436"
@@ -93,15 +94,21 @@ class FitnessAppUI(Adw.Application):
     def do_activate(self):
         if not self.window:
             self._build_ui()
-            self.recorder = Recorder(
-                on_bpm_update=self.tracker.on_bpm,
-                database_url=f"sqlite:///{self.database}",
-                device_name=self.device_name,
-                on_error=self.show_toast,
-                device_address=self.device_address or None,
-            )
-            self.recorder.start()
-            # Load history after recorder is initialized
+
+            # Only spin up the BLE recorder when NOT in test mode
+            if not self.test_mode:
+                self.recorder = Recorder(
+                    on_bpm_update=self.tracker.on_bpm,
+                    database_url=f"sqlite:///{self.database}",
+                    device_name=self.device_name,
+                    on_error=self.show_toast,
+                    device_address=self.device_address or None,
+                )
+                self.recorder.start()
+            else:
+                self.recorder = None
+
+            # Load history
             threading.Thread(target=self.history.load_history, daemon=True).start()
         self.window.present()
 
@@ -119,7 +126,6 @@ class FitnessAppUI(Adw.Application):
         self.stack = Adw.ViewStack()
         self.stack.set_vexpand(True)
 
-        # instead of calling your own private _build_* methods, do:
         self.tracker = TrackerPageUI(self)
         self.history = HistoryPageUI(self)
         self.settings = SettingsPageUI(self)
