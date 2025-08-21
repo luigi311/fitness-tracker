@@ -13,6 +13,7 @@ from gi.repository import GLib, Gtk, Adw
 
 # ---------- Small reusable “metric cards” ----------
 
+
 class MetricCard(Gtk.Frame):
     def __init__(self, title: str, unit: str | None = None):
         super().__init__()
@@ -47,19 +48,18 @@ class MetricCard(Gtk.Frame):
 
 
 class TimerBlock(Gtk.Frame):
-    def __init__(self, emoji: str = "🏃"):
+    def __init__(self):
         super().__init__()
         box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         for m in ("top", "bottom", "start", "end"):
             getattr(box, f"set_margin_{m}")(16)
 
-        self.icon = Gtk.Label(label=emoji)
-        self.icon.add_css_class("title-1")
         self.timer = Gtk.Label(label="00:00:00")
         self.timer.add_css_class("title-1")
-        self.timer.set_xalign(0)
+        self.timer.set_halign(Gtk.Align.CENTER)  # center horizontally
+        self.timer.set_xalign(0.5)  # center text inside label
 
-        box.append(self.icon)
+        box.set_halign(Gtk.Align.CENTER)  # center the box in the frame
         box.append(self.timer)
         self.set_child(box)
 
@@ -69,12 +69,13 @@ class TimerBlock(Gtk.Frame):
 
 # ---------- Tracker Page ----------
 
+
 class TrackerPageUI:
     def __init__(self, app: "FitnessAppUI"):
         self.app = app
 
         # live buffers (ms + values)
-        self.window_sec = 60         # seconds in chart window
+        self.window_sec = 60  # seconds in chart window
         self.window_ms = self.window_sec * 1000.0
         self._times = deque()
         self._bpms = deque()
@@ -120,25 +121,25 @@ class TrackerPageUI:
         grid = Gtk.Grid(column_spacing=12, row_spacing=12)
 
         # Row 0: [icon + timer] spans both columns
-        self.timer_block = TimerBlock("🏃")
+        self.timer_block = TimerBlock()
         grid.attach(self.timer_block, 0, 0, 2, 1)
 
         # Row 1: [Distance] [Pace]
         self.card_distance = MetricCard("Distance", "mi")
-        self.card_pace     = MetricCard("Pace", "min/mi")
+        self.card_pace = MetricCard("Pace", "min/mi")
         grid.attach(self.card_distance, 0, 1, 1, 1)
-        grid.attach(self.card_pace,     1, 1, 1, 1)
+        grid.attach(self.card_pace, 1, 1, 1, 1)
 
         # Row 2: [Cadence] [MPH]
         self.card_cadence = MetricCard("Cadence", "spm")
-        self.card_mph     = MetricCard("MPH", None)
+        self.card_mph = MetricCard("MPH", None)
         grid.attach(self.card_cadence, 0, 2, 1, 1)
-        grid.attach(self.card_mph,     1, 2, 1, 1)
+        grid.attach(self.card_mph, 1, 2, 1, 1)
 
         # Row 3: [Heart Rate] [Power]
-        self.card_hr    = MetricCard("Heart Rate", "bpm")
+        self.card_hr = MetricCard("Heart Rate", "bpm")
         self.card_power = MetricCard("Power", "W")
-        grid.attach(self.card_hr,    0, 3, 1, 1)
+        grid.attach(self.card_hr, 0, 3, 1, 1)
         grid.attach(self.card_power, 1, 3, 1, 1)
 
         outer.append(grid)
@@ -292,7 +293,9 @@ class TrackerPageUI:
         self._bpms.append(bpm)
         self._powers.append(watts)
         while self._times and self._times[0] < cutoff:
-            self._times.popleft(); self._bpms.popleft(); self._powers.popleft()
+            self._times.popleft()
+            self._bpms.popleft()
+            self._powers.popleft()
 
         # X in seconds from left edge of window
         x = (np.array(self._times) - cutoff) / 1000.0
@@ -304,7 +307,7 @@ class TrackerPageUI:
             p = np.array(self._powers)
             pmin, pmax = float(p.min()), float(p.max())
             if pmax == pmin:
-                pad = max(10.0, 0.1 * pmax)   # flat line edge case
+                pad = max(10.0, 0.1 * pmax)  # flat line edge case
             else:
                 pad = max(10.0, 0.1 * (pmax - pmin))
             self.ax_pw.set_ylim(max(0.0, pmin - pad), pmax + pad)
@@ -407,9 +410,7 @@ class TrackerPageUI:
         self._hrsim_bpm += random.uniform(-0.8, 0.8)
 
         # Clamp
-        self._hrsim_bpm = float(
-            max(self.app.resting_hr, min(self.app.max_hr, self._hrsim_bpm))
-        )
+        self._hrsim_bpm = float(max(self.app.resting_hr, min(self.app.max_hr, self._hrsim_bpm)))
         bpm = int(round(self._hrsim_bpm))
 
         # --- Speed / cadence dummy (running) ---
@@ -427,8 +428,6 @@ class TrackerPageUI:
         # Push the sample
         self._push_sample(t_ms, bpm, self._last_power)
         return True
-
-
 
     # Helpers
     def _zone_info(self, hr: float):
@@ -464,7 +463,8 @@ class TrackerPageUI:
         m = int(mins_per_mile)
         s = int(round((mins_per_mile - m) * 60))
         if s == 60:
-            m += 1; s = 0
+            m += 1
+            s = 0
         return f"{m}:{s:02d}"
 
     def _current_power_for_time(self, _t_ms: float) -> float:
