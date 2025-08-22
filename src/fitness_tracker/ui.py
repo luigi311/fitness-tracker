@@ -13,6 +13,7 @@ from fitness_tracker.ui_tracker import TrackerPageUI
 
 gi.require_versions({"Gtk": "4.0", "Adw": "1"})
 from gi.repository import Adw  # noqa: E402
+import contextlib
 
 if TYPE_CHECKING:
     import datetime
@@ -186,3 +187,14 @@ class FitnessAppUI(Adw.Application):
         alpha = 0.25
         for (_, (low, high)), color in zip(zones.items(), colors):
             ax.axhspan(low, high, facecolor=color, alpha=alpha)
+
+    def do_shutdown(self):
+        # Cleanly stop recorder/BLE loop before app teardown
+        try:
+            if self.recorder:
+                with contextlib.suppress(Exception):
+                    self.recorder.stop_recording()
+                self.recorder.shutdown()
+        finally:
+            # IMPORTANT: chain up by calling the base class with self
+            Adw.Application.do_shutdown(self)

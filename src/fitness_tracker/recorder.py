@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import re
 import threading
 from collections import deque
@@ -32,6 +33,7 @@ class Recorder:
         running_device_address: str | None = None,
     ):
         self._ble_lock = asyncio.Lock() # Lock for BLE operations
+        self._thread: threading.Thread | None = None
 
         # Cache resolved addresses so we don’t keep scanning
         self._hr_addr_cache: str | None = device_address
@@ -43,10 +45,11 @@ class Recorder:
         self.db = DatabaseManager(database_url=database_url)
         self.loop = asyncio.new_event_loop()
         self.queue: asyncio.Queue = asyncio.Queue()
+        self._stop_event = asyncio.Event()
         self._recording = False
         self._activity_id = None
         self._start_ms = None
-        
+
         # HR device
         self.device_name = device_name
         self.device_address = device_address
@@ -59,8 +62,17 @@ class Recorder:
         self._bpm_history: deque[int] = deque(maxlen=3)
 
     def start(self):
-        t = threading.Thread(target=self._run, daemon=True)
-        t.start()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def shutdown(self):
+        if not self.loop.is_running():
+            return
+        def _stop():
+            self._stop_event.set()
+        self.loop.call_soon_threadsafe(_stop)
+        if self._thread:
+            self._thread.join(timeout=3)
 
     def start_recording(self):
         if not self._recording:
@@ -131,14 +143,23 @@ class Recorder:
 
     async def _workflow(self):
         # Run both device loops concurrently (if configured)
-        tasks = [self._hr_loop()]
+        if self._stop_event._loop is not self.loop:
+            self._stop_event = asyncio.Event()
+        tasks = [asyncio.create_task(self._hr_loop())]
         if self.running_device_name or self.running_device_address:
-            tasks.append(self._running_loop())
-        await asyncio.gather(*tasks)
+            tasks.append(asyncio.create_task(self._running_loop()))
+        await asyncio.wait(
+            tasks,
+            return_when=asyncio.FIRST_COMPLETED
+        )
+        for t in tasks:
+            t.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await t
 
     async def _hr_loop(self):
         target = None
-        while True:
+        while not self._stop_event.is_set():
             try:
                 # Resolve address ONCE (if not provided)
                 if not self._hr_addr_cache and self.device_name:
@@ -188,7 +209,7 @@ class Recorder:
         bleak_client = None
         target = None
 
-        while True:
+        while not self._stop_event.is_set():
             try:
                 # Resolve address once if only a name was provided
                 if not self._run_addr_cache and self.running_device_name:
