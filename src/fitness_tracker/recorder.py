@@ -164,7 +164,7 @@ class Recorder:
                 # Resolve address ONCE (if not provided)
                 if not self._hr_addr_cache and self.device_name:
                     async with self._ble_lock:
-                        devices = await BleakScanner.discover(timeout=5.0)
+                        devices = await BleakScanner.discover(timeout=5.0, service_uuids=[HEART_RATE_SERVICE_UUID])
                     cand = next((d for d in devices if d.name == self.device_name), None)
                     if cand:
                         self._hr_addr_cache = cand.address
