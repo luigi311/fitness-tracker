@@ -11,6 +11,7 @@ from sqlalchemy import (
     Integer,
     UniqueConstraint,
     create_engine,
+    event,
     exc,
 )
 from sqlalchemy.orm import declarative_base, relationship, sessionmaker
@@ -70,14 +71,33 @@ class RunningMetrics(Base):
         Index("ix_run_activity_time", "activity_id", "timestamp_ms"),
     )
 
+def _sqlite_pragmas(dbapi_con, _con_record):
+    cur = dbapi_con.cursor()
+    cur.execute("PRAGMA journal_mode=WAL;")
+    cur.execute("PRAGMA synchronous=NORMAL;")
+    cur.execute("PRAGMA foreign_keys=ON;")
+    cur.close()
+
 class DatabaseManager:
     BATCH_SIZE = 25
 
     def __init__(self, database_url: str):
-        # Create engine and tables locally
-        self.engine = create_engine(database_url, echo=False)
+        connect_args = {}
+        if database_url.startswith("sqlite"):
+            connect_args["check_same_thread"] = False
+
+        self.engine = create_engine(
+            database_url,
+            echo=False,
+            future=True,
+            connect_args=connect_args,
+            pool_pre_ping=True,
+        )
+        if database_url.startswith("sqlite"):
+            event.listen(self.engine, "connect", _sqlite_pragmas)
+
         Base.metadata.create_all(self.engine)
-        self.Session = sessionmaker(bind=self.engine)
+        self.Session = sessionmaker(bind=self.engine, future=True, expire_on_commit=False)
 
         # staging area for batching
         self._pending_hr: list[HeartRate] = []
