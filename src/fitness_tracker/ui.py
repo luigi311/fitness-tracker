@@ -69,8 +69,13 @@ class FitnessAppUI(Adw.Application):
         self.cfg = ConfigParser()
         self.database_dsn = ""
 
+        # HR device
         self.device_name = ""
         self.device_address = ""
+
+        # running device (RSCS / Stryd CPS)
+        self.running_device_name = ""
+        self.running_device_address = ""
 
         self.resting_hr: int = 60
         self.max_hr: int = 180
@@ -79,8 +84,13 @@ class FitnessAppUI(Adw.Application):
             self.cfg.read(self.config_file)
             self.database_dsn = self.cfg.get("server", "database_dsn", fallback="")
 
+            # HR device
             self.device_name = self.cfg.get("tracker", "device_name", fallback="")
             self.device_address = self.cfg.get("tracker", "device_address", fallback="")
+
+            # Running device
+            self.running_device_name = self.cfg.get("running", "device_name", fallback="")
+            self.running_device_address = self.cfg.get("running", "device_address", fallback="")
 
             self.resting_hr = self.cfg.getint("personal", "resting_hr", fallback=60)
             self.max_hr = self.cfg.getint("personal", "max_hr", fallback=180)
@@ -99,10 +109,13 @@ class FitnessAppUI(Adw.Application):
             if not self.test_mode:
                 self.recorder = Recorder(
                     on_bpm_update=self.tracker.on_bpm,
+                    on_running_update=self.tracker.on_running,
                     database_url=f"sqlite:///{self.database}",
                     device_name=self.device_name,
                     on_error=self.show_toast,
                     device_address=self.device_address or None,
+                    running_device_name=self.running_device_name,
+                    running_device_address=self.running_device_address or None,
                 )
                 self.recorder.start()
             else:

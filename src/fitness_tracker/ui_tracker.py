@@ -88,10 +88,18 @@ class TrackerPageUI:
         self._bpm_sum = 0.0
         self._bpm_n = 0
         self._bpm_max = 0
+        self._last_bpm = 0
 
         # test-mode signal id
         self._test_source = None
         self._start_monotonic = None
+
+        # live “real sensor” cache for non-test-mode
+        self._rt_mph = 0.0
+        self._rt_cadence = 0
+        self._rt_dist_mi = 0.0
+        self._rt_pace_str = "0:00"
+        self._rt_watts = 0.0
 
     # ---- UI ----
     def build_page(self) -> Gtk.Widget:
@@ -162,8 +170,8 @@ class TrackerPageUI:
         self.ax_pw.set_autoscaley_on(True)
         self.ax_pw.margins(y=0.15)
 
-        (self.line_hr,) = self.ax_hr.plot([], [], lw=2)
-        (self.line_pw,) = self.ax_pw.plot([], [], lw=2, linestyle="--", color="#00FFFF")
+        (self.line_pw,) = self.ax_pw.plot([], [], lw=2, linestyle="--", color="#00FFFF", zorder=1)
+        (self.line_hr,) = self.ax_hr.plot([], [], lw=2, zorder=2)
 
         canvas = FigureCanvas(self.fig)
         canvas.set_vexpand(True)
@@ -272,13 +280,34 @@ class TrackerPageUI:
 
     # ---- Public API used by Recorder (HR only) ----
     def on_bpm(self, delta_ms: float, bpm: int):
-        """Called by Recorder with elapsed-ms + smoothed BPM."""
+        if not self._running:
+            return
+        self._last_bpm = bpm
+        # Keep power from either live running feed or test generator
+        watts = self._current_power_for_time(delta_ms)
+        self._push_sample(delta_ms, bpm, watts)
+
+    # ---- Public API from Recorder (Running metrics) ----
+    def on_running(self, delta_ms: float, speed_mps: float, cadence_spm: int,
+                   distance_m: float | None, power_watts: float | None):
         if not self._running:
             return
 
-        # Keep a monotonic elapsed time in ms
-        t_ms = delta_ms
-        self._push_sample(t_ms, bpm, self._current_power_for_time(t_ms))
+        # Convert to UI units
+        mph = speed_mps * 2.23693629
+        dist_mi = (distance_m or 0.0) * 0.00062137119
+        pace_str = self._pace_from_mph(mph) if mph > 0.01 else "0:00"
+        watts = power_watts if power_watts is not None else 0.0
+
+        # Cache for non-test mode UI cards
+        self._rt_mph = mph
+        self._rt_cadence = int(cadence_spm)
+        self._rt_dist_mi = dist_mi
+        self._rt_pace_str = pace_str
+        self._rt_watts = float(watts)
+
+        # Drive the chart + cards even if HR hasn’t ticked this instant:
+        self._push_sample(delta_ms, self._last_bpm, self._rt_watts)
 
     # ---- Internal: push combined HR/Power sample ----
     def _push_sample(self, t_ms: float, bpm: int, watts: float):
@@ -297,49 +326,45 @@ class TrackerPageUI:
             self._bpms.popleft()
             self._powers.popleft()
 
-        # X in seconds from left edge of window
         x = (np.array(self._times) - cutoff) / 1000.0
         self.line_hr.set_data(x, np.array(self._bpms))
         self.line_pw.set_data(x, np.array(self._powers))
 
+        # Autoscale power only
         if len(self._powers) >= 2:
-            # Robust autoscale with padding; clamps bottom at 0
             p = np.array(self._powers)
             pmin, pmax = float(p.min()), float(p.max())
-            if pmax == pmin:
-                pad = max(10.0, 0.1 * pmax)  # flat line edge case
-            else:
-                pad = max(10.0, 0.1 * (pmax - pmin))
+            pad = max(10.0, 0.1 * (pmax - pmin if pmax != pmin else max(1.0, pmax)))
             self.ax_pw.set_ylim(max(0.0, pmin - pad), pmax + pad)
         else:
-            # fall back early on
             self.ax_pw.set_ylim(0, 500)
 
-        # Update instantaneous cards (distance, pace, etc.)
+        # Timer
         elapsed_s = max(0, int(t_ms // 1_000))
         hh, rem = divmod(elapsed_s, 3600)
         mm, ss = divmod(rem, 60)
         self.timer_block.set_time(f"{hh:02d}:{mm:02d}:{ss:02d}")
 
-        # In non-test mode, keep zeros for non-HR metrics
+        # Update cards
         if self.app.test_mode:
-            mph = self._last_mph
-            cadence = self._last_cadence
-            dist_mi = self._integrated_distance_miles
+            mph = getattr(self, "_last_mph", 0.0)
+            cadence = getattr(self, "_last_cadence", 0)
+            dist_mi = getattr(self, "_integrated_distance_miles", 0.0)
             pace_str = self._pace_from_mph(mph)
+            watts_val = int(watts)
         else:
-            mph = 0.0
-            cadence = 0
-            dist_mi = 0.0
-            pace_str = "0:00"
+            mph = self._rt_mph
+            cadence = self._rt_cadence
+            dist_mi = self._rt_dist_mi
+            pace_str = self._rt_pace_str
+            watts_val = int(self._rt_watts)
 
-        self._set_all_instant(dist_mi, pace_str, cadence, mph, bpm, int(watts))
+        self._set_all_instant(dist_mi, pace_str, cadence, mph, bpm, watts_val)
 
-        # Make HR line tint match the current zone (subtle)
+        # Color HR by zone
         _, _, _, rgb = self._zone_info(self._bpms[-1])
         self.line_hr.set_color(rgb)
 
-        # Redraw
         self.fig.canvas.draw_idle()
 
     def _set_all_instant(self, dist_mi, pace_str, cadence, mph, bpm, watts):

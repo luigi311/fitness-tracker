@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "fitness-tracker"
 version = "1.1.0"
-description = "Polar H10 heart-rate tracker with GTK UI"
+description = "Fitness tracker for logging workings like running and cycling"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
@@ -16,11 +16,6 @@ dependencies = [
     "pygobject>=3.52.3",
     "sqlalchemy>=2.0.41",
 ]
-
-# Enable setuptools to find your package modules
-[tool.setuptools.packages.find]
-where = ["."]
-include = ["fitness_tracker*"]
 
 [dependency-groups]
 dev = [
