@@ -122,7 +122,7 @@ class FitnessAppUI(Adw.Application):
                 self.recorder = None
 
             # Load history
-            threading.Thread(target=self.history.load_history, daemon=True).start()
+            #threading.Thread(target=self.history.load_history, daemon=True).start()
         self.window.present()
 
     def _build_ui(self):

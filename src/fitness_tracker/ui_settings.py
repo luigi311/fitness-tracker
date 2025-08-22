@@ -227,8 +227,7 @@ class SettingsPageUI:
         GLib.idle_add(self.app.toast_overlay.add_toast, toast)
 
         GLib.idle_add(self.app.tracker.fig.canvas.draw_idle)
-        GLib.idle_add(self.app.history.update_history_plot)
-        GLib.idle_add(self.app.history.history_canvas.draw_idle)
+        GLib.idle_add(self.app.history.refresh)
 
     def _on_sync(self, button: Gtk.Button):
         # disable the Settings-page sync button
