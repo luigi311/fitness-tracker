@@ -1,3 +1,5 @@
+"""BLEAKSport: Bluetooth LE support for fitness sensors."""
+
 from .cycling import CyclingSample, CyclingSession
 from .discover import (
     discover_cycling_devices,

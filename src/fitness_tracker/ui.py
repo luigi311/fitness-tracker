@@ -1,10 +1,10 @@
-import threading
 from configparser import ConfigParser
 from os.path import expanduser
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import gi
+from pebble_bridge import PebbleBridge
 
 from fitness_tracker.recorder import Recorder
 from fitness_tracker.ui_history import HistoryPageUI
@@ -81,6 +81,13 @@ class FitnessAppUI(Adw.Application):
         self.resting_hr: int = 60
         self.max_hr: int = 180
 
+        # Pebble Settings
+        self.pebble_enable = True
+        self.pebble_use_emulator = True
+        self.pebble_uuid = "f4fcdac7-f58e-4d22-96bd-48cf98e25d09"  # UUID of pebble app
+        self.pebble_mac = None
+        self.pebble_bridge = None
+
         if self.config_file.exists():
             self.cfg.read(self.config_file)
             self.database_dsn = self.cfg.get("server", "database_dsn", fallback="")
@@ -96,15 +103,55 @@ class FitnessAppUI(Adw.Application):
             self.resting_hr = self.cfg.getint("personal", "resting_hr", fallback=60)
             self.max_hr = self.cfg.getint("personal", "max_hr", fallback=180)
 
+            # Pebble device
+            self.pebble_enable = self.cfg.getboolean(
+                "pebble",
+                "enable",
+                fallback=self.pebble_enable,
+            )
+            self.pebble_use_emulator = self.cfg.getboolean(
+                "pebble",
+                "use_emulator",
+                fallback=self.pebble_use_emulator,
+            )
+            self.pebble_mac = self.cfg.get("pebble", "mac", fallback=None)
+
     def show_toast(self, message: str):
         print(message)
         # Create and display a toast on our overlay
         toast = Adw.Toast.new(message)
         self.toast_overlay.add_toast(toast)
 
+    def apply_pebble_settings(self):
+        # stop any existing bridge
+        if self.pebble_bridge:
+            with contextlib.suppress(Exception):
+                self.pebble_bridge.stop()
+        self.pebble_bridge = None
+
+        if not self.pebble_enable:
+            print("Pebble Disabled")
+            return
+
+        try:
+            self.pebble_bridge = PebbleBridge(
+                app_uuid=self.pebble_uuid,
+                mac=self.pebble_mac,
+                send_hz=2.0,
+                use_emulator=self.pebble_use_emulator,
+            )
+            self.pebble_bridge.start()
+            mode = "Emulator" if self.pebble_use_emulator else "Watch"
+            print(f"Pebble bridge started ({mode})")
+        except Exception as e:
+            self.pebble_bridge = None
+
     def do_activate(self):
         if not self.window:
             self._build_ui()
+
+            # Start/stop Pebble according to config
+            self.apply_pebble_settings()
 
             # Only spin up the BLE recorder when NOT in test mode
             if not self.test_mode:
@@ -123,7 +170,8 @@ class FitnessAppUI(Adw.Application):
                 self.recorder = None
 
             # Load history
-            #threading.Thread(target=self.history.load_history, daemon=True).start()
+            # threading.Thread(target=self.history.load_history, daemon=True).start()
+
         self.window.present()
 
     def _build_ui(self):
@@ -195,6 +243,10 @@ class FitnessAppUI(Adw.Application):
                 with contextlib.suppress(Exception):
                     self.recorder.stop_recording()
                 self.recorder.shutdown()
+
+            if self.pebble_bridge:
+                with contextlib.suppress(Exception):
+                    self.pebble_bridge.stop()
         finally:
             # IMPORTANT: chain up by calling the base class with self
             Adw.Application.do_shutdown(self)

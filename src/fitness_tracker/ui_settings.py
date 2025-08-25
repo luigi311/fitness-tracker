@@ -1,4 +1,5 @@
 import asyncio
+import subprocess
 import threading
 from configparser import ConfigParser
 
@@ -10,21 +11,37 @@ from fitness_tracker.hr_provider import HEART_RATE_SERVICE_UUID
 
 gi.require_versions({"Gtk": "4.0", "Adw": "1"})
 from gi.repository import Adw, GLib, Gtk  # noqa: E402
+import contextlib
 
 
 class SettingsPageUI:
     def __init__(self, app: "FitnessAppUI"):
         self.app = app
 
+        # Widgets to toggle
+        self.pebble_row: Adw.ActionRow | None = None
+        self.pebble_enable_row: Adw.SwitchRow | None = None
+        self.pebble_emu_switch: Adw.SwitchRow | None = None
+        self.pebble_rescan_row: Adw.ActionRow | None = None
+        self.pebble_spinner: Gtk.Spinner | None = None
+        self.pebble_combo: Gtk.ComboBoxText | None = None
+
         # HR
         self.device_map: dict[str, str] = {}
         # running
         self.running_map: dict[str, str] = {}
+        # pebble
+        self.pebble_map: dict[str, str] = {}
 
     def build_page(self) -> Gtk.Widget:
         # General settings group
         prefs_vbox = Adw.PreferencesGroup()
         prefs_vbox.set_title("General Settings")
+
+        # Outer scroller so the page never overflows vertically
+        scroller = Gtk.ScrolledWindow()
+        scroller.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        scroller.set_vexpand(True)
 
         # Database DSN row
         dsn_row = Adw.ActionRow()
@@ -86,6 +103,48 @@ class SettingsPageUI:
         run_rescan_row.add_suffix(self.run_rescan_button)
         run_group.add(run_rescan_row)
 
+        # Pebble
+        pebble_group = Adw.PreferencesGroup()
+        pebble_group.set_title("Pebble Watch")
+
+        # Enable
+        self.pebble_enable_row = Adw.SwitchRow()
+        self.pebble_enable_row.set_title("Enable Pebble")
+        self.pebble_enable_row.set_active(self.app.pebble_enable)
+        pebble_group.add(self.pebble_enable_row)
+
+        # Emulator vs Watch
+        self.pebble_emu_switch = Adw.SwitchRow()
+        self.pebble_emu_switch.set_title("Use Emulator")
+        self.pebble_emu_switch.set_active(self.app.pebble_use_emulator)
+        pebble_group.add(self.pebble_emu_switch)
+
+        self.pebble_row = Adw.ActionRow()
+        self.pebble_row.set_title("Pebble")
+        self.pebble_spinner = Gtk.Spinner()
+        self.pebble_combo = Gtk.ComboBoxText()
+        self.pebble_combo.set_hexpand(False)
+        self.pebble_combo.set_size_request(240, -1)
+        self.pebble_combo.set_halign(Gtk.Align.END)
+        self.pebble_combo.connect("changed", self._on_pebble_combo_changed)
+        self.pebble_row.add_prefix(self.pebble_spinner)
+        self.pebble_row.add_suffix(self.pebble_combo)
+        if hasattr(self.pebble_row, "set_title_lines"):
+            self.pebble_row.set_title_lines(1)
+        pebble_group.add(self.pebble_row)
+
+        # Rescan button
+        self.pebble_rescan_row = Adw.ActionRow()
+        self.pebble_rescan_row.set_title("Rescan Pebble")
+        self.pebble_rescan_button = Gtk.Button(label="Rescan")
+        self.pebble_rescan_button.get_style_context().add_class("suggested-action")
+        self.pebble_rescan_button.connect(
+            "clicked",
+            lambda _b: threading.Thread(target=self._fill_devices_pebble, daemon=True).start(),
+        )
+        self.pebble_rescan_row.add_suffix(self.pebble_rescan_button)
+        pebble_group.add(self.pebble_rescan_row)
+
         # Personal info group (for HR, weight, height, etc.)
         personal_group = Adw.PreferencesGroup()
         personal_group.set_title("Personal Info")
@@ -137,8 +196,11 @@ class SettingsPageUI:
         container.append(prefs_vbox)
         container.append(dev_group)
         container.append(run_group)
+        container.append(pebble_group)
         container.append(personal_group)
         container.append(action_group)
+        # Return the scroller so the page scrolls on small windows
+        scroller.set_child(container)
 
         # Prepopulate HRM
         if self.app.device_name:
@@ -158,7 +220,17 @@ class SettingsPageUI:
         else:
             threading.Thread(target=self._fill_devices_running, daemon=True).start()
 
-        return container
+        # Prepopulate Pebble
+        if self.app.pebble_use_emulator:
+            self.pebble_row.set_subtitle("Emulator mode")
+        else:
+            threading.Thread(target=self._fill_devices_pebble, daemon=True).start()
+
+        # Hide/show Pebble BT rows based on emulator switch to reduce vertical size
+        self.pebble_emu_switch.connect("notify::active", self._on_pebble_mode_toggled)
+        self._on_pebble_mode_toggled(self.pebble_emu_switch)
+
+        return scroller
 
     # ----- Scanners -----
     def _fill_devices_hr(self):
@@ -166,16 +238,20 @@ class SettingsPageUI:
         self.device_row.set_subtitle("Scanning for HRM…")
 
         async def _scan():
-            devices = await BleakScanner.discover(timeout=5.0, service_uuids=[HEART_RATE_SERVICE_UUID])
+            devices = await BleakScanner.discover(
+                timeout=5.0, service_uuids=[HEART_RATE_SERVICE_UUID]
+            )
             mapping = {d.name: d.address for d in devices if d.name}
             names = sorted(mapping.keys())
             GLib.idle_add(self.device_spinner.stop)
             GLib.idle_add(self.device_row.set_subtitle, "" if names else "No HRM found")
             GLib.idle_add(self.device_combo.remove_all)
-            for name in names: GLib.idle_add(self.device_combo.append_text, name)
+            for name in names:
+                GLib.idle_add(self.device_combo.append_text, name)
             if self.app.device_name and self.app.device_name in names:
                 GLib.idle_add(self.device_combo.set_active, names.index(self.app.device_name))
             self.device_map = mapping
+
         asyncio.run(_scan())
 
     def _fill_devices_running(self):
@@ -183,17 +259,115 @@ class SettingsPageUI:
         self.run_row.set_subtitle("Scanning for running devices…")
 
         async def _scan():
-            devices = await discover_running_devices(timeout=5.0)
+            devices = await discover_running_devices(scan_timeout=5.0)
             mapping = {d.name: d.address for d in devices if d.name}
             names = sorted(mapping.keys())
             GLib.idle_add(self.run_spinner.stop)
             GLib.idle_add(self.run_row.set_subtitle, "" if names else "No running devices found")
             GLib.idle_add(self.run_combo.remove_all)
-            for name in names: GLib.idle_add(self.run_combo.append_text, name)
+            for name in names:
+                GLib.idle_add(self.run_combo.append_text, name)
             if self.app.running_device_name and self.app.running_device_name in names:
                 GLib.idle_add(self.run_combo.set_active, names.index(self.app.running_device_name))
             self.running_map = mapping
+
         asyncio.run(_scan())
+
+    def _fill_devices_pebble(self):
+        GLib.idle_add(self.pebble_spinner.start)
+        GLib.idle_add(self.pebble_row.set_subtitle, "Scanning for Pebble…")
+
+        def _scan_cli() -> dict[str, str]:
+            """
+            Use 'bluetoothctl devices' to list
+            known/paired BT Classic devices, filter those with 'Pebble' in the name.
+            Returns {name: mac}.
+            """
+            mapping: dict[str, str] = {}
+            outputs = []
+            with contextlib.suppress(Exception):
+                outputs.append(
+                    subprocess.check_output(["bluetoothctl", "devices"], text=True),
+                )
+
+            for out in outputs:
+                for line in out.splitlines():
+                    # Format: "Device AA:BB:CC:DD:EE:FF Some Name"
+                    parts = line.strip().split(" ", 2)
+                    if len(parts) >= 3 and parts[0] in ("Device", "dev"):
+                        mac = parts[1].strip()
+                        name = parts[2].strip()
+                        if "pebble" in name.lower():
+                            mapping[name] = mac
+            return mapping
+
+        def _uniq_display_names(name_to_mac: dict[str, str]) -> dict[str, str]:
+            """
+            Make human-friendly, MAC-free display names; if duplicates exist,
+            suffix with (2), (3), … to disambiguate.
+            """
+            counts: dict[str, int] = {}
+            for n in name_to_mac:
+                counts[n] = counts.get(n, 0) + 1
+            seen_idx: dict[str, int] = {}
+            display_to_mac: dict[str, str] = {}
+            for name, mac in name_to_mac.items():
+                if counts[name] == 1:
+                    disp = name
+                else:
+                    i = seen_idx.get(name, 0) + 1
+                    seen_idx[name] = i
+                    disp = f"{name} ({i})"
+                display_to_mac[disp] = mac
+            return display_to_mac
+
+        def worker():
+            try:
+                name_to_mac = _scan_cli()
+            except Exception as e:
+                name_to_mac = {}
+                GLib.idle_add(self.pebble_row.set_subtitle, f"Scan failed: {e}")
+
+            display_map = _uniq_display_names(name_to_mac)
+            names = sorted(display_map.keys())
+
+            def _update_ui():
+                self.pebble_spinner.stop()
+                self.pebble_combo.remove_all()
+                for disp in names:
+                    self.pebble_combo.append_text(disp)
+                if not names:
+                    self.pebble_row.set_subtitle("No Pebble devices found")
+                else:
+                    self.pebble_row.set_subtitle("")
+                    # auto-select saved MAC if present
+                    if self.app.pebble_mac:
+                        for i, disp in enumerate(names):
+                            if display_map[disp] == self.app.pebble_mac:
+                                self.pebble_combo.set_active(i)
+                                break
+                self.pebble_map = display_map
+                return False
+
+            GLib.idle_add(_update_ui)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_pebble_combo_changed(self, _combo: Gtk.ComboBoxText):
+        """Show the MAC in a tooltip only (keeps UI clean)."""
+        disp = self.pebble_combo.get_active_text() or ""
+        mac = self.pebble_map.get(disp, "")
+        self.pebble_combo.set_tooltip_text(mac or None)
+
+    def _on_pebble_mode_toggled(self, switch, _pspec=None):
+        """Hide BT selection rows when using the emulator to save space."""
+        use_emu = switch.get_active()
+        if self.pebble_row:
+            self.pebble_row.set_visible(not use_emu)
+            self.pebble_row.set_subtitle("Emulator mode" if use_emu else "")
+        if self.pebble_rescan_row:
+            self.pebble_rescan_row.set_visible(not use_emu)
+        return False
 
     def _on_save_settings(self, _button):
         self.app.database_dsn = self.dsn_entry.get_text()
@@ -208,20 +382,42 @@ class SettingsPageUI:
         if self.app.running_device_name in self.running_map:
             self.app.running_device_address = self.running_map[self.app.running_device_name]
 
+        # Pebble
+        self.app.pebble_enable = self.pebble_enable_row.get_active()
+        self.app.pebble_use_emulator = self.pebble_emu_switch.get_active()
+        if self.app.pebble_use_emulator:
+            self.app.pebble_mac = ""
+        else:
+            disp = self.pebble_combo.get_active_text() or ""
+            self.app.pebble_mac = self.pebble_map.get(disp, self.app.pebble_mac)
+
         self.app.resting_hr = self.rest_spin.get_value_as_int()
         self.app.max_hr = self.max_spin.get_value_as_int()
 
         cfg = ConfigParser()
         cfg["server"] = {"database_dsn": self.app.database_dsn}
-        cfg["tracker"] = {"device_name": self.app.device_name, "device_address": self.app.device_address}
-        cfg["running"] = {  # NEW
+        cfg["tracker"] = {
+            "device_name": self.app.device_name,
+            "device_address": self.app.device_address,
+        }
+        cfg["running"] = {
             "device_name": self.app.running_device_name,
             "device_address": self.app.running_device_address,
         }
+
+        cfg["pebble"] = {
+            "enable": str(self.app.pebble_enable),
+            "use_emulator": str(self.app.pebble_use_emulator),
+            "mac": self.app.pebble_mac or "",
+        }
+
         cfg["personal"] = {"resting_hr": str(self.app.resting_hr), "max_hr": str(self.app.max_hr)}
 
         with open(self.app.config_file, "w") as f:
             cfg.write(f)
+
+        # Apply Pebble settings right away (start/stop bridge without restart)
+        GLib.idle_add(self.app.apply_pebble_settings)
 
         toast = Adw.Toast.new("Settings saved successfully")
         GLib.idle_add(self.app.toast_overlay.add_toast, toast)

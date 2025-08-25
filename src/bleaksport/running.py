@@ -1,42 +1,57 @@
 # bleaksport/running.py
 from __future__ import annotations
-import struct, time, asyncio
+
+import asyncio
+import contextlib
+import struct
+import time
 from dataclasses import dataclass
-from typing import Callable, Optional, Awaitable, List
-from bleak import BleakClient
+from typing import TYPE_CHECKING
+
 from .core import s
 
+if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
+
+    from bleak import BleakClient
+
 # RSCS
-UUID_RSCS      = s(0x1814)
-UUID_RSC_MEAS  = s(0x2A53)
+UUID_RSCS = s(0x1814)
+UUID_RSC_MEAS = s(0x2A53)
 # CPS (power, e.g., Stryd over BLE)
-UUID_CPS       = s(0x1818)
-UUID_CP_MEAS   = s(0x2A63)
+UUID_CPS = s(0x1818)
+UUID_CP_MEAS = s(0x2A63)
+
 
 @dataclass
 class RunningSample:
+    """A fused sample from RSCS and CPS."""
+
     timestamp: float
     speed_mps: float
     cadence_spm: int
-    stride_length_m: Optional[float]
-    total_distance_m: Optional[float]
-    is_running: Optional[bool]
-    power_watts: Optional[int] = None
+    stride_length_m: float | None = None
+    total_distance_m: float | None = None
+    is_running: bool | None = None
+    power_watts: int | None = None
+
 
 class RunningSession:
     """
     A lightweight decoder that subscribes to RSCS (and CPS if present) on an
     already-connected BleakClient and emits RunningSample via callbacks.
     """
-    CHAR_RSCS = UUID_RSC_MEAS
-    CHAR_CPS  = UUID_CP_MEAS
 
-    def __init__(self):
-        self._callbacks: List[Callable[[RunningSample], Optional[Awaitable[None]]]] = []
-        self._last: Optional[RunningSample] = None
+    CHAR_RSCS = UUID_RSC_MEAS
+    CHAR_CPS = UUID_CP_MEAS
+
+    def __init__(self) -> None:
+        self._callbacks: list[Callable[[RunningSample], Awaitable[None] | None]] = []
+        self._last: RunningSample | None = None
         self._started = False
 
-    def on_running(self, cb: Callable[[RunningSample], Optional[Awaitable[None]]]) -> None:
+    def on_running(self, cb: Callable[[RunningSample], Awaitable[None] | None]) -> None:
+        """Register a callback for new samples."""
         self._callbacks.append(cb)
 
     async def start(self, client: BleakClient) -> None:
@@ -46,10 +61,8 @@ class RunningSession:
         # RSCS is required for running metrics
         await client.start_notify(self.CHAR_RSCS, self._handle_rsc)
         # CPS is optional (power)
-        try:
+        with contextlib.suppress(Exception):
             await client.start_notify(self.CHAR_CPS, self._handle_cp)
-        except Exception:
-            pass
         self._started = True
 
     async def stop(self, client: BleakClient) -> None:
@@ -57,16 +70,15 @@ class RunningSession:
         if not self._started:
             return
         for uuid in (self.CHAR_RSCS, self.CHAR_CPS):
-            try:
+            with contextlib.suppress(Exception):
                 await client.stop_notify(uuid)
-            except Exception:
-                pass
         self._started = False
 
     # ---- internal emit ----
     def _emit(self, sample: RunningSample) -> None:
         self._last = sample
-        async def _dispatch():
+
+        async def _dispatch() -> None:
             tasks = []
             for cb in self._callbacks:
                 res = cb(sample)
@@ -74,29 +86,37 @@ class RunningSession:
                     tasks.append(asyncio.create_task(res))
             if tasks:
                 await asyncio.gather(*tasks, return_exceptions=True)
-        asyncio.create_task(_dispatch())
+
+        task = asyncio.create_task(_dispatch())
+        task.add_done_callback(lambda t: t.exception())
 
     # ---- RSCS (0x2A53) ----
-    def _handle_rsc(self, _h: int, data: bytearray):
+    def _handle_rsc(self, _h: int, data: bytearray) -> None:
+        """Parse RSCS Measurement characteristic."""
         ts = time.time()
         off = 0
-        flags = data[off]; off += 1
+        flags = data[off]
+        off += 1
         stride_present = bool(flags & 0x01)
-        dist_present   = bool(flags & 0x02)
-        is_running     = bool(flags & 0x04)
+        dist_present = bool(flags & 0x02)
+        is_running = bool(flags & 0x04)
 
-        speed_raw   = struct.unpack_from("<H", data, off)[0]; off += 2
-        cadence_spm = data[off]; off += 1
-        speed_mps   = speed_raw / 256.0
+        speed_raw = struct.unpack_from("<H", data, off)[0]
+        off += 2
+        cadence_spm = data[off]
+        off += 1
+        speed_mps = speed_raw / 256.0
 
         stride_m = None
         if stride_present:
-            stride_cm = struct.unpack_from("<H", data, off)[0]; off += 2
+            stride_cm = struct.unpack_from("<H", data, off)[0]
+            off += 2
             stride_m = stride_cm / 100.0
 
         total_distance_m = None
         if dist_present:
-            dist_raw = struct.unpack_from("<I", data, off)[0]; off += 4
+            dist_raw = struct.unpack_from("<I", data, off)[0]
+            off += 4
             total_distance_m = dist_raw / 10.0
 
         power = self._last.power_watts if self._last else None
@@ -112,11 +132,13 @@ class RunningSession:
         self._emit(sample)
 
     # ---- CPS (0x2A63) ----
-    def _handle_cp(self, _h: int, data: bytearray):
+    def _handle_cp(self, _h: int, data: bytearray) -> None:
+        """Parse Cycling Power Measurement characteristic (for power only)."""
         ts = time.time()
         off = 0
         off += 2  # flags (unused)
-        inst_power = struct.unpack_from("<h", data, off)[0]; off += 2
+        inst_power = struct.unpack_from("<h", data, off)[0]
+        off += 2
 
         prev = self._last
         sample = RunningSample(
