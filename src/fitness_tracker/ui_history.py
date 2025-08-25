@@ -19,6 +19,7 @@ from gi.repository import GLib, Gtk, Adw  # noqa: E402
 
 # ---------- Helpers / small data structures ----------
 
+
 @dataclasses.dataclass
 class ActivitySummary:
     id: int
@@ -57,12 +58,14 @@ def _format_pace_from_mps(mps: float) -> str:
         ss = 0
     return f"{mm}:{ss:02d} min/mi"
 
+
 def _pace_min_per_mile_from_mps(mps: float) -> float:
     """Return numeric minutes-per-mile for plotting; inf for effectively stopped."""
     if mps <= 0.01:
         return float("inf")
     mph = mps * 2.23693629
     return 60.0 / mph
+
 
 def _format_distance_m(distance_m: Optional[float]) -> str:
     if not distance_m:
@@ -85,6 +88,7 @@ def _tz_aware_localize(dt: datetime.datetime) -> datetime.datetime:
 
 
 # ---------- History Page UI ----------
+
 
 class HistoryPageUI:
     def __init__(self, app: "FitnessAppUI"):
@@ -158,7 +162,7 @@ class HistoryPageUI:
 
         ctrl_wrap = Gtk.FlowBox()
         ctrl_wrap.set_selection_mode(Gtk.SelectionMode.NONE)
-        ctrl_wrap.set_max_children_per_line(2)   # 2 pairs per row when there’s room
+        ctrl_wrap.set_max_children_per_line(2)  # 2 pairs per row when there’s room
         ctrl_wrap.set_row_spacing(8)
         ctrl_wrap.set_column_spacing(12)
 
@@ -251,21 +255,21 @@ class HistoryPageUI:
 
         self.lbl_total_acts = Gtk.Label(label="0 activities")
         self.lbl_total_acts.set_xalign(0)
-        self.lbl_total_dur  = Gtk.Label(label="0:00")
+        self.lbl_total_dur = Gtk.Label(label="0:00")
         self.lbl_total_dur.set_xalign(0)
         self.lbl_total_dist = Gtk.Label(label="—")
         self.lbl_total_dist.set_xalign(0)
-        self.lbl_avg_hr     = Gtk.Label(label="—")
+        self.lbl_avg_hr = Gtk.Label(label="—")
         self.lbl_avg_hr.set_xalign(0)
 
-        grid.attach(self.lbl_scope,             0, 0, 1, 1)
-        grid.attach(self.lbl_total_acts,        1, 0, 1, 1)
-        grid.attach(Gtk.Label(label="Time:"),   0, 1, 1, 1)
-        grid.attach(self.lbl_total_dur,         1, 1, 1, 1)
+        grid.attach(self.lbl_scope, 0, 0, 1, 1)
+        grid.attach(self.lbl_total_acts, 1, 0, 1, 1)
+        grid.attach(Gtk.Label(label="Time:"), 0, 1, 1, 1)
+        grid.attach(self.lbl_total_dur, 1, 1, 1, 1)
         grid.attach(Gtk.Label(label="Distance:"), 0, 2, 1, 1)
-        grid.attach(self.lbl_total_dist,        1, 2, 1, 1)
+        grid.attach(self.lbl_total_dist, 1, 2, 1, 1)
         grid.attach(Gtk.Label(label="Avg HR:"), 0, 3, 1, 1)
-        grid.attach(self.lbl_avg_hr,            1, 3, 1, 1)
+        grid.attach(self.lbl_avg_hr, 1, 3, 1, 1)
 
         frame.set_child(grid)
         return frame
@@ -327,7 +331,11 @@ class HistoryPageUI:
                 st = _tz_aware_localize(act.start_time)
                 if cutoff and st < cutoff:
                     continue
-                et = _tz_aware_localize(act.end_time) if act.end_time else datetime.datetime.now().astimezone()
+                et = (
+                    _tz_aware_localize(act.end_time)
+                    if act.end_time
+                    else datetime.datetime.now().astimezone()
+                )
                 dur_s = max(0, int((et - st).total_seconds()))
 
                 # HR stats
@@ -349,7 +357,9 @@ class HistoryPageUI:
                     dists = [r.total_distance_m for r in runs if r.total_distance_m is not None]
                     distance_m = dists[-1] if dists else None
                     avg_cad = _safe_avg([float(r.cadence_spm) for r in runs])
-                    avg_pow = _safe_avg([float(r.power_watts) for r in runs if r.power_watts is not None])
+                    avg_pow = _safe_avg(
+                        [float(r.power_watts) for r in runs if r.power_watts is not None]
+                    )
                 else:
                     distance_m = None
                     avg_cad = None
@@ -373,8 +383,8 @@ class HistoryPageUI:
         # Sorting
         key_funcs = {
             "date_desc": lambda a: (-a.start_local.timestamp()),
-            "date_asc":  lambda a: (a.start_local.timestamp()),
-            "dur_desc":  lambda a: (-a.duration_s),
+            "date_asc": lambda a: (a.start_local.timestamp()),
+            "dur_desc": lambda a: (-a.duration_s),
             "dist_desc": lambda a: (-(a.distance_m or -1)),
             "avghr_desc": lambda a: (-(a.avg_bpm or -1)),
         }
@@ -539,7 +549,7 @@ class HistoryPageUI:
         ax = self._cmp_ax
         ax.clear()
         # Draw HR zones only for the HR metric
-        hr_mode = (self._cmp_metric_id == "hr")
+        hr_mode = self._cmp_metric_id == "hr"
         self._apply_chart_style(ax, draw_hr_zones=hr_mode)
 
         if self.app.test_mode or not self.app.recorder or not self.selected_ids:
@@ -551,7 +561,9 @@ class HistoryPageUI:
         any_series = False
         with self.app.recorder.db.Session() as session:
             for aid in sorted(self.selected_ids):
-                label = _tz_aware_localize(session.get(Activity, aid).start_time).strftime("%Y-%m-%d %H:%M")
+                label = _tz_aware_localize(session.get(Activity, aid).start_time).strftime(
+                    "%Y-%m-%d %H:%M"
+                )
 
                 if self._cmp_metric_id == "hr":
                     hrs = (
@@ -578,19 +590,37 @@ class HistoryPageUI:
                     xs = [(r.timestamp_ms - t0) / 1000.0 for r in runs]
                     if self._cmp_metric_id == "pace":
                         # minutes per mile; use None when stopped (drops from plot)
-                        vals = [(_pace_min_per_mile_from_mps(float(r.speed_mps)) if r.speed_mps is not None else math.inf) for r in runs]
+                        vals = [
+                            (
+                                _pace_min_per_mile_from_mps(float(r.speed_mps))
+                                if r.speed_mps is not None
+                                else math.inf
+                            )
+                            for r in runs
+                        ]
                         ys = [None if (v is None or math.isinf(v)) else v for v in vals]
                     elif self._cmp_metric_id == "speed":
-                        ys = [((float(r.speed_mps) * 2.23693629) if r.speed_mps is not None else None) for r in runs]
+                        ys = [
+                            ((float(r.speed_mps) * 2.23693629) if r.speed_mps is not None else None)
+                            for r in runs
+                        ]
                     elif self._cmp_metric_id == "power":
-                        ys = [ (float(r.power_watts) if r.power_watts is not None else None) for r in runs]
+                        ys = [
+                            (float(r.power_watts) if r.power_watts is not None else None)
+                            for r in runs
+                        ]
                     elif self._cmp_metric_id == "cadence":
-                        ys = [ float(r.cadence_spm) if r.cadence_spm is not None else None for r in runs]
+                        ys = [
+                            float(r.cadence_spm) if r.cadence_spm is not None else None
+                            for r in runs
+                        ]
                     else:
                         ys = []
 
                     # Drop None values to avoid gaps/NaNs; keep aligned xs
-                    xs, ys = zip(*[(x, y) for x, y in zip(xs, ys) if y is not None]) if ys else ([], [])
+                    xs, ys = (
+                        zip(*[(x, y) for x, y in zip(xs, ys) if y is not None]) if ys else ([], [])
+                    )
                     xs, ys = list(xs), list(ys)
 
                     if not xs:
@@ -607,12 +637,14 @@ class HistoryPageUI:
 
         if max_t > 0:
             ax.set_xlim(0, max_t)
+
             def mmss(x, _pos):
                 m, s = divmod(int(max(0, x)), 60)
                 return f"{m:d}:{s:02d}"
+
             ax.xaxis.set_major_formatter(FuncFormatter(mmss))
             leg = ax.legend(
-                loc='lower right',
+                loc="lower right",
                 frameon=True,
                 ncol=1,
             )
@@ -653,7 +685,11 @@ class HistoryPageUI:
         with self.app.recorder.db.Session() as session:
             act = session.get(Activity, act_id)
             st = _tz_aware_localize(act.start_time)
-            et = _tz_aware_localize(act.end_time) if act.end_time else datetime.datetime.now().astimezone()
+            et = (
+                _tz_aware_localize(act.end_time)
+                if act.end_time
+                else datetime.datetime.now().astimezone()
+            )
             dur_s = max(0, int((et - st).total_seconds()))
 
             hrs = (
@@ -713,7 +749,7 @@ class HistoryPageUI:
         chips.insert(chip(_format_hms(dur_s)), -1)
         chips.insert(chip(_format_distance_m(distance_m)), -1)
         if distance_m and dur_s:
-            chips.insert(chip(_format_pace_from_mps((distance_m or 0)/max(1, dur_s))), -1)
+            chips.insert(chip(_format_pace_from_mps((distance_m or 0) / max(1, dur_s))), -1)
         chips.insert(chip(f"Avg {_format_float(avg_bpm, 'bpm', 0)}"), -1)
         if max_bpm is not None:
             chips.insert(chip(f"Max {max_bpm} bpm"), -1)
@@ -750,6 +786,7 @@ class HistoryPageUI:
             def mmss(x, _pos):
                 m, s = divmod(int(max(0, x)), 60)
                 return f"{m:d}:{s:02d}"
+
             ax.xaxis.set_major_formatter(FuncFormatter(mmss))
 
             canvas = FigureCanvas(fig)
@@ -786,6 +823,7 @@ class HistoryPageUI:
             def mmss(x, _pos):
                 m, s = divmod(int(max(0, x)), 60)
                 return f"{m:d}:{s:02d}"
+
             ax2.xaxis.set_major_formatter(FuncFormatter(mmss))
             canvas2 = FigureCanvas(fig2)
             frm2 = Gtk.Frame(label="Pace")
@@ -844,7 +882,7 @@ class HistoryPageUI:
                     for r in runs:
                         if r.total_distance_m is not None and r.total_distance_m >= mark:
                             dt_s = (r.timestamp_ms - last_t) / 1000.0
-                            seg_m = (r.total_distance_m - last_mark)
+                            seg_m = r.total_distance_m - last_mark
                             pace = _format_pace_from_mps(seg_m / max(dt_s, 1))
                             mm_list.append(pace)
                             last_mark = r.total_distance_m or last_mark

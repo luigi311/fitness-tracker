@@ -6,6 +6,7 @@ from bleakheart import HeartRate
 
 HEART_RATE_SERVICE_UUID = "0000180d-0000-1000-8000-00805f9b34fb"
 
+
 # 16-bit SIG-assigned UUID for the standard Heart Rate Service
 async def connect_and_stream(
     device, frame_queue: asyncio.Queue, on_disconnect: Callable[[str], None]

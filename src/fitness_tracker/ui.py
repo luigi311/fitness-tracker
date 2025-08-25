@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import gi
+from pebble_bridge import PebbleBridge
 
 from fitness_tracker.recorder import Recorder
 from fitness_tracker.ui_history import HistoryPageUI
@@ -96,6 +97,13 @@ class FitnessAppUI(Adw.Application):
             self.resting_hr = self.cfg.getint("personal", "resting_hr", fallback=60)
             self.max_hr = self.cfg.getint("personal", "max_hr", fallback=180)
 
+        # Pebble Settings
+        self.pebble_enable = True  # flip off to disable the bridge
+        self.pebble_use_emulator = True  # True when using emulator
+        self.pebble_uuid = "f4fcdac7-f58e-4d22-96bd-48cf98e25d09"
+        self.pebble_mac = ""  # optional; only for real watch mode
+        self.pebble_bridge = None
+
     def show_toast(self, message: str):
         print(message)
         # Create and display a toast on our overlay
@@ -105,6 +113,19 @@ class FitnessAppUI(Adw.Application):
     def do_activate(self):
         if not self.window:
             self._build_ui()
+
+            # Set up Pebble bridge if enabled
+            if self.pebble_enable and self.pebble_uuid:
+                try:
+                    self.pebble_bridge = PebbleBridge(
+                        self.pebble_mac or "00:00:00:00:00:00",
+                        self.pebble_uuid,
+                        send_hz=2.0,
+                        use_emulator=self.pebble_use_emulator,
+                    )
+                    self.pebble_bridge.start()
+                except Exception as _:
+                    self.pebble_bridge = None
 
             # Only spin up the BLE recorder when NOT in test mode
             if not self.test_mode:
@@ -123,7 +144,8 @@ class FitnessAppUI(Adw.Application):
                 self.recorder = None
 
             # Load history
-            #threading.Thread(target=self.history.load_history, daemon=True).start()
+            # threading.Thread(target=self.history.load_history, daemon=True).start()
+
         self.window.present()
 
     def _build_ui(self):
@@ -195,6 +217,10 @@ class FitnessAppUI(Adw.Application):
                 with contextlib.suppress(Exception):
                     self.recorder.stop_recording()
                 self.recorder.shutdown()
+
+            if getattr(self, "pebble_bridge", None):
+                with contextlib.suppress(Exception):
+                    self.pebble_bridge.stop()
         finally:
             # IMPORTANT: chain up by calling the base class with self
             Adw.Application.do_shutdown(self)

@@ -1,7 +1,7 @@
-from collections import deque
 import math
 import random
 import time
+from collections import deque
 
 import gi
 import numpy as np
@@ -9,7 +9,7 @@ from matplotlib.backends.backend_gtk4agg import FigureCanvasGTK4Agg as FigureCan
 from matplotlib.figure import Figure
 
 gi.require_versions({"Gtk": "4.0", "Adw": "1"})
-from gi.repository import GLib, Gtk, Adw
+from gi.repository import Adw, GLib, Gtk
 
 # ---------- Small reusable “metric cards” ----------
 
@@ -288,8 +288,14 @@ class TrackerPageUI:
         self._push_sample(delta_ms, bpm, watts)
 
     # ---- Public API from Recorder (Running metrics) ----
-    def on_running(self, delta_ms: float, speed_mps: float, cadence_spm: int,
-                   distance_m: float | None, power_watts: float | None):
+    def on_running(
+        self,
+        delta_ms: float,
+        speed_mps: float,
+        cadence_spm: int,
+        distance_m: float | None,
+        power_watts: float | None,
+    ):
         if not self._running:
             return
 
@@ -358,6 +364,23 @@ class TrackerPageUI:
             dist_mi = self._rt_dist_mi
             pace_str = self._rt_pace_str
             watts_val = int(self._rt_watts)
+
+        # If self.app.pebble_bridge is set up, send update
+        if self.app.pebble_bridge:
+            speed_mps = float(mph) * 0.44704
+            dist_m = float(dist_mi) / 0.00062137119  # meters
+
+            print(
+                f"Pebble update: HR={bpm} bpm, Speed={speed_mps:.2f} m/s, dist={dist_m:.1f} m, power={watts_val} W"
+            )
+            self.app.pebble_bridge.update(
+                hr=int(bpm),
+                pace_ms=float(speed_mps),
+                cadence=int(cadence),
+                dist_m=float(dist_m),
+                status=1,
+                power_w=int(watts_val),
+            )
 
         self._set_all_instant(dist_mi, pace_str, cadence, mph, bpm, watts_val)
 

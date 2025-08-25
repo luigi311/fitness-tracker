@@ -51,6 +51,7 @@ class HeartRate(Base):
         Index("ix_hr_activity_time", "activity_id", "timestamp_ms"),
     )
 
+
 class RunningMetrics(Base):
     __tablename__ = "running_metrics"
 
@@ -59,11 +60,11 @@ class RunningMetrics(Base):
     timestamp_ms = Column(BigInteger, nullable=False)
 
     # core metrics
-    speed_mps = Column(Float, nullable=False)           # RSCS speed (m/s)
-    cadence_spm = Column(Integer, nullable=False)       # steps per minute
-    stride_length_m = Column(Float)                     # optional
-    total_distance_m = Column(Float)                    # optional
-    power_watts = Column(Float)                         # optional (Stryd CPS if present)
+    speed_mps = Column(Float, nullable=False)  # RSCS speed (m/s)
+    cadence_spm = Column(Integer, nullable=False)  # steps per minute
+    stride_length_m = Column(Float)  # optional
+    total_distance_m = Column(Float)  # optional
+    power_watts = Column(Float)  # optional (Stryd CPS if present)
 
     # indexes to query by activity and time
     __table_args__ = (
@@ -71,12 +72,14 @@ class RunningMetrics(Base):
         Index("ix_run_activity_time", "activity_id", "timestamp_ms"),
     )
 
+
 def _sqlite_pragmas(dbapi_con, _con_record):
     cur = dbapi_con.cursor()
     cur.execute("PRAGMA journal_mode=WAL;")
     cur.execute("PRAGMA synchronous=NORMAL;")
     cur.execute("PRAGMA foreign_keys=ON;")
     cur.close()
+
 
 class DatabaseManager:
     BATCH_SIZE = 25
@@ -200,7 +203,8 @@ class DatabaseManager:
                 existing = {t for (t,) in remote.query(Activity.start_time).all()}
                 existing = {t.astimezone(ZoneInfo("UTC")) for t in existing}
                 new_batch = [
-                    act for act in batch
+                    act
+                    for act in batch
                     if act.start_time.replace(tzinfo=ZoneInfo("UTC")) not in existing
                 ]
                 for act in new_batch:
@@ -257,10 +261,13 @@ class DatabaseManager:
                         )
 
             batch = []
-            for act in local.query(Activity).order_by(Activity.start_time).yield_per(SYNC_BATCH_SIZE):
+            for act in (
+                local.query(Activity).order_by(Activity.start_time).yield_per(SYNC_BATCH_SIZE)
+            ):
                 batch.append(act)
                 if len(batch) >= SYNC_BATCH_SIZE:
-                    _sync_batch_l2r(batch); batch.clear()
+                    _sync_batch_l2r(batch)
+                    batch.clear()
             if batch:
                 _sync_batch_l2r(batch)
             remote.commit()
@@ -270,7 +277,8 @@ class DatabaseManager:
                 existing = {t for (t,) in local.query(Activity.start_time).all()}
                 existing = {t.replace(tzinfo=ZoneInfo("UTC")) for t in existing}
                 new_batch = [
-                    act for act in batch
+                    act
+                    for act in batch
                     if act.start_time.astimezone(ZoneInfo("UTC")) not in existing
                 ]
                 for act in new_batch:
@@ -325,10 +333,13 @@ class DatabaseManager:
                         )
 
             batch = []
-            for act in remote.query(Activity).order_by(Activity.start_time).yield_per(SYNC_BATCH_SIZE):
+            for act in (
+                remote.query(Activity).order_by(Activity.start_time).yield_per(SYNC_BATCH_SIZE)
+            ):
                 batch.append(act)
                 if len(batch) >= SYNC_BATCH_SIZE:
-                    _sync_batch_r2l(batch); batch.clear()
+                    _sync_batch_r2l(batch)
+                    batch.clear()
             if batch:
                 _sync_batch_r2l(batch)
             local.commit()

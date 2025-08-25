@@ -3,12 +3,12 @@ import contextlib
 import re
 import threading
 from collections import deque
+from collections.abc import Callable
 from statistics import median
-from typing import Callable, Optional
 
 import gi
-from bleak import BleakError, BleakScanner
-from bleaksport.running import RunningSession, RunningSample
+from bleak import BleakClient, BleakError, BleakScanner
+from bleaksport.running import RunningSample, RunningSession
 
 from fitness_tracker.database import DatabaseManager
 from fitness_tracker.hr_provider import HEART_RATE_SERVICE_UUID, connect_and_stream
@@ -28,11 +28,12 @@ class Recorder:
         on_error: Callable[[str], None],
         device_address: str | None = None,
         *,
-        on_running_update: Optional[Callable[[float, float, int, float | None, float | None], None]] = None,
+        on_running_update: Callable[[float, float, int, float | None, float | None], None]
+        | None = None,
         running_device_name: str = "",
         running_device_address: str | None = None,
     ):
-        self._ble_lock = asyncio.Lock() # Lock for BLE operations
+        self._ble_lock = asyncio.Lock()  # Lock for BLE operations
         self._thread: threading.Thread | None = None
 
         # Cache resolved addresses so we don’t keep scanning
@@ -68,8 +69,10 @@ class Recorder:
     def shutdown(self):
         if not self.loop.is_running():
             return
+
         def _stop():
             self._stop_event.set()
+
         self.loop.call_soon_threadsafe(_stop)
         if self._thread:
             self._thread.join(timeout=3)
@@ -107,10 +110,7 @@ class Recorder:
 
         # Persist to the DB if recording
         if self._recording:
-            self.db.insert_heart_rate(
-                self._activity_id, delta_ms, smoothed_bpm, rr, energy
-            )
-
+            self.db.insert_heart_rate(self._activity_id, delta_ms, smoothed_bpm, rr, energy)
 
     # --- Running handling ---
     def _handle_running_sample(self, sample: RunningSample):
@@ -136,7 +136,9 @@ class Recorder:
                 delta_ms,
                 speed_mps=float(speed_mps),
                 cadence_spm=int(cadence),
-                stride_length_m=(float(sample.stride_length_m) if sample.stride_length_m is not None else None),
+                stride_length_m=(
+                    float(sample.stride_length_m) if sample.stride_length_m is not None else None
+                ),
                 total_distance_m=(float(dist_m) if dist_m is not None else None),
                 power_watts=(float(watts) if watts is not None else None),
             )
@@ -148,23 +150,22 @@ class Recorder:
         tasks = [asyncio.create_task(self._hr_loop())]
         if self.running_device_name or self.running_device_address:
             tasks.append(asyncio.create_task(self._running_loop()))
-        await asyncio.wait(
-            tasks,
-            return_when=asyncio.FIRST_COMPLETED
-        )
+        await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
         for t in tasks:
             t.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await t
 
-    async def _hr_loop(self):
+    async def _hr_loop(self) -> None:
         target = None
         while not self._stop_event.is_set():
             try:
                 # Resolve address ONCE (if not provided)
                 if not self._hr_addr_cache and self.device_name:
                     async with self._ble_lock:
-                        devices = await BleakScanner.discover(timeout=5.0, service_uuids=[HEART_RATE_SERVICE_UUID])
+                        devices = await BleakScanner.discover(
+                            timeout=5.0, service_uuids=[HEART_RATE_SERVICE_UUID]
+                        )
                     cand = next((d for d in devices if d.name == self.device_name), None)
                     if cand:
                         self._hr_addr_cache = cand.address
@@ -202,7 +203,7 @@ class Recorder:
 
             await asyncio.sleep(2.0)
 
-    async def _running_loop(self):
+    async def _running_loop(self) -> None:
         session = RunningSession()
         session.on_running(self._handle_running_sample)
 
@@ -215,7 +216,8 @@ class Recorder:
                 if not self._run_addr_cache and self.running_device_name:
                     async with self._ble_lock:
                         dev = await BleakScanner.find_device_by_filter(
-                            lambda d, _: bool(d.name) and self.running_device_name.lower() in d.name.lower()
+                            lambda d, _: bool(d.name)
+                            and self.running_device_name.lower() in d.name.lower()
                         )
                     if dev:
                         self._run_addr_cache = dev.address
@@ -229,30 +231,33 @@ class Recorder:
 
                 # Try to find current device presence
                 async with self._ble_lock:
-                    target = await BleakScanner.find_device_by_address(addr, timeout=5.0)
+                    if addr:
+                        target = await BleakScanner.find_device_by_address(addr, timeout=5.0)
 
                 if not target:
                     await asyncio.sleep(3.0)
                     continue
 
                 # Connect and subscribe (session handles start/stop of notifications)
-                from bleak import BleakClient  # local import to avoid top-level plugin deps
-                def _running_disconnect(_client):
+                def _running_disconnect(_client) -> None:
                     self._on_ble_error("⚠️  Running device disconnected")
 
                 try:
                     async with self._ble_lock:
-                        bleak_client = BleakClient(addr, disconnected_callback=_running_disconnect)
-                        await bleak_client.connect()
-                        await session.start(bleak_client)
+                        if addr:
+                            bleak_client = BleakClient(
+                                addr, disconnected_callback=_running_disconnect
+                            )
+                            await bleak_client.connect()
+                            await session.start(bleak_client)
                 except BleakError as e:
                     if INPROGRESS_RE.search(str(e)):
                         await asyncio.sleep(1.5)
                         continue
-                    else:
-                        self._on_ble_error(f"🔄  Running BLE error, will retry: {e}")
-                        await asyncio.sleep(2.0)
-                        continue
+
+                    self._on_ble_error(f"🔄  Running BLE error, will retry: {e}")
+                    await asyncio.sleep(2.0)
+                    continue
 
                 # Stay connected until it drops
                 while bleak_client and bleak_client.is_connected:
@@ -267,18 +272,14 @@ class Recorder:
                 try:
                     async with self._ble_lock:
                         if bleak_client:
-                            try:
+                            with contextlib.suppress(Exception):
                                 await session.stop(bleak_client)
-                            except Exception:
-                                pass
-                            try:
+                            with contextlib.suppress(Exception):
                                 await bleak_client.disconnect()
-                            except Exception:
-                                pass
-                except Exception:
-                    pass
+                except Exception as e:
+                    self._on_ble_error(f"Running cleanup error: {e}")
 
             await asyncio.sleep(2.0)
 
-    def _on_ble_error(self, msg: str):
+    def _on_ble_error(self, msg: str) -> None:
         GLib.idle_add(lambda: self.on_error(msg))

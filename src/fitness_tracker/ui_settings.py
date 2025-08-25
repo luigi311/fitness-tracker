@@ -166,16 +166,20 @@ class SettingsPageUI:
         self.device_row.set_subtitle("Scanning for HRM…")
 
         async def _scan():
-            devices = await BleakScanner.discover(timeout=5.0, service_uuids=[HEART_RATE_SERVICE_UUID])
+            devices = await BleakScanner.discover(
+                timeout=5.0, service_uuids=[HEART_RATE_SERVICE_UUID]
+            )
             mapping = {d.name: d.address for d in devices if d.name}
             names = sorted(mapping.keys())
             GLib.idle_add(self.device_spinner.stop)
             GLib.idle_add(self.device_row.set_subtitle, "" if names else "No HRM found")
             GLib.idle_add(self.device_combo.remove_all)
-            for name in names: GLib.idle_add(self.device_combo.append_text, name)
+            for name in names:
+                GLib.idle_add(self.device_combo.append_text, name)
             if self.app.device_name and self.app.device_name in names:
                 GLib.idle_add(self.device_combo.set_active, names.index(self.app.device_name))
             self.device_map = mapping
+
         asyncio.run(_scan())
 
     def _fill_devices_running(self):
@@ -183,16 +187,18 @@ class SettingsPageUI:
         self.run_row.set_subtitle("Scanning for running devices…")
 
         async def _scan():
-            devices = await discover_running_devices(timeout=5.0)
+            devices = await discover_running_devices(scan_timeout=5.0)
             mapping = {d.name: d.address for d in devices if d.name}
             names = sorted(mapping.keys())
             GLib.idle_add(self.run_spinner.stop)
             GLib.idle_add(self.run_row.set_subtitle, "" if names else "No running devices found")
             GLib.idle_add(self.run_combo.remove_all)
-            for name in names: GLib.idle_add(self.run_combo.append_text, name)
+            for name in names:
+                GLib.idle_add(self.run_combo.append_text, name)
             if self.app.running_device_name and self.app.running_device_name in names:
                 GLib.idle_add(self.run_combo.set_active, names.index(self.app.running_device_name))
             self.running_map = mapping
+
         asyncio.run(_scan())
 
     def _on_save_settings(self, _button):
@@ -213,7 +219,10 @@ class SettingsPageUI:
 
         cfg = ConfigParser()
         cfg["server"] = {"database_dsn": self.app.database_dsn}
-        cfg["tracker"] = {"device_name": self.app.device_name, "device_address": self.app.device_address}
+        cfg["tracker"] = {
+            "device_name": self.app.device_name,
+            "device_address": self.app.device_address,
+        }
         cfg["running"] = {  # NEW
             "device_name": self.app.running_device_name,
             "device_address": self.app.running_device_address,
