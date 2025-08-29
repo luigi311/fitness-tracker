@@ -4,6 +4,7 @@ from configparser import ConfigParser
 
 import gi
 from bleak import BleakScanner
+from bleaksport.discover import discover_running_devices
 
 from fitness_tracker.hr_provider import HEART_RATE_SERVICE_UUID
 
@@ -15,8 +16,10 @@ class SettingsPageUI:
     def __init__(self, app: "FitnessAppUI"):
         self.app = app
 
+        # HR
         self.device_map: dict[str, str] = {}
-        self.device_choices = []
+        # running
+        self.running_map: dict[str, str] = {}
 
     def build_page(self) -> Gtk.Widget:
         # General settings group
@@ -32,16 +35,12 @@ class SettingsPageUI:
         dsn_row.add_suffix(self.dsn_entry)
         prefs_vbox.add(dsn_row)
 
-        # Tracker device group
+        # ----- Heart-rate device group -----
         dev_group = Adw.PreferencesGroup()
-        dev_group.set_title("Tracker Device")
-
-        # Device selection row with spinner + combo
+        dev_group.set_title("Heart Rate Monitor")
         self.device_row = Adw.ActionRow()
-        self.device_row.set_title("Select Device")
+        self.device_row.set_title("Select HRM")
         self.device_spinner = Gtk.Spinner()
-        self.device_spinner.set_halign(Gtk.Align.START)
-        # start spinner only if no preselected device
         if not self.app.device_name:
             self.device_spinner.start()
         self.device_combo = Gtk.ComboBoxText()
@@ -50,17 +49,42 @@ class SettingsPageUI:
         self.device_row.add_suffix(self.device_combo)
         dev_group.add(self.device_row)
 
-        # Rescan row
         rescan_row = Adw.ActionRow()
-        rescan_row.set_title("Rescan for Devices")
+        rescan_row.set_title("Rescan HRM")
         self.rescan_button = Gtk.Button(label="Rescan")
         self.rescan_button.get_style_context().add_class("suggested-action")
         self.rescan_button.connect(
             "clicked",
-            lambda _: threading.Thread(target=self._fill_devices, daemon=True).start(),
+            lambda _: threading.Thread(target=self._fill_devices_hr, daemon=True).start(),
         )
         rescan_row.add_suffix(self.rescan_button)
         dev_group.add(rescan_row)
+
+        # ----- Running device group (RSCS / Stryd CPS) -----
+        run_group = Adw.PreferencesGroup()
+        run_group.set_title("Running Device")
+
+        self.run_row = Adw.ActionRow()
+        self.run_row.set_title("Select Running Device")
+        self.run_spinner = Gtk.Spinner()
+        if not self.app.running_device_name:
+            self.run_spinner.start()
+        self.run_combo = Gtk.ComboBoxText()
+        self.run_combo.set_hexpand(True)
+        self.run_row.add_prefix(self.run_spinner)
+        self.run_row.add_suffix(self.run_combo)
+        run_group.add(self.run_row)
+
+        run_rescan_row = Adw.ActionRow()
+        run_rescan_row.set_title("Rescan Running Devices")
+        self.run_rescan_button = Gtk.Button(label="Rescan")
+        self.run_rescan_button.get_style_context().add_class("suggested-action")
+        self.run_rescan_button.connect(
+            "clicked",
+            lambda _: threading.Thread(target=self._fill_devices_running, daemon=True).start(),
+        )
+        run_rescan_row.add_suffix(self.run_rescan_button)
+        run_group.add(run_rescan_row)
 
         # Personal info group (for HR, weight, height, etc.)
         personal_group = Adw.PreferencesGroup()
@@ -112,83 +136,98 @@ class SettingsPageUI:
         container.set_margin_end(12)
         container.append(prefs_vbox)
         container.append(dev_group)
+        container.append(run_group)
         container.append(personal_group)
         container.append(action_group)
 
-        # If a device was saved in config, pre-populate and skip initial scan
+        # Prepopulate HRM
         if self.app.device_name:
-            # stop spinner and set subtitle
             self.device_spinner.stop()
-            # populate combo and select
             self.device_combo.append_text(self.app.device_name)
             self.device_combo.set_active(0)
-            # map remains empty until explicit rescan
             self.device_map = {self.app.device_name: self.app.device_address}
         else:
-            # Kick off initial scan in background
-            threading.Thread(target=self._fill_devices, daemon=True).start()
+            threading.Thread(target=self._fill_devices_hr, daemon=True).start()
+
+        # Prepopulate Running
+        if self.app.running_device_name:
+            self.run_spinner.stop()
+            self.run_combo.append_text(self.app.running_device_name)
+            self.run_combo.set_active(0)
+            self.running_map = {self.app.running_device_name: self.app.running_device_address}
+        else:
+            threading.Thread(target=self._fill_devices_running, daemon=True).start()
 
         return container
 
-    def _fill_devices(self):
-        # Indicate scanning
+    # ----- Scanners -----
+    def _fill_devices_hr(self):
         GLib.idle_add(self.device_spinner.start)
-        self.device_row.set_subtitle("Scanning for devices…")
+        self.device_row.set_subtitle("Scanning for HRM…")
 
         async def _scan():
-            devices = await BleakScanner.discover(
-                timeout=5.0,
-                service_uuids=[HEART_RATE_SERVICE_UUID],
-            )
+            devices = await BleakScanner.discover(timeout=5.0, service_uuids=[HEART_RATE_SERVICE_UUID])
             mapping = {d.name: d.address for d in devices if d.name}
-
             names = sorted(mapping.keys())
-            # Update UI
             GLib.idle_add(self.device_spinner.stop)
-            subtitle = "No supported devices found" if not names else ""
-            GLib.idle_add(self.device_row.set_subtitle, subtitle)
+            GLib.idle_add(self.device_row.set_subtitle, "" if names else "No HRM found")
             GLib.idle_add(self.device_combo.remove_all)
-            for name in names:
-                GLib.idle_add(self.device_combo.append_text, name)
-            # restore selection if saved
+            for name in names: GLib.idle_add(self.device_combo.append_text, name)
             if self.app.device_name and self.app.device_name in names:
-                idx = names.index(self.app.device_name)
-                GLib.idle_add(self.device_combo.set_active, idx)
+                GLib.idle_add(self.device_combo.set_active, names.index(self.app.device_name))
             self.device_map = mapping
+        asyncio.run(_scan())
 
+    def _fill_devices_running(self):
+        GLib.idle_add(self.run_spinner.start)
+        self.run_row.set_subtitle("Scanning for running devices…")
+
+        async def _scan():
+            devices = await discover_running_devices(timeout=5.0)
+            mapping = {d.name: d.address for d in devices if d.name}
+            names = sorted(mapping.keys())
+            GLib.idle_add(self.run_spinner.stop)
+            GLib.idle_add(self.run_row.set_subtitle, "" if names else "No running devices found")
+            GLib.idle_add(self.run_combo.remove_all)
+            for name in names: GLib.idle_add(self.run_combo.append_text, name)
+            if self.app.running_device_name and self.app.running_device_name in names:
+                GLib.idle_add(self.run_combo.set_active, names.index(self.app.running_device_name))
+            self.running_map = mapping
         asyncio.run(_scan())
 
     def _on_save_settings(self, _button):
-        # Persist database DSN and tracker selection
         self.app.database_dsn = self.dsn_entry.get_text()
+
+        # HR
         self.app.device_name = self.device_combo.get_active_text() or ""
         if self.app.device_name in self.device_map:
             self.app.device_address = self.device_map[self.app.device_name]
+
+        # Running
+        self.app.running_device_name = self.run_combo.get_active_text() or ""
+        if self.app.running_device_name in self.running_map:
+            self.app.running_device_address = self.running_map[self.app.running_device_name]
 
         self.app.resting_hr = self.rest_spin.get_value_as_int()
         self.app.max_hr = self.max_spin.get_value_as_int()
 
         cfg = ConfigParser()
-
         cfg["server"] = {"database_dsn": self.app.database_dsn}
-        cfg["tracker"] = {
-            "device_name": self.app.device_name,
-            "device_address": self.app.device_address,
+        cfg["tracker"] = {"device_name": self.app.device_name, "device_address": self.app.device_address}
+        cfg["running"] = {  # NEW
+            "device_name": self.app.running_device_name,
+            "device_address": self.app.running_device_address,
         }
         cfg["personal"] = {"resting_hr": str(self.app.resting_hr), "max_hr": str(self.app.max_hr)}
 
         with open(self.app.config_file, "w") as f:
             cfg.write(f)
 
-        # Confirmation toast
         toast = Adw.Toast.new("Settings saved successfully")
         GLib.idle_add(self.app.toast_overlay.add_toast, toast)
 
-        # Immediately refresh the live‐tracker axes so zone bands update
-        GLib.idle_add(self.app.tracker.configure_axes)
         GLib.idle_add(self.app.tracker.fig.canvas.draw_idle)
-        GLib.idle_add(self.app.history.update_history_plot)
-        GLib.idle_add(self.app.history.history_canvas.draw_idle)
+        GLib.idle_add(self.app.history.refresh)
 
     def _on_sync(self, button: Gtk.Button):
         # disable the Settings-page sync button

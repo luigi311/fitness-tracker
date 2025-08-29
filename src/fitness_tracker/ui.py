@@ -13,6 +13,7 @@ from fitness_tracker.ui_tracker import TrackerPageUI
 
 gi.require_versions({"Gtk": "4.0", "Adw": "1"})
 from gi.repository import Adw  # noqa: E402
+import contextlib
 
 if TYPE_CHECKING:
     import datetime
@@ -25,8 +26,9 @@ _IS_DARK = _style_manager.get_dark()
 
 
 class FitnessAppUI(Adw.Application):
-    def __init__(self):
+    def __init__(self, test_mode: bool = False):
         super().__init__(application_id="io.Luigi311.Fitness")
+        self.test_mode = test_mode
 
         if _IS_DARK:
             self.DARK_BG = "#2e3436"
@@ -68,8 +70,13 @@ class FitnessAppUI(Adw.Application):
         self.cfg = ConfigParser()
         self.database_dsn = ""
 
+        # HR device
         self.device_name = ""
         self.device_address = ""
+
+        # running device (RSCS / Stryd CPS)
+        self.running_device_name = ""
+        self.running_device_address = ""
 
         self.resting_hr: int = 60
         self.max_hr: int = 180
@@ -78,8 +85,13 @@ class FitnessAppUI(Adw.Application):
             self.cfg.read(self.config_file)
             self.database_dsn = self.cfg.get("server", "database_dsn", fallback="")
 
+            # HR device
             self.device_name = self.cfg.get("tracker", "device_name", fallback="")
             self.device_address = self.cfg.get("tracker", "device_address", fallback="")
+
+            # Running device
+            self.running_device_name = self.cfg.get("running", "device_name", fallback="")
+            self.running_device_address = self.cfg.get("running", "device_address", fallback="")
 
             self.resting_hr = self.cfg.getint("personal", "resting_hr", fallback=60)
             self.max_hr = self.cfg.getint("personal", "max_hr", fallback=180)
@@ -93,16 +105,25 @@ class FitnessAppUI(Adw.Application):
     def do_activate(self):
         if not self.window:
             self._build_ui()
-            self.recorder = Recorder(
-                on_bpm_update=self.tracker.on_bpm,
-                database_url=f"sqlite:///{self.database}",
-                device_name=self.device_name,
-                on_error=self.show_toast,
-                device_address=self.device_address or None,
-            )
-            self.recorder.start()
-            # Load history after recorder is initialized
-            threading.Thread(target=self.history.load_history, daemon=True).start()
+
+            # Only spin up the BLE recorder when NOT in test mode
+            if not self.test_mode:
+                self.recorder = Recorder(
+                    on_bpm_update=self.tracker.on_bpm,
+                    on_running_update=self.tracker.on_running,
+                    database_url=f"sqlite:///{self.database}",
+                    device_name=self.device_name,
+                    on_error=self.show_toast,
+                    device_address=self.device_address or None,
+                    running_device_name=self.running_device_name,
+                    running_device_address=self.running_device_address or None,
+                )
+                self.recorder.start()
+            else:
+                self.recorder = None
+
+            # Load history
+            #threading.Thread(target=self.history.load_history, daemon=True).start()
         self.window.present()
 
     def _build_ui(self):
@@ -119,7 +140,6 @@ class FitnessAppUI(Adw.Application):
         self.stack = Adw.ViewStack()
         self.stack.set_vexpand(True)
 
-        # instead of calling your own private _build_* methods, do:
         self.tracker = TrackerPageUI(self)
         self.history = HistoryPageUI(self)
         self.settings = SettingsPageUI(self)
@@ -167,3 +187,14 @@ class FitnessAppUI(Adw.Application):
         alpha = 0.25
         for (_, (low, high)), color in zip(zones.items(), colors):
             ax.axhspan(low, high, facecolor=color, alpha=alpha)
+
+    def do_shutdown(self):
+        # Cleanly stop recorder/BLE loop before app teardown
+        try:
+            if self.recorder:
+                with contextlib.suppress(Exception):
+                    self.recorder.stop_recording()
+                self.recorder.shutdown()
+        finally:
+            # IMPORTANT: chain up by calling the base class with self
+            Adw.Application.do_shutdown(self)
