@@ -47,9 +47,14 @@ jobs:
       - name: "Build"
         run: uv build
 
+      # Export deps to use for pex due to libpebble2 custom repo
+      - name: "Export Deps"
+        run: uv export --format requirements-txt --no-emit-project --no-dev --frozen --no-hashes -o dist/requirements.txt
+
       - name: "Create PEX"
         run: |
           uvx --python .venv/bin/python pex \
+            -r dist/requirements.txt \
             dist/fitness_tracker-*.whl \
             -e fitness_tracker.main:main \
             -o dist/fitness_tracker.pex \
