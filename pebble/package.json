@@ -1,0 +1,33 @@
+{
+  "name": "Fitness-Tracker",
+  "author": "MakeAwesomeHappen",
+  "version": "1.0.0",
+  "keywords": ["pebble-app"],
+  "private": true,
+  "dependencies": {},
+  "pebble": {
+    "displayName": "Fitness",
+    "uuid": "f4fcdac7-f58e-4d22-96bd-48cf98e25d09",
+    "sdkVersion": "3",
+    "enableMultiJS": true,
+    "targetPlatforms": [
+      "aplite",
+      "basalt",
+      "diorite",
+      "emery"
+    ],
+    "watchapp": {
+      "watchface": false
+    },
+    "resources": {
+      "media": []
+    },
+    "messageKeys": [
+      "KEY_HR",
+      "KEY_PACE",
+      "KEY_CADENCE",
+      "KEY_DISTANCE",
+      "KEY_STATUS"
+    ]
+  }
+}

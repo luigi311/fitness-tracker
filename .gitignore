@@ -1,5 +1,6 @@
 **.db
 *.sh
+*.lock-*
 
 # Python-generated files
 __pycache__/
