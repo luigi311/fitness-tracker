@@ -25,6 +25,8 @@ class SettingsPageUI:
         self.pebble_rescan_row: Adw.ActionRow | None = None
         self.pebble_spinner: Gtk.Spinner | None = None
         self.pebble_combo: Gtk.ComboBoxText | None = None
+        self.pebble_port_row: Adw.ActionRow | None = None
+        self.pebble_port_spin: Gtk.SpinButton | None = None
 
         # HR
         self.device_map: dict[str, str] = {}
@@ -132,6 +134,16 @@ class SettingsPageUI:
         if hasattr(self.pebble_row, "set_title_lines"):
             self.pebble_row.set_title_lines(1)
         pebble_group.add(self.pebble_row)
+
+        # Emulator port (only visible when using emulator)
+        self.pebble_port_row = Adw.ActionRow()
+        self.pebble_port_row.set_title("Emulator Port")
+        self.pebble_port_spin = Gtk.SpinButton.new_with_range(1, 65535, 1)
+        self.pebble_port_spin.set_value(self.app.pebble_port or 47527)
+        self.pebble_port_spin.set_hexpand(False)
+        self.pebble_port_spin.set_width_chars(6)
+        self.pebble_port_row.add_suffix(self.pebble_port_spin)
+        pebble_group.add(self.pebble_port_row)
 
         # Rescan button
         self.pebble_rescan_row = Adw.ActionRow()
@@ -367,6 +379,8 @@ class SettingsPageUI:
             self.pebble_row.set_subtitle("Emulator mode" if use_emu else "")
         if self.pebble_rescan_row:
             self.pebble_rescan_row.set_visible(not use_emu)
+        if self.pebble_port_row:
+            self.pebble_port_row.set_visible(use_emu)
         return False
 
     def _on_save_settings(self, _button):
@@ -385,6 +399,8 @@ class SettingsPageUI:
         # Pebble
         self.app.pebble_enable = self.pebble_enable_row.get_active()
         self.app.pebble_use_emulator = self.pebble_emu_switch.get_active()
+        if self.pebble_port_spin:
+            self.app.pebble_port = self.pebble_port_spin.get_value_as_int()
         if self.app.pebble_use_emulator:
             self.app.pebble_mac = ""
         else:
@@ -409,6 +425,7 @@ class SettingsPageUI:
             "enable": str(self.app.pebble_enable),
             "use_emulator": str(self.app.pebble_use_emulator),
             "mac": self.app.pebble_mac or "",
+            "port": str(self.app.pebble_port),
         }
 
         cfg["personal"] = {"resting_hr": str(self.app.resting_hr), "max_hr": str(self.app.max_hr)}

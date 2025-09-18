@@ -28,6 +28,7 @@ class PebbleBridge:
         send_hz: float = 1.0,
         *,
         use_emulator: bool = False,
+        port: int = 47527,
     ) -> None:
         self.mac = mac
         self.app_uuid = app_uuid
@@ -39,6 +40,7 @@ class PebbleBridge:
         self._conn = None
         self._appmsg = None
         self.use_emulator = use_emulator
+        self.port = port
 
     def start(self) -> None:
         """Start the background thread to send updates."""
@@ -91,9 +93,9 @@ class PebbleBridge:
         if self.use_emulator:
             # Try WS first (pypkjs), then fall back to QEMU
             try:
-                self._conn = PebbleConnection(WebsocketTransport("ws://127.0.0.1:49053/"))
+                self._conn = PebbleConnection(WebsocketTransport(f"ws://127.0.0.1:{self.port}/"))
             except Exception as _:
-                self._conn = PebbleConnection(QemuTransport("127.0.0.1", 47527))
+                self._conn = PebbleConnection(QemuTransport("127.0.0.1", self.port))
         else:
             if not self.mac:
                 msg = "Invalid MAC address for real Pebble"

@@ -87,6 +87,7 @@ class FitnessAppUI(Adw.Application):
         self.pebble_uuid = "f4fcdac7-f58e-4d22-96bd-48cf98e25d09"  # UUID of pebble app
         self.pebble_mac = None
         self.pebble_bridge = None
+        self.pebble_port = 47527
 
         if self.config_file.exists():
             self.cfg.read(self.config_file)
@@ -115,6 +116,7 @@ class FitnessAppUI(Adw.Application):
                 fallback=self.pebble_use_emulator,
             )
             self.pebble_mac = self.cfg.get("pebble", "mac", fallback=None)
+            self.pebble_port = self.cfg.getint("pebble", "port", fallback=47527)
 
     def show_toast(self, message: str):
         print(message)
@@ -139,7 +141,9 @@ class FitnessAppUI(Adw.Application):
                 mac=self.pebble_mac,
                 send_hz=2.0,
                 use_emulator=self.pebble_use_emulator,
+                port=self.pebble_port,
             )
+
             self.pebble_bridge.start()
             mode = "Emulator" if self.pebble_use_emulator else "Watch"
             print(f"Pebble bridge started ({mode})")
