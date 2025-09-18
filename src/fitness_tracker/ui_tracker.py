@@ -370,9 +370,6 @@ class TrackerPageUI:
             speed_mps: float = float(mph) * 0.44704
             dist_m = float(dist_mi) / 0.00062137119  # meters
 
-            print(
-                f"Pebble update: HR={bpm} bpm, Speed={speed_mps:.2f} m/s, dist={dist_m:.1f} m, power={watts_val} W"
-            )
             self.app.pebble_bridge.update(
                 hr=bpm,
                 speed_mps=speed_mps,
