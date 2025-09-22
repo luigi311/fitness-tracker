@@ -150,7 +150,8 @@ jobs:
           sudo apt update
           sudo apt install -y gcc-arm-none-eabi
 
-          uv tool install pebble-tool
+          # pebble-tool always has a non-zero exit code even on success
+          uv tool install pebble-tool || true
 
       - name: Build Pebble app
         run: |
