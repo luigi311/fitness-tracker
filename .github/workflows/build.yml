@@ -147,9 +147,9 @@ jobs:
 
       - name: Install pebble-sdk
         run: |
-          apt update
-          apt install -y gcc-arm-none-eabi
-          
+          sudo apt update
+          sudo apt install -y gcc-arm-none-eabi
+
           uv tool install pebble-tool
 
       - name: Build Pebble app
