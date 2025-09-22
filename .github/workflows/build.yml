@@ -148,7 +148,7 @@ jobs:
       - name: Install pebble-sdk
         run: |
           sudo apt update
-          sudo apt install -y gcc-arm-none-eabi
+          sudo apt install -y gcc-arm-none-eabi python3-pip python3-venv nodejs npm libsdl1.2debian libfdt1
 
           # pebble-tool always has a non-zero exit code even on success
           uv tool install pebble-tool || true
