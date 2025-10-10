@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 2
 requires-python = ">=3.13"
 
 [[package]]
@@ -13,7 +13,7 @@ wheels = [
 
 [[package]]
 name = "bleak"
-version = "1.1.0"
+version = "1.1.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "dbus-fast", marker = "sys_platform == 'linux'" },
@@ -29,9 +29,9 @@ dependencies = [
     { name = "winrt-windows-foundation-collections", marker = "sys_platform == 'win32'" },
     { name = "winrt-windows-storage-streams", marker = "sys_platform == 'win32'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/c1/84/a7d5056e148b02b7a3398fe122eea5b1585f0439d95958f019867a2ec4b6/bleak-1.1.0.tar.gz", hash = "sha256:0ace59c8cf5a2d8aa66a2493419b59ac6a119c2f72f6e57be8dbdd3f2c0270e0", size = 116100, upload-time = "2025-08-10T22:50:23.129Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/10/88/6bb2bcb94ef7a2f37c5bd5ec99a4ae9208c4caa3fa6d203f9b601e047e64/bleak-1.1.1.tar.gz", hash = "sha256:eeef18053eb3bd569a25bff62cd4eb9ee56be4d84f5321023a7c4920943e6ccb", size = 116277, upload-time = "2025-09-07T18:44:48.978Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/fe/7a/fbfffec2f7839fa779a11a3d1d46edcd6cf790c135ff3a2eaa3777906fea/bleak-1.1.0-py3-none-any.whl", hash = "sha256:174e7836e1ab0879860cd24ddd0ac604bd192bcc1acb978892e27359f3f18304", size = 136236, upload-time = "2025-08-10T22:50:21.74Z" },
+    { url = "https://files.pythonhosted.org/packages/81/5a/c3378ba7b05abc7c2d95ae492eac0523d937c77afcb9ff7e7f67fe2ca11d/bleak-1.1.1-py3-none-any.whl", hash = "sha256:e601371396e357d95ee3c256db65b7da624c94ef6f051d47dfce93ea8361c22e", size = 136534, upload-time = "2025-09-07T18:44:47.525Z" },
 ]
 
 [[package]]
@@ -44,6 +44,14 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/75/8b/22abc3b08286c360eb2fa6cc21954a154bd13c79ab35c78f4af121464769/bleakheart-0.1.3.tar.gz", hash = "sha256:e9341ab3d5e50030b9727ed9d2e08f5c251177ff4142d9fb962c66f9267dbb46", size = 24632, upload-time = "2025-01-19T10:42:22.641Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/df/db/fd026dad512e8d9b1c21b43e5d7bd54b8922d701cbbb646ed7a838fabf35/bleakheart-0.1.3-py3-none-any.whl", hash = "sha256:653648d34ea3b0bc60f5fbc9b26a53432c0ce87310cd8cb5d9ed094329c936aa", size = 21862, upload-time = "2025-01-19T10:42:20.439Z" },
+]
+
+[[package]]
+name = "bleaksport"
+version = "0.1.0"
+source = { git = "https://github.com/luigi311/bleaksport#a44951fde63f70aea4dfe0a2bafcb23f29c56fa4" }
+dependencies = [
+    { name = "bleak" },
 ]
 
 [[package]]
@@ -132,6 +140,7 @@ source = { editable = "." }
 dependencies = [
     { name = "backoff" },
     { name = "bleakheart" },
+    { name = "bleaksport" },
     { name = "libpebble2" },
     { name = "matplotlib" },
     { name = "psycopg2-binary" },
@@ -151,6 +160,7 @@ dev = [
 requires-dist = [
     { name = "backoff", specifier = ">=2.2.1" },
     { name = "bleakheart", specifier = ">=0.1.3" },
+    { name = "bleaksport", git = "https://github.com/luigi311/bleaksport" },
     { name = "libpebble2", git = "https://github.com/luigi311/libpebble2?branch=modern" },
     { name = "matplotlib", specifier = ">=3.10.3" },
     { name = "psycopg2-binary", specifier = ">=2.9.10" },
