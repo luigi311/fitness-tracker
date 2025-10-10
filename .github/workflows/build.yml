@@ -28,12 +28,12 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v5
 
-      - name: "Set up Python"
+      - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version-file: ".python-version"
 
-      - name: "Install system dependencies"
+      - name: Install system dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -41,17 +41,17 @@ jobs:
             pkg-config \
             libgirepository-2.0-dev
 
-      - name: "Install dependencies"
+      - name: Install dependencies
         run: uv sync --frozen --no-dev
         
-      - name: "Build"
+      - name: Build
         run: uv build
 
       # Export deps to use for pex due to libpebble2 custom repo
-      - name: "Export Deps"
+      - name: Export Deps
         run: uv export --format requirements-txt --no-emit-project --no-dev --frozen --no-hashes -o dist/requirements.txt
 
-      - name: "Create PEX"
+      - name: Create PEX
         run: |
           uvx --python .venv/bin/python pex \
             -r dist/requirements.txt \
@@ -62,7 +62,7 @@ jobs:
             --scie eager \
             --scie-pbs-stripped
 
-      - name: "Upload Pex"
+      - name: Upload Pex
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.name }}
@@ -103,15 +103,15 @@ jobs:
       - name: Fix permissions
         run: chmod +x dist/*
 
-      - name: "Setup ruby"
+      - name: Setup ruby
         uses: ruby/setup-ruby@v1
         with:
           ruby-version: ruby
           
-      - name: "Install fpm"
+      - name: Install fpm
         run: gem install fpm
 
-      - name: "Create deb package"
+      - name: Create deb package
         run: |
           VERSION=$(grep -E '^version\s*=' pyproject.toml | head -n1 | sed -E 's/version\s*=\s*"(.*)"/\1/')
           fpm -s dir -t ${{ matrix.package }} \
@@ -121,7 +121,7 @@ jobs:
             data/fitness-tracker.desktop=/usr/share/applications/fitness-tracker.desktop \
             data/fitness-tracker.svg=/usr/share/icons/hicolor/scalable/apps/fitness-tracker.svg 
 
-      - name: "Upload Package"
+      - name: Upload Package
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.name }}.${{ matrix.package }}
@@ -136,3 +136,43 @@ jobs:
           file: ${{ github.workspace }}/*.${{ matrix.package }}
           tag: ${{ github.ref }}
           file_glob: true
+
+  pebble:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Install pebble-sdk
+        run: |
+          sudo apt update
+          sudo apt install -y gcc-arm-none-eabi python3-pip python3-venv nodejs npm libsdl1.2debian libfdt1
+
+          # pebble-tool always has a non-zero exit code even on success
+          uv tool install pebble-tool || true
+          pebble sdk install latest
+
+      - name: Build Pebble app
+        run: |
+          cd pebble
+          pebble build
+          mkdir -p ../dist
+          cp build/pebble.pbw ../dist/fitness_tracker.pbw
+
+      - name: Upload Pebble app
+        uses: actions/upload-artifact@v4
+        with:
+          name: fitness_tracker.pbw
+          path: |
+            dist/fitness_tracker.pbw
+      
+      - name: Upload Pebble app to GitHub Releases
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: svenstaro/upload-release-action@v2
+        with:
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          file: ${{ github.workspace }}/dist/fitness_tracker.pbw
+          asset_name: fitness_tracker.pbw
+          tag: ${{ github.ref }}
