@@ -68,15 +68,17 @@ jobs:
           name: ${{ matrix.name }}
           path: |
             dist/fitness_tracker
-      
+            dist/fitness_tracker.pex
+
       - name: Upload pex to GitHub Releases
         if: startsWith(github.ref, 'refs/tags/')
         uses: svenstaro/upload-release-action@v2
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
-          file: ${{ github.workspace }}/dist/fitness_tracker
-          asset_name: ${{ matrix.name }}
           tag: ${{ github.ref }}
+          asset_name: ${{ matrix.name }}
+          file: ${{ github.workspace }}/dist/fitness_tracker*
+          file_glob: true
 
   package:
     needs: build
@@ -118,6 +120,7 @@ jobs:
             -n fitness-tracker \
             -v "$VERSION" \
             dist/fitness_tracker=/usr/bin/fitness-tracker \
+            dist/fitness_tracker.pex=/usr/bin/fitness-tracker.pex \
             data/fitness-tracker.desktop=/usr/share/applications/fitness-tracker.desktop \
             data/fitness-tracker.svg=/usr/share/icons/hicolor/scalable/apps/fitness-tracker.svg 
 
