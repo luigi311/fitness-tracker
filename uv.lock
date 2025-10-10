@@ -511,12 +511,12 @@ wheels = [
 
 [[package]]
 name = "pygobject"
-version = "3.52.3"
+version = "3.54.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pycairo" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/4a/36/fec530a313d3d48f12e112ac0a65ee3ccc87f385123a0493715609e8e99c/pygobject-3.52.3.tar.gz", hash = "sha256:00e427d291e957462a8fad659a9f9c8be776ff82a8b76bdf402f1eaeec086d82", size = 1235825, upload-time = "2025-03-16T18:22:57.1Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/cf/71/90c0650485f40a684f54f09fd31aa03158af7f72129fd2089b67b4daa6d0/pygobject-3.54.3.tar.gz", hash = "sha256:a8da09134a0f7d56491cf2412145e35aa74e91d760e8f337096a1cda0b92bae7", size = 1272609, upload-time = "2025-09-28T16:16:05.794Z" }
 
 [[package]]
 name = "pyobjc-core"
