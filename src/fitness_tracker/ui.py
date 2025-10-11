@@ -202,6 +202,7 @@ class FitnessAppUI(Adw.Application):
 
     def _build_ui(self):
         self.window = Adw.ApplicationWindow(application=self)
+        self.window.connect("close-request", lambda *a: (self.quit(), False)[1])
         self.window.set_title("Fitness Tracker")
         self.window.set_default_size(640, 520)
         self.toast_overlay = Adw.ToastOverlay()
