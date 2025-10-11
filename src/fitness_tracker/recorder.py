@@ -178,16 +178,24 @@ class Recorder:
         # Run both device loops concurrently (if configured)
         if self._stop_event._loop is not self.loop:
             self._stop_event = asyncio.Event()
-        tasks = [asyncio.create_task(self._hr_loop())]
+
+        device_tasks = [asyncio.create_task(self._hr_loop())]
 
         have_any_running = any(
             [self.speed_device_address, self.cadence_device_address, self.power_device_address]
         )
         if have_any_running and self.on_running:
-            tasks.append(asyncio.create_task(self._running_loop()))
+            device_tasks.append(asyncio.create_task(self._running_loop()))
 
-        await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
-        for t in tasks:
+        stop_task = asyncio.create_task(self._stop_event.wait())
+
+        # Wait until either a device task finishes or we were asked to stop
+        done, pending = await asyncio.wait(
+            device_tasks + [stop_task], return_when=asyncio.FIRST_COMPLETED
+        )
+
+        # If we were asked to stop, cancel device tasks
+        for t in device_tasks:
             t.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await t
@@ -261,8 +269,8 @@ class Recorder:
         try:
             await mux.start()
         finally:
-            print("Stopping running mux")
-            await mux.stop()
+            with contextlib.suppress(Exception):
+                await mux.stop()
 
     def _on_running_link(self, _addr: str, connected: bool, rsc_ok: bool, cps_ok: bool) -> None:
         # RSCS drives both speed & cadence cards
