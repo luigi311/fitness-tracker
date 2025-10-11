@@ -14,7 +14,7 @@ from fitness_tracker.ui_tracker import TrackerPageUI
 
 gi.require_versions({"Gtk": "4.0", "Adw": "1"})
 
-from gi.repository import Adw  # noqa: E402
+from gi.repository import Adw, Gdk, Gtk  # noqa: E402
 
 if TYPE_CHECKING:
     import datetime
@@ -24,6 +24,18 @@ Adw.init()
 # Determine dark-mode status and define colors
 _style_manager = Adw.StyleManager.get_default()
 _IS_DARK = _style_manager.get_dark()
+
+_PROV = Gtk.CssProvider()
+_PROV.load_from_data(b"""
+.pill { padding: 4px 10px; border-radius: 9999px; color: white; }
+.pill-in   { background-color: rgba(51,204,77,0.95); }   /* #33CC4D-ish */
+.pill-near { background-color: rgba(242,191,51,0.95); }  /* amber */
+.pill-low  { background-color: rgba(242,140,51,0.95); }  /* orange */
+.pill-high { background-color: rgba(242,89,89,0.95); }   /* red */
+""")
+Gtk.StyleContext.add_provider_for_display(
+    Gdk.Display.get_default(), _PROV, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+)
 
 
 class FitnessAppUI(Adw.Application):
@@ -208,7 +220,8 @@ class FitnessAppUI(Adw.Application):
         self.window = Adw.ApplicationWindow(application=self)
         self.window.connect("close-request", lambda *a: (self.quit(), False)[1])
         self.window.set_title("Fitness Tracker")
-        self.window.set_default_size(640, 520)
+        self.window.set_default_size(720, 1280)
+        self.window.set_resizable(True)
         self.toast_overlay = Adw.ToastOverlay()
         self.window.set_content(self.toast_overlay)
 

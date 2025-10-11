@@ -336,7 +336,6 @@ class SettingsPageUI:
                 GLib.idle_add(self.hr_combo.append_text, name)
             if self.app.hr_name and self.app.hr_name in names:
                 GLib.idle_add(self.hr_combo.set_active, names.index(self.app.hr_name))
-            # FIX: store into hr_map (not device_map)
             self.hr_map = mapping
 
         asyncio.run(_scan())
@@ -566,7 +565,7 @@ class SettingsPageUI:
         toast = Adw.Toast.new("Settings saved successfully")
         GLib.idle_add(self.app.toast_overlay.add_toast, toast)
 
-        GLib.idle_add(self.app.tracker.fig.canvas.draw_idle)
+        GLib.idle_add(self.app.tracker.redraw)
         GLib.idle_add(self.app.history.refresh)
 
     def _on_sync(self, button: Gtk.Button):
