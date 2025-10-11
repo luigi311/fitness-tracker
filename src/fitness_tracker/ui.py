@@ -1,3 +1,4 @@
+import contextlib
 from configparser import ConfigParser
 from os.path import expanduser
 from pathlib import Path
@@ -12,8 +13,8 @@ from fitness_tracker.ui_settings import SettingsPageUI
 from fitness_tracker.ui_tracker import TrackerPageUI
 
 gi.require_versions({"Gtk": "4.0", "Adw": "1"})
+
 from gi.repository import Adw  # noqa: E402
-import contextlib
 
 if TYPE_CHECKING:
     import datetime
@@ -70,13 +71,15 @@ class FitnessAppUI(Adw.Application):
         self.cfg = ConfigParser()
         self.database_dsn = ""
 
-        # HR device
-        self.device_name = ""
-        self.device_address = ""
-
-        # running device (RSCS / Stryd CPS)
-        self.running_device_name = ""
-        self.running_device_address = ""
+        # Granular sensors (each may point to the same physical device)
+        self.hr_name = ""
+        self.hr_address = ""
+        self.speed_name = ""
+        self.speed_address = ""
+        self.cadence_name = ""
+        self.cadence_address = ""
+        self.power_name = ""
+        self.power_address = ""
 
         self.resting_hr: int = 60
         self.max_hr: int = 180
@@ -94,12 +97,16 @@ class FitnessAppUI(Adw.Application):
             self.database_dsn = self.cfg.get("server", "database_dsn", fallback="")
 
             # HR device
-            self.device_name = self.cfg.get("tracker", "device_name", fallback="")
-            self.device_address = self.cfg.get("tracker", "device_address", fallback="")
+            self.hr_name = self.cfg.get("sensors", "hr_name", fallback="")
+            self.hr_address = self.cfg.get("sensors", "hr_address", fallback="")
 
-            # Running device
-            self.running_device_name = self.cfg.get("running", "device_name", fallback="")
-            self.running_device_address = self.cfg.get("running", "device_address", fallback="")
+            # Sensors
+            self.speed_name = self.cfg.get("sensors", "speed_name", fallback="")
+            self.speed_address = self.cfg.get("sensors", "speed_address", fallback="")
+            self.cadence_name = self.cfg.get("sensors", "cadence_name", fallback="")
+            self.cadence_address = self.cfg.get("sensors", "cadence_address", fallback="")
+            self.power_name = self.cfg.get("sensors", "power_name", fallback="")
+            self.power_address = self.cfg.get("sensors", "power_address", fallback="")
 
             self.resting_hr = self.cfg.getint("personal", "resting_hr", fallback=60)
             self.max_hr = self.cfg.getint("personal", "max_hr", fallback=180)
@@ -136,6 +143,17 @@ class FitnessAppUI(Adw.Application):
             return
 
         try:
+            if not self.pebble_use_emulator:
+                # Check if python sock has AF_BLUETOOTH support
+                import socket
+                if not hasattr(socket, "AF_BLUETOOTH"):
+                    # Do not attempt to start the bridge if no Bluetooth support
+                    # Clear out connection info
+                    self.pebble_mac = None
+
+                    raise RuntimeError("No Bluetooth support in Python socket module")
+
+
             self.pebble_bridge = PebbleBridge(
                 app_uuid=self.pebble_uuid,
                 mac=self.pebble_mac,
@@ -163,11 +181,15 @@ class FitnessAppUI(Adw.Application):
                     on_bpm_update=self.tracker.on_bpm,
                     on_running_update=self.tracker.on_running,
                     database_url=f"sqlite:///{self.database}",
-                    device_name=self.device_name,
+                    hr_device_name=self.hr_name,
+                    hr_device_address=self.hr_address or None,
+                    speed_device_name=self.speed_name,
+                    speed_device_address=self.speed_address or None,
+                    cadence_device_name=self.cadence_name,
+                    cadence_device_address=self.cadence_address or None,
+                    power_device_name=self.power_name,
+                    power_device_address=self.power_address or None,
                     on_error=self.show_toast,
-                    device_address=self.device_address or None,
-                    running_device_name=self.running_device_name,
-                    running_device_address=self.running_device_address or None,
                 )
                 self.recorder.start()
             else:

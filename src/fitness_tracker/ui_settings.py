@@ -5,7 +5,7 @@ from configparser import ConfigParser
 
 import gi
 from bleak import BleakScanner
-from bleaksport.discover import discover_running_devices
+from bleaksport.discover import discover_power_devices, discover_speed_cadence_devices
 
 from fitness_tracker.hr_provider import HEART_RATE_SERVICE_UUID
 
@@ -28,10 +28,12 @@ class SettingsPageUI:
         self.pebble_port_row: Adw.ActionRow | None = None
         self.pebble_port_spin: Gtk.SpinButton | None = None
 
-        # HR
-        self.device_map: dict[str, str] = {}
-        # running
-        self.running_map: dict[str, str] = {}
+        # Sensors
+        self.hr_map: dict[str, str] = {}
+        self.speed_map: dict[str, str] = {}
+        self.cadence_map: dict[str, str] = {}
+        self.power_map: dict[str, str] = {}
+
         # pebble
         self.pebble_map: dict[str, str] = {}
 
@@ -54,56 +56,100 @@ class SettingsPageUI:
         dsn_row.add_suffix(self.dsn_entry)
         prefs_vbox.add(dsn_row)
 
-        # ----- Heart-rate device group -----
+        # ----- Sensors group -----
         dev_group = Adw.PreferencesGroup()
-        dev_group.set_title("Heart Rate Monitor")
-        self.device_row = Adw.ActionRow()
-        self.device_row.set_title("Select HRM")
-        self.device_spinner = Gtk.Spinner()
-        if not self.app.device_name:
-            self.device_spinner.start()
-        self.device_combo = Gtk.ComboBoxText()
-        self.device_combo.set_hexpand(True)
-        self.device_row.add_prefix(self.device_spinner)
-        self.device_row.add_suffix(self.device_combo)
-        dev_group.add(self.device_row)
+        dev_group.set_title("Sensors")
+        # Heart Rate Monitor
+        self.hr_row = Adw.ActionRow()
+        self.hr_row.set_title("Select HRM")
+        self.hr_spinner = Gtk.Spinner()
+        if not self.app.hr_name:
+            self.hr_spinner.start()
+        self.hr_combo = Gtk.ComboBoxText()
+        self.hr_combo.set_hexpand(True)
+        self.hr_row.add_prefix(self.hr_spinner)
+        self.hr_row.add_suffix(self.hr_combo)
+        dev_group.add(self.hr_row)
 
-        rescan_row = Adw.ActionRow()
-        rescan_row.set_title("Rescan HRM")
-        self.rescan_button = Gtk.Button(label="Rescan")
-        self.rescan_button.get_style_context().add_class("suggested-action")
-        self.rescan_button.connect(
+        hr_rescan_row = Adw.ActionRow()
+        hr_rescan_row.set_title("Rescan HRM")
+        self.hr_rescan_button = Gtk.Button(label="Rescan")
+        self.hr_rescan_button.get_style_context().add_class("suggested-action")
+        self.hr_rescan_button.connect(
             "clicked",
             lambda _: threading.Thread(target=self._fill_devices_hr, daemon=True).start(),
         )
-        rescan_row.add_suffix(self.rescan_button)
-        dev_group.add(rescan_row)
+        hr_rescan_row.add_suffix(self.hr_rescan_button)
+        dev_group.add(hr_rescan_row)
 
-        # ----- Running device group (RSCS / Stryd CPS) -----
-        run_group = Adw.PreferencesGroup()
-        run_group.set_title("Running Device")
+        # Speed
+        self.speed_row = Adw.ActionRow()
+        self.speed_row.set_title("Select Speed Device")
+        self.speed_spinner = Gtk.Spinner()
+        if not self.app.speed_name:
+            self.speed_spinner.start()
+        self.speed_combo = Gtk.ComboBoxText()
+        self.speed_combo.set_hexpand(True)
+        self.speed_row.add_prefix(self.speed_spinner)
+        self.speed_row.add_suffix(self.speed_combo)
+        dev_group.add(self.speed_row)
 
-        self.run_row = Adw.ActionRow()
-        self.run_row.set_title("Select Running Device")
-        self.run_spinner = Gtk.Spinner()
-        if not self.app.running_device_name:
-            self.run_spinner.start()
-        self.run_combo = Gtk.ComboBoxText()
-        self.run_combo.set_hexpand(True)
-        self.run_row.add_prefix(self.run_spinner)
-        self.run_row.add_suffix(self.run_combo)
-        run_group.add(self.run_row)
-
-        run_rescan_row = Adw.ActionRow()
-        run_rescan_row.set_title("Rescan Running Devices")
-        self.run_rescan_button = Gtk.Button(label="Rescan")
-        self.run_rescan_button.get_style_context().add_class("suggested-action")
-        self.run_rescan_button.connect(
+        speed_rescan_row = Adw.ActionRow()
+        speed_rescan_row.set_title("Rescan Speed Devices")
+        self.speed_rescan_button = Gtk.Button(label="Rescan")
+        self.speed_rescan_button.get_style_context().add_class("suggested-action")
+        self.speed_rescan_button.connect(
             "clicked",
-            lambda _: threading.Thread(target=self._fill_devices_running, daemon=True).start(),
+            lambda _: threading.Thread(target=self._fill_devices_speed_cadence, daemon=True).start(),
         )
-        run_rescan_row.add_suffix(self.run_rescan_button)
-        run_group.add(run_rescan_row)
+        speed_rescan_row.add_suffix(self.speed_rescan_button)
+        dev_group.add(speed_rescan_row)
+
+        # Cadence
+        self.cadence_row = Adw.ActionRow()
+        self.cadence_row.set_title("Select Cadence Device")
+        self.cadence_spinner = Gtk.Spinner()
+        if not self.app.cadence_name:
+            self.cadence_spinner.start()
+        self.cadence_combo = Gtk.ComboBoxText()
+        self.cadence_combo.set_hexpand(True)
+        self.cadence_row.add_prefix(self.cadence_spinner)
+        self.cadence_row.add_suffix(self.cadence_combo)
+        dev_group.add(self.cadence_row)
+
+        cadence_rescan_row = Adw.ActionRow()
+        cadence_rescan_row.set_title("Rescan Cadence Devices")
+        self.cadence_rescan_button = Gtk.Button(label="Rescan")
+        self.cadence_rescan_button.get_style_context().add_class("suggested-action")
+        self.cadence_rescan_button.connect(
+            "clicked",
+            lambda _: threading.Thread(target=self._fill_devices_speed_cadence, daemon=True).start(),
+        )
+        cadence_rescan_row.add_suffix(self.cadence_rescan_button)
+        dev_group.add(cadence_rescan_row)
+
+        # Power
+        self.power_row = Adw.ActionRow()
+        self.power_row.set_title("Select Power Device")
+        self.power_spinner = Gtk.Spinner()
+        if not self.app.power_name:
+            self.power_spinner.start()
+        self.power_combo = Gtk.ComboBoxText()
+        self.power_combo.set_hexpand(True)
+        self.power_row.add_prefix(self.power_spinner)
+        self.power_row.add_suffix(self.power_combo)
+        dev_group.add(self.power_row)
+
+        power_rescan_row = Adw.ActionRow()
+        power_rescan_row.set_title("Rescan Power Devices")
+        self.power_rescan_button = Gtk.Button(label="Rescan")
+        self.power_rescan_button.get_style_context().add_class("suggested-action")
+        self.power_rescan_button.connect(
+            "clicked",
+            lambda _: threading.Thread(target=self._fill_devices_power, daemon=True).start(),
+        )
+        power_rescan_row.add_suffix(self.power_rescan_button)
+        dev_group.add(power_rescan_row)
 
         # Pebble
         pebble_group = Adw.PreferencesGroup()
@@ -207,7 +253,6 @@ class SettingsPageUI:
         container.set_margin_end(12)
         container.append(prefs_vbox)
         container.append(dev_group)
-        container.append(run_group)
         container.append(pebble_group)
         container.append(personal_group)
         container.append(action_group)
@@ -215,22 +260,40 @@ class SettingsPageUI:
         scroller.set_child(container)
 
         # Prepopulate HRM
-        if self.app.device_name:
-            self.device_spinner.stop()
-            self.device_combo.append_text(self.app.device_name)
-            self.device_combo.set_active(0)
-            self.device_map = {self.app.device_name: self.app.device_address}
+        if self.app.hr_name:
+            self.hr_spinner.stop()
+            self.hr_combo.append_text(self.app.hr_name)
+            self.hr_combo.set_active(0)
+            self.hr_map = {self.app.hr_name: self.app.hr_address}
         else:
             threading.Thread(target=self._fill_devices_hr, daemon=True).start()
 
-        # Prepopulate Running
-        if self.app.running_device_name:
-            self.run_spinner.stop()
-            self.run_combo.append_text(self.app.running_device_name)
-            self.run_combo.set_active(0)
-            self.running_map = {self.app.running_device_name: self.app.running_device_address}
+        # Prepopulate Speed
+        if self.app.speed_name:
+            self.speed_spinner.stop()
+            self.speed_combo.append_text(self.app.speed_name)
+            self.speed_combo.set_active(0)
+            self.speed_map = {self.app.speed_name: self.app.speed_address}
+
+        # Prepopulate Cadence
+        if self.app.cadence_name:
+            self.cadence_spinner.stop()
+            self.cadence_combo.append_text(self.app.cadence_name)
+            self.cadence_combo.set_active(0)
+            self.cadence_map = {self.app.cadence_name: self.app.cadence_address}
+
+        if not (self.app.speed_name or self.app.cadence_name):
+            threading.Thread(target=self._fill_devices_speed_cadence, daemon=True).start()
+
+        # Prepopulate Power
+        if self.app.power_name:
+            self.power_spinner.stop()
+            self.power_combo.append_text(self.app.power_name)
+            self.power_combo.set_active(0)
+            self.power_map = {self.app.power_name: self.app.power_address}
         else:
-            threading.Thread(target=self._fill_devices_running, daemon=True).start()
+            threading.Thread(target=self._fill_devices_power, daemon=True).start()
+            
 
         # Prepopulate Pebble
         if self.app.pebble_use_emulator:
@@ -246,8 +309,8 @@ class SettingsPageUI:
 
     # ----- Scanners -----
     def _fill_devices_hr(self):
-        GLib.idle_add(self.device_spinner.start)
-        self.device_row.set_subtitle("Scanning for HRM…")
+        GLib.idle_add(self.hr_spinner.start)
+        self.hr_row.set_subtitle("Scanning for HRM…")
 
         async def _scan():
             devices = await BleakScanner.discover(
@@ -255,33 +318,69 @@ class SettingsPageUI:
             )
             mapping = {d.name: d.address for d in devices if d.name}
             names = sorted(mapping.keys())
-            GLib.idle_add(self.device_spinner.stop)
-            GLib.idle_add(self.device_row.set_subtitle, "" if names else "No HRM found")
-            GLib.idle_add(self.device_combo.remove_all)
+            GLib.idle_add(self.hr_spinner.stop)
+            GLib.idle_add(self.hr_row.set_subtitle, "" if names else "No HRM found")
+            GLib.idle_add(self.hr_combo.remove_all)
             for name in names:
-                GLib.idle_add(self.device_combo.append_text, name)
-            if self.app.device_name and self.app.device_name in names:
-                GLib.idle_add(self.device_combo.set_active, names.index(self.app.device_name))
-            self.device_map = mapping
+                GLib.idle_add(self.hr_combo.append_text, name)
+            if self.app.hr_name and self.app.hr_name in names:
+                GLib.idle_add(self.hr_combo.set_active, names.index(self.app.hr_name))
+            # FIX: store into hr_map (not device_map)
+            self.hr_map = mapping
 
         asyncio.run(_scan())
 
-    def _fill_devices_running(self):
-        GLib.idle_add(self.run_spinner.start)
-        self.run_row.set_subtitle("Scanning for running devices…")
+    def _fill_devices_speed_cadence(self):
+        GLib.idle_add(self.speed_spinner.start)
+        self.speed_row.set_subtitle("Scanning for speed/cadence devices…")
 
         async def _scan():
-            devices = await discover_running_devices(scan_timeout=5.0)
+            devices = await discover_speed_cadence_devices(scan_timeout=5.0)
             mapping = {d.name: d.address for d in devices if d.name}
             names = sorted(mapping.keys())
-            GLib.idle_add(self.run_spinner.stop)
-            GLib.idle_add(self.run_row.set_subtitle, "" if names else "No running devices found")
-            GLib.idle_add(self.run_combo.remove_all)
+
+            def _apply():
+                self.speed_spinner.stop()
+                self.speed_row.set_subtitle("" if names else "No speed devices found")
+
+                # Speed
+                self.speed_combo.remove_all()
+                for name in names:
+                    self.speed_combo.append_text(name)
+                self.speed_map = mapping
+                if self.app.speed_name and self.app.speed_name in names:
+                    self.speed_combo.set_active(names.index(self.app.speed_name))
+
+                # Cadence
+                self.cadence_spinner.stop()
+                self.cadence_row.set_subtitle("" if names else "No cadence devices found")
+                self.cadence_combo.remove_all()
+                for name in names:
+                    self.cadence_combo.append_text(name)
+                self.cadence_map = mapping
+                if self.app.cadence_name and self.app.cadence_name in names:
+                    self.cadence_combo.set_active(names.index(self.app.cadence_name))
+
+            GLib.idle_add(_apply)
+
+        asyncio.run(_scan())
+
+    def _fill_devices_power(self):
+        GLib.idle_add(self.power_spinner.start)
+        self.power_row.set_subtitle("Scanning for power devices…")
+
+        async def _scan():
+            devices = await discover_power_devices(scan_timeout=5.0)
+            mapping = {d.name: d.address for d in devices if d.name}
+            names = sorted(mapping.keys())
+            GLib.idle_add(self.power_spinner.stop)
+            GLib.idle_add(self.power_row.set_subtitle, "" if names else "No power devices found")
+            GLib.idle_add(self.power_combo.remove_all)
             for name in names:
-                GLib.idle_add(self.run_combo.append_text, name)
-            if self.app.running_device_name and self.app.running_device_name in names:
-                GLib.idle_add(self.run_combo.set_active, names.index(self.app.running_device_name))
-            self.running_map = mapping
+                GLib.idle_add(self.power_combo.append_text, name)
+            if self.app.power_name and self.app.power_name in names:
+                GLib.idle_add(self.power_combo.set_active, names.index(self.app.power_name))
+            self.power_map = mapping
 
         asyncio.run(_scan())
 
@@ -387,14 +486,24 @@ class SettingsPageUI:
         self.app.database_dsn = self.dsn_entry.get_text()
 
         # HR
-        self.app.device_name = self.device_combo.get_active_text() or ""
-        if self.app.device_name in self.device_map:
-            self.app.device_address = self.device_map[self.app.device_name]
+        self.app.hr_name = self.hr_combo.get_active_text() or ""
+        if self.app.hr_name in self.hr_map:
+            self.app.hr_address = self.hr_map[self.app.hr_name]
 
-        # Running
-        self.app.running_device_name = self.run_combo.get_active_text() or ""
-        if self.app.running_device_name in self.running_map:
-            self.app.running_device_address = self.running_map[self.app.running_device_name]
+        # Speed
+        self.app.speed_name = self.speed_combo.get_active_text() or ""
+        if self.app.speed_name in self.speed_map:
+            self.app.speed_address = self.speed_map[self.app.speed_name]
+
+        # Cadence
+        self.app.cadence_name = self.cadence_combo.get_active_text() or ""
+        if self.app.cadence_name in self.cadence_map:
+            self.app.cadence_address = self.cadence_map[self.app.cadence_name]
+
+        # Power
+        self.app.power_name = self.power_combo.get_active_text() or ""
+        if self.app.power_name in self.power_map:
+            self.app.power_address = self.power_map[self.app.power_name]
 
         # Pebble
         self.app.pebble_enable = self.pebble_enable_row.get_active()
@@ -412,13 +521,15 @@ class SettingsPageUI:
 
         cfg = ConfigParser()
         cfg["server"] = {"database_dsn": self.app.database_dsn}
-        cfg["tracker"] = {
-            "device_name": self.app.device_name,
-            "device_address": self.app.device_address,
-        }
-        cfg["running"] = {
-            "device_name": self.app.running_device_name,
-            "device_address": self.app.running_device_address,
+        cfg["sensors"] = {
+            "hr_name": self.app.hr_name,
+            "hr_address": self.app.hr_address,
+            "speed_name": self.app.speed_name,
+            "speed_address": self.app.speed_address,
+            "cadence_name": self.app.cadence_name,
+            "cadence_address": self.app.cadence_address,
+            "power_name": self.app.power_name,
+            "power_address": self.app.power_address,
         }
 
         cfg["pebble"] = {
