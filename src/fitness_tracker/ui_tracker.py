@@ -2,11 +2,14 @@ import math
 import random
 import time
 from collections import deque
+from pathlib import Path
 
 import gi
 import numpy as np
 from matplotlib.backends.backend_gtk4agg import FigureCanvasGTK4Agg as FigureCanvas
 from matplotlib.figure import Figure
+
+from fitness_tracker.workouts import Workout, WorkoutStep, discover_workouts, load_workout
 
 gi.require_versions({"Gtk": "4.0", "Adw": "1"})
 from gi.repository import Adw, GLib, Gtk
@@ -15,7 +18,7 @@ from gi.repository import Adw, GLib, Gtk
 
 
 class MetricCard(Gtk.Frame):
-    def __init__(self, title: str, unit: str | None = None):
+    def __init__(self, title: str, unit: str | None = None) -> None:
         super().__init__()
         self.set_hexpand(True)
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
@@ -58,7 +61,7 @@ class MetricCard(Gtk.Frame):
             self.unit.set_text(unit_text)
             self.unit.set_visible(True)
 
-    def set_status(self, connected: bool, tooltip: str | None = None):
+    def set_status(self, connected: bool, tooltip: str | None = None) -> None:
         """Set small connection dot on the card header."""
         self._connected = bool(connected)
         dot = "🟢" if connected else "⚫"
@@ -71,7 +74,7 @@ class MetricCard(Gtk.Frame):
         # Dim card if not connected
         self._set_dim(not connected)
 
-    def _set_dim(self, dim: bool):
+    def _set_dim(self, dim: bool) -> None:
         # Subtle visual cue
         alpha = 0.55 if dim else 1.0
         self.value.set_opacity(alpha)
@@ -79,7 +82,7 @@ class MetricCard(Gtk.Frame):
 
 
 class TimerBlock(Gtk.Frame):
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__()
         box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         for m in ("top", "bottom", "start", "end"):
@@ -94,7 +97,7 @@ class TimerBlock(Gtk.Frame):
         box.append(self.timer)
         self.set_child(box)
 
-    def set_time(self, text: str):
+    def set_time(self, text: str) -> None:
         self.timer.set_text(text)
 
 
@@ -102,7 +105,7 @@ class TimerBlock(Gtk.Frame):
 
 
 class TrackerPageUI:
-    def __init__(self, app: "FitnessAppUI"):
+    def __init__(self, app: "FitnessAppUI") -> None:
         self.app = app
 
         # live buffers (ms + values)
@@ -134,6 +137,13 @@ class TrackerPageUI:
 
         # Status timer for polling connection flags from recorder
         self._status_timer_id: int | None = None
+
+        # Workout state
+        self._workout: Workout | None = None
+        self._workout_start_ms: int | None = None
+        self._workout_path: Path | None = None
+        self._active_step_index: int = -1
+        self._sim_target_mph: float | None = None
 
     # ---- UI ----
     def build_page(self) -> Gtk.Widget:
@@ -229,7 +239,7 @@ class TrackerPageUI:
         return outer
 
     # ---- Styling helpers ----
-    def _style_axes(self):
+    def _style_axes(self) -> None:
         zones = self.app.calculate_hr_zones()
         names = list(zones.keys())
         bands = [(n, zones[n]) for n in names]
@@ -265,7 +275,7 @@ class TrackerPageUI:
         ax.set_xlabel("Last 60s", color=self.app.DARK_FG)
         ax.set_autoscaley_on(False)
 
-    def _style_power_axis(self):
+    def _style_power_axis(self) -> None:
         ax = self.ax_pw
         ax.tick_params(colors=self.app.DARK_FG)
         ax.yaxis.label.set_color(self.app.DARK_FG)
@@ -281,13 +291,26 @@ class TrackerPageUI:
             spine.set_alpha(0.35)
 
     # ---- Start/Stop ----
-    def _on_start(self, *_):
+    def _on_start(self, *_) -> None:
+        # Ask: Free Run or choose a workout
+        self._show_workout_choice_dialog()
+
+    def _start_after_choice(self) -> None:
         self._running = True
         self._start_monotonic = time.monotonic()
         self._times.clear()
         self._bpms.clear()
         self._powers.clear()
         self._last_ms = None
+
+        # if a workout was chosen, mark start
+        if self._workout is not None:
+            self._workout_start_ms = 0  # relative timeline (we use delta_ms)
+            self.app.show_toast(
+                f"Workout: {self._workout.name} — {int(self._workout.total_seconds // 60)} min"
+            )
+        else:
+            self._workout_start_ms = None
 
         self._bpm_sum = 0.0
         self._bpm_n = 0
@@ -307,7 +330,7 @@ class TrackerPageUI:
             self._hrsim_bpm = float(self.app.resting_hr)
             self._test_source = GLib.timeout_add(1000, self._tick_test)
 
-    def _on_stop(self, *_):
+    def _on_stop(self, *_) -> None:
         self._running = False
         self.app.stop_btn.set_sensitive(False)
         self.app.start_btn.set_sensitive(True)
@@ -320,7 +343,7 @@ class TrackerPageUI:
             self._test_source = None
 
     # ---- Public API used by Recorder (HR only) ----
-    def on_bpm(self, delta_ms: float, bpm: int):
+    def on_bpm(self, delta_ms: float, bpm: int) -> None:
         self._last_bpm = bpm
 
         if self._running:
@@ -351,7 +374,7 @@ class TrackerPageUI:
         cadence_spm: int,
         distance_m: float | None,
         power_watts: float | None,
-    ):
+    ) -> None:
         # Convert to UI units
         mph = speed_mps * 2.23693629
         dist_mi = (distance_m or 0.0) * 0.00062137119
@@ -380,7 +403,7 @@ class TrackerPageUI:
             )
 
     # ---- Internal: push combined HR/Power sample ----
-    def _push_sample(self, t_ms: float, bpm: int, watts: float):
+    def _push_sample(self, t_ms: float, bpm: int, watts: float) -> None:
         # Update stats
         self._bpm_sum += bpm
         self._bpm_n += 1
@@ -413,7 +436,20 @@ class TrackerPageUI:
         elapsed_s = max(0, int(t_ms // 1_000))
         hh, rem = divmod(elapsed_s, 3600)
         mm, ss = divmod(rem, 60)
-        self.timer_block.set_time(f"{hh:02d}:{mm:02d}:{ss:02d}")
+        if self._workout:
+            w, v_mps, idx = self._workout.target_at(elapsed_s, self.app.ftp_watts)
+            self._active_step_index = idx
+            if w is not None:
+                tgt_txt = f"{round(w)} W"
+            elif v_mps is not None:
+                tgt_txt = f"{self._pace_from_mps(v_mps)} /mi"
+            else:
+                tgt_txt = "—"
+            self.timer_block.set_time(
+                f"{hh:02d}:{mm:02d}:{ss:02d}  •  Step {idx + 1}  •  {tgt_txt}",
+            )
+        else:
+            self.timer_block.set_time(f"{hh:02d}:{mm:02d}:{ss:02d}")
 
         # Update cards
         if self.app.test_mode:
@@ -451,7 +487,7 @@ class TrackerPageUI:
 
         self.fig.canvas.draw_idle()
 
-    def _set_all_instant(self, dist_mi, pace_str, cadence, mph, bpm, watts):
+    def _set_all_instant(self, dist_mi, pace_str, cadence, mph, bpm, watts) -> None:
         self.card_distance.set(f"{dist_mi:.2f}")
         self.card_pace.set(f"{pace_str}")
         self.card_cadence.set(f"{int(cadence)}")
@@ -460,7 +496,7 @@ class TrackerPageUI:
         self.card_power.set(f"{int(watts)}")
 
     # ---- Test-data generator (runs when --test) ----
-    def _tick_test(self):
+    def _tick_test(self) -> bool:
         if not self._running:
             return False
 
@@ -523,9 +559,15 @@ class TrackerPageUI:
         bpm = int(round(self._hrsim_bpm))
 
         # --- Speed / cadence dummy (running) ---
-        self._last_mph = max(
-            2.0, min(10.0, getattr(self, "_last_mph", 6.8) + random.uniform(-0.3, 0.3))
-        )
+        # If a workout pace target is active, ease toward it; else jitter.
+        target_mph = getattr(self, "_sim_target_mph", None)
+        cur_mph = getattr(self, "_last_mph", 6.8)
+        if target_mph is not None:
+            cur_mph = cur_mph + 0.25 * (target_mph - cur_mph)
+            cur_mph += random.uniform(-0.05, 0.05)
+        else:
+            cur_mph = max(2.0, min(10.0, cur_mph + random.uniform(-0.3, 0.3)))
+        self._last_mph = cur_mph
         self._last_cadence = max(
             150, min(190, getattr(self, "_last_cadence", 172) + random.uniform(-2, 2))
         )
@@ -556,7 +598,7 @@ class TrackerPageUI:
             return first, *zones[first], self._rgb(self.app.ZONE_COLORS[0])
         return last, *zones[last], self._rgb(self.app.ZONE_COLORS[-1])
 
-    def _rgb(self, hex_color: str):
+    def _rgb(self, hex_color: str) -> tuple[float, float, float]:
         # lightweight converter (no matplotlib.colors import needed here)
         hex_color = hex_color.lstrip("#")
         r = int(hex_color[0:2], 16) / 255.0
@@ -570,20 +612,46 @@ class TrackerPageUI:
             return "0:00"
         mins_per_mile = 60.0 / mph
         m = int(mins_per_mile)
-        s = int(round((mins_per_mile - m) * 60))
+        s = round((mins_per_mile - m) * 60)
         if s == 60:
             m += 1
             s = 0
         return f"{m}:{s:02d}"
 
+    @staticmethod
+    def _pace_from_mps(mps: float) -> str:
+        # Convert m/s -> min/mile
+        if mps <= 0.001:
+            return "0:00"
+        mph = mps * 2.23693629
+        return TrackerPageUI._pace_from_mph(mph)
+
     def _current_power_for_time(self, _t_ms: float) -> float:
-        """When not in test mode, power is 0 (no sensor yet)."""
-        if self.app.test_mode:
-            return getattr(self, "_last_power", 0.0)
-        return 0.0
+        """
+        Produce a preview/simulated power in --test mode.
+        If a workout is active, pull toward the current target; otherwise use the old interval sim.
+        In non-test mode we don't synthesize power here.
+        """
+        if not self.app.test_mode:
+            return 0.0
+        last = getattr(self, "_last_power", 250.0)
+        target_watts = last
+        self._sim_target_mph = None
+        if self._workout and self._workout_start_ms is not None and self._last_ms is not None:
+            t_s = max(0.0, self._last_ms / 1000.0)
+            w, v_mps, idx = self._workout.target_at(t_s, self.app.ftp_watts)
+            self._active_step_index = idx
+            if w is not None:
+                target_watts = float(w)
+            elif v_mps is not None:
+                # pace-based step → drive speed; keep power loosely around previous
+                self._sim_target_mph = float(v_mps) * 2.23693629
+        # ease toward power target (if any)
+        self._last_power = last + 0.25 * (target_watts - last)
+        return self._last_power
 
     # ---- Connection status (per-card) ----
-    def _update_metric_statuses(self):
+    def _update_metric_statuses(self) -> None:
         """Poll recorder connection flags and set dots by sensor link state."""
         rec = getattr(self.app, "recorder", None)
         if not rec:
@@ -596,24 +664,150 @@ class TrackerPageUI:
             pow_ok = bool(rec.power_connected)
 
         if hasattr(self, "card_hr") and self.card_hr:
-            self.card_hr.set_status(hr_ok, tooltip=("HR sensor connected" if hr_ok else "HR sensor not connected"))
+            self.card_hr.set_status(
+                hr_ok, tooltip=("HR sensor connected" if hr_ok else "HR sensor not connected")
+            )
 
         # Running-driven cards reflect running sensor freshness
         if hasattr(self, "card_distance") and self.card_distance:
-            self.card_distance.set_status(speed_ok, tooltip=("Speed sensor connected" if speed_ok else "Speed sensor not connected"))
+            self.card_distance.set_status(
+                speed_ok,
+                tooltip=("Speed sensor connected" if speed_ok else "Speed sensor not connected"),
+            )
         if hasattr(self, "card_pace") and self.card_pace:
-            self.card_pace.set_status(speed_ok, tooltip=("Speed sensor connected" if speed_ok else "Speed sensor not connected"))
+            self.card_pace.set_status(
+                speed_ok,
+                tooltip=("Speed sensor connected" if speed_ok else "Speed sensor not connected"),
+            )
         if hasattr(self, "card_cadence") and self.card_cadence:
-            self.card_cadence.set_status(cad_ok if rec else True, tooltip=("Cadence sensor connected" if (cad_ok if rec else True) else "Cadence sensor not connected"))
+            self.card_cadence.set_status(
+                cad_ok if rec else True,
+                tooltip=(
+                    "Cadence sensor connected"
+                    if (cad_ok if rec else True)
+                    else "Cadence sensor not connected"
+                ),
+            )
         if hasattr(self, "card_mph") and self.card_mph:
-            self.card_mph.set_status(speed_ok, tooltip=("Speed sensor connected" if speed_ok else "Speed sensor not connected"))
+            self.card_mph.set_status(
+                speed_ok,
+                tooltip=("Speed sensor connected" if speed_ok else "Speed sensor not connected"),
+            )
 
-        # Power is optional on some pods; show its own freshness if we’ve ever seen power,
-        # otherwise fall back to overall running freshness (so the dot isn’t stuck “off”
-        # on devices that don’t report power).
+        # Power card tooltip (power-based target)
         if hasattr(self, "card_power") and self.card_power:
-            self.card_power.set_status(pow_ok if rec else True, tooltip=("Power sensor connected" if (pow_ok if rec else True) else "Power sensor not connected"))
+            tooltip_pw = (
+                "Power sensor connected"
+                if (pow_ok if rec else True)
+                else "Power sensor not connected"
+            )
+            if self._workout and self._last_ms is not None:
+                t_s = max(0.0, self._last_ms / 1000.0)
+                w, v_mps, idx = self._workout.target_at(t_s, self.app.ftp_watts)
+                if w is not None:
+                    tooltip_pw = f"{tooltip_pw}\nWorkout: {self._workout.name}\nStep {idx + 1}: target {int(round(w))} W"
+            self.card_power.set_status(pow_ok if rec else True, tooltip=tooltip_pw)
 
-    def _tick_status(self):
+        # Pace card tooltip (pace-based target)
+        if hasattr(self, "card_pace") and self.card_pace:
+            tooltip_pc = "Speed sensor connected" if speed_ok else "Speed sensor not connected"
+            if self._workout and self._last_ms is not None:
+                t_s = max(0.0, self._last_ms / 1000.0)
+                w, v_mps, idx = self._workout.target_at(t_s, self.app.ftp_watts)
+                if v_mps is not None:
+                    pace = self._pace_from_mps(v_mps)
+                    tooltip_pc = f"{tooltip_pc}\nWorkout: {self._workout.name}\nStep {idx + 1}: target {pace} /mi"
+            self.card_pace.set_status(speed_ok, tooltip=tooltip_pc)
+
+    # ------------- Workout choice UX -------------
+    def _show_workout_choice_dialog(self) -> None:
+        # Discover workouts in config folder
+        paths = discover_workouts(self.app.workouts_dir)
+
+        dlg = Adw.MessageDialog.new(self.app.window, "Start", "How do you want to train?")
+        dlg.add_response("free", "Free Run")
+        if paths:
+            dlg.add_response("pick", "Pick Workout…")
+        else:
+            dlg.add_response("noop", "No workouts found")
+            dlg.set_response_enabled("noop", False)
+        dlg.set_default_response("free")
+        dlg.set_close_response("free")
+
+        def on_response(_d, resp) -> None:
+            if resp == "pick":
+                self._show_workout_picker(paths)
+            else:
+                # Free run
+                self._workout = None
+                self._workout_path = None
+                self.app.start_btn.set_sensitive(False)
+                self.app.stop_btn.set_sensitive(True)
+                self._start_after_choice()
+
+        dlg.connect("response", on_response)
+        dlg.present()
+
+    def _show_workout_picker(self, paths: list[Path]) -> None:
+        # Non-blocking dialog with custom content
+        dlg = Adw.MessageDialog.new(
+            self.app.window,
+            "Select Workout",
+            "Choose a workout file from your config folder.",
+        )
+
+        # Responses (buttons)
+        dlg.add_response("cancel", "Cancel")
+        dlg.add_response("start", "Start")
+        dlg.set_response_appearance("start", Adw.ResponseAppearance.SUGGESTED)
+        dlg.set_default_response("start")
+        dlg.set_close_response("cancel")
+
+        # Build custom content: a ListBox of workouts
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        for m in ("top", "bottom", "start", "end"):
+            getattr(box, f"set_margin_{m}")(12)
+
+        lst = Gtk.ListBox()
+        lst.set_selection_mode(Gtk.SelectionMode.SINGLE)
+
+        for p in paths:
+            row = Adw.ActionRow()
+            row.set_title(p.stem)
+            row.set_subtitle(p.suffix.lower().lstrip(".").upper())
+            lst.append(row)
+
+        # Preselect first row for convenience
+        if len(paths) > 0:
+            # need to call after rows are realized
+            GLib.idle_add(lambda: lst.select_row(lst.get_row_at_index(0)))
+
+        box.append(lst)
+        # Attach custom content to the dialog
+        dlg.set_extra_child(box)
+
+        def on_response(_dlg, resp: str) -> None:
+            if resp != "start":
+                return  # cancelled
+
+            row = lst.get_selected_row()
+            if not row:
+                # No selection → ignore
+                return
+
+            idx = row.get_index()
+            path = paths[idx]
+            w = load_workout(path)
+            self._workout = w if w.steps else None
+            self._workout_path = path
+
+            self.app.start_btn.set_sensitive(False)
+            self.app.stop_btn.set_sensitive(True)
+            self._start_after_choice()
+
+        dlg.connect("response", on_response)
+        dlg.present()
+
+    def _tick_status(self) -> bool:
         self._update_metric_statuses()
         return True  # keep timer

@@ -100,7 +100,9 @@ class SettingsPageUI:
         self.speed_rescan_button.get_style_context().add_class("suggested-action")
         self.speed_rescan_button.connect(
             "clicked",
-            lambda _: threading.Thread(target=self._fill_devices_speed_cadence, daemon=True).start(),
+            lambda _: threading.Thread(
+                target=self._fill_devices_speed_cadence, daemon=True
+            ).start(),
         )
         speed_rescan_row.add_suffix(self.speed_rescan_button)
         dev_group.add(speed_rescan_row)
@@ -123,7 +125,9 @@ class SettingsPageUI:
         self.cadence_rescan_button.get_style_context().add_class("suggested-action")
         self.cadence_rescan_button.connect(
             "clicked",
-            lambda _: threading.Thread(target=self._fill_devices_speed_cadence, daemon=True).start(),
+            lambda _: threading.Thread(
+                target=self._fill_devices_speed_cadence, daemon=True
+            ).start(),
         )
         cadence_rescan_row.add_suffix(self.cadence_rescan_button)
         dev_group.add(cadence_rescan_row)
@@ -223,6 +227,14 @@ class SettingsPageUI:
         max_row.add_suffix(self.max_spin)
         personal_group.add(max_row)
 
+        # FTP (for workouts)
+        ftp_row = Adw.ActionRow()
+        ftp_row.set_title("FTP (Watts)")
+        self.ftp_spin = Gtk.SpinButton.new_with_range(50, 2000, 1)
+        self.ftp_spin.set_value(self.app.ftp_watts)
+        ftp_row.add_suffix(self.ftp_spin)
+        personal_group.add(ftp_row)
+
         # Save Button
         action_group = Adw.PreferencesGroup()
         action_group.set_title("Actions")
@@ -293,7 +305,6 @@ class SettingsPageUI:
             self.power_map = {self.app.power_name: self.app.power_address}
         else:
             threading.Thread(target=self._fill_devices_power, daemon=True).start()
-            
 
         # Prepopulate Pebble
         if self.app.pebble_use_emulator:
@@ -518,6 +529,7 @@ class SettingsPageUI:
 
         self.app.resting_hr = self.rest_spin.get_value_as_int()
         self.app.max_hr = self.max_spin.get_value_as_int()
+        self.app.ftp_watts = self.ftp_spin.get_value_as_int()
 
         cfg = ConfigParser()
         cfg["server"] = {"database_dsn": self.app.database_dsn}
@@ -539,7 +551,11 @@ class SettingsPageUI:
             "port": str(self.app.pebble_port),
         }
 
-        cfg["personal"] = {"resting_hr": str(self.app.resting_hr), "max_hr": str(self.app.max_hr)}
+        cfg["personal"] = {
+            "resting_hr": str(self.app.resting_hr),
+            "max_hr": str(self.app.max_hr),
+            "ftp_watts": str(self.app.ftp_watts),
+        }
 
         with open(self.app.config_file, "w") as f:
             cfg.write(f)

@@ -66,6 +66,8 @@ class FitnessAppUI(Adw.Application):
         app_dir.mkdir(parents=True, exist_ok=True)
         self.database = app_dir / "fitness.db"
         self.config_file = app_dir / "config.ini"
+        self.workouts_dir = app_dir / "workouts"
+        self.workouts_dir.mkdir(parents=True, exist_ok=True)
 
         # load existing configuration
         self.cfg = ConfigParser()
@@ -83,6 +85,7 @@ class FitnessAppUI(Adw.Application):
 
         self.resting_hr: int = 60
         self.max_hr: int = 180
+        self.ftp_watts: int = 150
 
         # Pebble Settings
         self.pebble_enable = True
@@ -110,6 +113,7 @@ class FitnessAppUI(Adw.Application):
 
             self.resting_hr = self.cfg.getint("personal", "resting_hr", fallback=60)
             self.max_hr = self.cfg.getint("personal", "max_hr", fallback=180)
+            self.ftp_watts = self.cfg.getint("personal", "ftp_watts", fallback=150)
 
             # Pebble device
             self.pebble_enable = self.cfg.getboolean(
