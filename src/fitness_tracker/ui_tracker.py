@@ -22,9 +22,21 @@ class MetricCard(Gtk.Frame):
         for m in ("top", "bottom", "start", "end"):
             getattr(box, f"set_margin_{m}")(12)
 
+        # Header row: title (left) + status dot (right)
+        header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         self.title = Gtk.Label(label=title)
         self.title.add_css_class("caption")
         self.title.set_xalign(0)
+        self.title.set_hexpand(True)
+
+        self.status = Gtk.Label(label="")
+        self.status.set_use_markup(True)
+        self.status.set_xalign(1.0)
+        self.status.set_hexpand(False)
+        self._connected = False
+
+        header.append(self.title)
+        header.append(self.status)
 
         self.value = Gtk.Label(label="0")
         self.value.add_css_class("title-1")
@@ -35,7 +47,7 @@ class MetricCard(Gtk.Frame):
         self.unit.set_xalign(0)
         self.unit.set_visible(bool(unit))
 
-        box.append(self.title)
+        box.append(header)
         box.append(self.value)
         box.append(self.unit)
         self.set_child(box)
@@ -45,6 +57,25 @@ class MetricCard(Gtk.Frame):
         if unit_text is not None:
             self.unit.set_text(unit_text)
             self.unit.set_visible(True)
+
+    def set_status(self, connected: bool, tooltip: str | None = None):
+        """Set small connection dot on the card header."""
+        self._connected = bool(connected)
+        dot = "🟢" if connected else "⚫"
+        self.status.set_markup(dot)
+        if tooltip:
+            self.status.set_tooltip_text(tooltip)
+        else:
+            self.status.set_tooltip_text(None)
+
+        # Dim card if not connected
+        self._set_dim(not connected)
+
+    def _set_dim(self, dim: bool):
+        # Subtle visual cue
+        alpha = 0.55 if dim else 1.0
+        self.value.set_opacity(alpha)
+        self.unit.set_opacity(alpha)
 
 
 class TimerBlock(Gtk.Frame):
@@ -92,7 +123,7 @@ class TrackerPageUI:
 
         # test-mode signal id
         self._test_source = None
-        self._start_monotonic = None
+        self._start_monotonic = 0.0
 
         # live “real sensor” cache for non-test-mode
         self._rt_mph = 0.0
@@ -100,6 +131,9 @@ class TrackerPageUI:
         self._rt_dist_mi = 0.0
         self._rt_pace_str = "0:00"
         self._rt_watts = 0.0
+
+        # Status timer for polling connection flags from recorder
+        self._status_timer_id: int | None = None
 
     # ---- UI ----
     def build_page(self) -> Gtk.Widget:
@@ -124,6 +158,10 @@ class TrackerPageUI:
         ctrl.append(self.app.start_btn)
         ctrl.append(self.app.stop_btn)
         outer.append(ctrl)
+
+        # periodic status updater (lets dots fade when data stalls)
+        if self._status_timer_id is None:
+            self._status_timer_id = GLib.timeout_add_seconds(1, self._tick_status)
 
         # Metrics grid (match your new layout)
         grid = Gtk.Grid(column_spacing=12, row_spacing=12)
@@ -184,6 +222,9 @@ class TrackerPageUI:
 
         # Initial zeros
         self._set_all_instant(0, 0, 0, 0, 0, 0)
+
+        # Initialize status dots as disconnected
+        self._update_metric_statuses()
 
         return outer
 
@@ -280,12 +321,27 @@ class TrackerPageUI:
 
     # ---- Public API used by Recorder (HR only) ----
     def on_bpm(self, delta_ms: float, bpm: int):
-        if not self._running:
-            return
         self._last_bpm = bpm
-        # Keep power from either live running feed or test generator
-        watts = self._current_power_for_time(delta_ms)
-        self._push_sample(delta_ms, bpm, watts)
+
+        if self._running:
+            # While running, drive chart/timer (DB handled in Recorder)
+            watts = self._current_power_for_time(delta_ms)
+            self._push_sample(delta_ms, bpm, watts)
+        else:
+            # Preview-only: update the HR card (don’t advance timer/plot)
+            if self.app.test_mode:
+                watts_preview = int(round(self._current_power_for_time(delta_ms), 0))
+            else:
+                # mirror last run watts if any, purely for display
+                watts_preview = int(round(self._rt_watts or 0.0, 0))
+            self._set_all_instant(
+                self._rt_dist_mi,
+                self._rt_pace_str,
+                self._rt_cadence,
+                self._rt_mph,
+                bpm,
+                watts_preview,
+            )
 
     # ---- Public API from Recorder (Running metrics) ----
     def on_running(
@@ -296,9 +352,6 @@ class TrackerPageUI:
         distance_m: float | None,
         power_watts: float | None,
     ):
-        if not self._running:
-            return
-
         # Convert to UI units
         mph = speed_mps * 2.23693629
         dist_mi = (distance_m or 0.0) * 0.00062137119
@@ -312,8 +365,19 @@ class TrackerPageUI:
         self._rt_pace_str = pace_str
         self._rt_watts = float(watts)
 
-        # Drive the chart + cards even if HR hasn’t ticked this instant:
-        self._push_sample(delta_ms, self._last_bpm, self._rt_watts)
+        if self._running:
+            # Drive the chart + cards even if HR hasn’t ticked this instant:
+            self._push_sample(delta_ms, self._last_bpm, self._rt_watts)
+        else:
+            # Preview-only: update cards without moving timer/plot
+            self._set_all_instant(
+                dist_mi=self._rt_dist_mi,
+                pace_str=self._rt_pace_str,
+                cadence=int(cadence_spm),
+                mph=mph,
+                bpm=int(self._last_bpm or 0),
+                watts=int(round(self._rt_watts, 0)),
+            )
 
     # ---- Internal: push combined HR/Power sample ----
     def _push_sample(self, t_ms: float, bpm: int, watts: float):
@@ -517,3 +581,39 @@ class TrackerPageUI:
         if self.app.test_mode:
             return getattr(self, "_last_power", 0.0)
         return 0.0
+
+    # ---- Connection status (per-card) ----
+    def _update_metric_statuses(self):
+        """Poll recorder connection flags and set dots by sensor link state."""
+        rec = getattr(self.app, "recorder", None)
+        if not rec:
+            # In --test mode, pretend connected so UI lights up
+            hr_ok = speed_ok = cad_ok = pow_ok = True
+        else:
+            hr_ok = bool(rec.hr_connected)
+            speed_ok = bool(rec.speed_connected)
+            cad_ok = bool(rec.cadence_connected)
+            pow_ok = bool(rec.power_connected)
+
+        if hasattr(self, "card_hr") and self.card_hr:
+            self.card_hr.set_status(hr_ok, tooltip=("HR sensor connected" if hr_ok else "HR sensor not connected"))
+
+        # Running-driven cards reflect running sensor freshness
+        if hasattr(self, "card_distance") and self.card_distance:
+            self.card_distance.set_status(speed_ok, tooltip=("Speed sensor connected" if speed_ok else "Speed sensor not connected"))
+        if hasattr(self, "card_pace") and self.card_pace:
+            self.card_pace.set_status(speed_ok, tooltip=("Speed sensor connected" if speed_ok else "Speed sensor not connected"))
+        if hasattr(self, "card_cadence") and self.card_cadence:
+            self.card_cadence.set_status(cad_ok if rec else True, tooltip=("Cadence sensor connected" if (cad_ok if rec else True) else "Cadence sensor not connected"))
+        if hasattr(self, "card_mph") and self.card_mph:
+            self.card_mph.set_status(speed_ok, tooltip=("Speed sensor connected" if speed_ok else "Speed sensor not connected"))
+
+        # Power is optional on some pods; show its own freshness if we’ve ever seen power,
+        # otherwise fall back to overall running freshness (so the dot isn’t stuck “off”
+        # on devices that don’t report power).
+        if hasattr(self, "card_power") and self.card_power:
+            self.card_power.set_status(pow_ok if rec else True, tooltip=("Power sensor connected" if (pow_ok if rec else True) else "Power sensor not connected"))
+
+    def _tick_status(self):
+        self._update_metric_statuses()
+        return True  # keep timer
