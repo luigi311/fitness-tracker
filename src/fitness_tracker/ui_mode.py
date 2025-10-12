@@ -20,7 +20,7 @@ class ModeSelectView(Gtk.Box):
 
     def __init__(
         self,
-        workouts_dir: Path,
+        workouts_running_dir: Path,
         on_start_free_run,
         on_start_workout,  # (path: Path) -> None
     ) -> None:
@@ -28,7 +28,7 @@ class ModeSelectView(Gtk.Box):
         for m in ("top", "bottom", "start", "end"):
             getattr(self, f"set_margin_{m}")(12)
 
-        self._workouts_dir = workouts_dir
+        self._workouts_running_dir = workouts_running_dir
         self._on_start_free_run = on_start_free_run
         self._on_start_workout = on_start_workout
 
@@ -44,7 +44,7 @@ class ModeSelectView(Gtk.Box):
         self.append(btn_free)
 
         # Workout list
-        self._paths = discover_workouts(self._workouts_dir)
+        self._paths = discover_workouts(self._workouts_running_dir)
         self._list = Gtk.ListBox()
         self._list.set_selection_mode(Gtk.SelectionMode.SINGLE)
 

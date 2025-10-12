@@ -75,7 +75,7 @@ class TrackerPageUI:
         self.nav = Adw.NavigationView()
 
         self.mode_view = ModeSelectView(
-            workouts_dir=self.app.workouts_dir,
+            workouts_running_dir=self.app.workouts_running_dir,
             on_start_free_run=self._show_free_run_page,
             on_start_workout=self._start_workout_from_path,
         )

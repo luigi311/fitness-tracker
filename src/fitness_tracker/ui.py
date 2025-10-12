@@ -78,8 +78,8 @@ class FitnessAppUI(Adw.Application):
         app_dir.mkdir(parents=True, exist_ok=True)
         self.database = app_dir / "fitness.db"
         self.config_file = app_dir / "config.ini"
-        self.workouts_dir = app_dir / "workouts"
-        self.workouts_dir.mkdir(parents=True, exist_ok=True)
+        self.workouts_running_dir = app_dir / "workouts" / "running"
+        self.workouts_running_dir.mkdir(parents=True, exist_ok=True)
 
         # load existing configuration
         self.cfg = ConfigParser()
