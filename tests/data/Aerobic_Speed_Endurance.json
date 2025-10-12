@@ -1,0 +1,152 @@
+{
+  "description": "Warm Up:\n8 mins in Z2,\n4 x (30 secs accelerating from Z2 to Z4 + 30 sec recoveries in Z1).",
+  "duration": 2100,
+  "distance": 2970.6523,
+  "ftp": 150,
+  "lthr": 172,
+  "threshold_pace": 1.5777843,
+  "pace_units": "MINS_MILE",
+  "sportSettings": {
+    "id": 1630886,
+    "athlete_id": "i389547",
+    "types": ["Run", "VirtualRun", "TrailRun"],
+    "warmup_time": 300,
+    "cooldown_time": 300,
+    "ftp": 150,
+    "power_zones": [80, 90, 100, 115, 999],
+    "sweet_spot_min": 84,
+    "sweet_spot_max": 97,
+    "power_spike_threshold": 30,
+    "power_zone_names": ["Zone 1", "Zone 2", "Zone 3", "Zone 4", "Zone 5"],
+    "ftp_est_min_secs": 300,
+    "use_laps_for_power_intervals": false,
+    "keep_all_laps_for_power_intervals": true,
+    "lthr": 172,
+    "max_hr": 202,
+    "hr_zones": [145, 153, 162, 171, 202],
+    "hr_zone_names": ["Zone 1", "Zone 2", "Zone 3", "Zone 4", "Zone 5"],
+    "hr_load_type": "HRSS",
+    "hrrc_min_percent": 100.0,
+    "threshold_pace": 1.5777843,
+    "pace_units": "MINS_MILE",
+    "pace_zones": [80.0, 90.0, 95.0, 100.0, 999.0],
+    "pace_zone_names": ["Zone 1", "Zone 2", "Zone 3", "Zone 4", "Zone 5"],
+    "pace_load_type": "RUN",
+    "gap_model": "STRAVA_RUN",
+    "elevation_correction": "AUTO",
+    "use_gap_zone_times": true,
+    "best_effort_distances": [
+      400.0, 800.0, 1500.0, 1609.34, 3000.0, 5000.0, 10000.0, 21097.5, 42195.0
+    ],
+    "pace_curve_start": 1000.0,
+    "load_order": "POWER_HR_PACE",
+    "tiz_order": "HR_POWER_PACE",
+    "workout_order": "POWER_HR_PACE",
+    "interval_display": "POWER_HR_PACE",
+    "extract_workouts": false,
+    "show_pauses": 600,
+    "ignore_velocity": false,
+    "activity_field_ids": [],
+    "activity_charts": {},
+    "custom_field_ids": [],
+    "custom_field_values": {},
+    "custom_zones_ids": [],
+    "other": false,
+    "eFTPSupported": true,
+    "use_distance_for_intervals": false
+  },
+  "target": "PACE",
+  "steps": [
+    {
+      "text": "Warm up",
+      "duration": 480,
+      "pace": { "start": 80.0, "end": 89.0, "units": "%pace" },
+      "_pace": {
+        "value": 1.3332276940345764,
+        "start": 1.2622274160385132,
+        "end": 1.4042279720306396
+      },
+      "_distance": 639.9493
+    },
+    {
+      "text": "4x",
+      "duration": 240,
+      "distance": 329.44138,
+      "reps": 4,
+      "steps": [
+        {
+          "text": "Hard",
+          "duration": 30,
+          "pace": { "start": 95.0, "end": 99.0, "units": "%pace" },
+          "_pace": {
+            "value": 1.5304507613182068,
+            "start": 1.4988950490951538,
+            "end": 1.5620064735412598
+          },
+          "_distance": 45.913525
+        },
+        {
+          "text": "Easy",
+          "duration": 30,
+          "pace": { "start": 75.0, "end": 79.0, "units": "%pace" },
+          "_pace": {
+            "value": 1.214893877506256,
+            "start": 1.1833381652832031,
+            "end": 1.246449589729309
+          },
+          "_distance": 36.446815
+        }
+      ]
+    },
+    {
+      "text": "6x",
+      "duration": 1080,
+      "distance": 1613.1267,
+      "reps": 6,
+      "steps": [
+        {
+          "text": "Hard",
+          "duration": 120,
+          "pace": { "start": 100.0, "end": 107.0, "units": "%pace" },
+          "_pace": {
+            "value": 1.633006751537323,
+            "start": 1.5777842998504639,
+            "end": 1.6882292032241821
+          },
+          "_distance": 195.96082
+        },
+        {
+          "text": "Easy",
+          "duration": 60,
+          "pace": { "start": 75.0, "end": 79.0, "units": "%pace" },
+          "_pace": {
+            "value": 1.214893877506256,
+            "start": 1.1833381652832031,
+            "end": 1.246449589729309
+          },
+          "_distance": 72.89363
+        }
+      ]
+    },
+    {
+      "text": "Cool Down",
+      "duration": 300,
+      "pace": { "start": 75.0, "end": 89.0, "units": "%pace" },
+      "_pace": {
+        "value": 1.2937830686569214,
+        "start": 1.1833381652832031,
+        "end": 1.4042279720306396
+      },
+      "_distance": 388.13492
+    }
+  ],
+  "zoneTimes": [
+    { "id": "Z1", "secs": 480 },
+    { "id": "Z2", "secs": 780 },
+    { "id": "Z3", "secs": 0 },
+    { "id": "Z4", "secs": 120 },
+    { "id": "Z5", "secs": 720 }
+  ],
+  "options": {},
+  "locales": []
+}
