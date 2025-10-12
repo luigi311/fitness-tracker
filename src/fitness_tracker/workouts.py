@@ -2,14 +2,29 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from pathlib import Path
 
-SMALL_WORDS = {"a", "an", "and", "as", "at", "but", "by", "for", "in", "of", "on", "or", "the", "to", "vs"}
+SMALL_WORDS = {
+    "a",
+    "an",
+    "and",
+    "as",
+    "at",
+    "but",
+    "by",
+    "for",
+    "in",
+    "of",
+    "on",
+    "or",
+    "the",
+    "to",
+    "vs",
+}
 ACRONYM_MAP = {
     "ftp": "FTP",
     "hr": "HR",
@@ -17,6 +32,9 @@ ACRONYM_MAP = {
     "vo2": "VO2",
     "vo2max": "VO2max",
 }
+
+_TIME_RE = re.compile(r"^(?P<m>\d+):(?P<s>\d{1,2})(?:\.(?P<ms>\d+))?$")
+
 
 def pretty_workout_name(raw: str) -> str:
     """
@@ -27,8 +45,8 @@ def pretty_workout_name(raw: str) -> str:
       - preserve common acronyms (FTP, HR, BPM, VO2, VO2max).
     """
     s = (raw or "").strip()
-    s = re.sub(r"[_\-]+", " ", s)        # underscores/dashes -> spaces
-    s = re.sub(r"\s+", " ", s)           # collapse whitespace
+    s = re.sub(r"[_\-]+", " ", s)  # underscores/dashes -> spaces
+    s = re.sub(r"\s+", " ", s)  # collapse whitespace
     if not s:
         return "Workout"
 
@@ -265,190 +283,275 @@ class Workout:
 # Parsers
 # -----------------------
 
-
-def _parse_float(x: str, default: float = 0.0) -> float:
-    try:
-        return float(x.strip())
-    except Exception:
-        return default
-
-
-def parse_mrc(path: Path) -> Workout:
+def _decode_power_value(x: float | None) -> float | None:
     """
-    Minimal MRC parser.
-    We support the classic [COURSE DATA] section:
-      Seconds [tab] %FTP  (or) Seconds [tab] Watts
-    We auto-detect whether values look like percentages (>0..200) or watts (>50..2000).
+    Some FIT exports (Garmin/Intervals) encode absolute power targets as value+1000
+    in the generic custom target fields. Decode that to real watts.
+
+    Examples:
+      1078 → 78 W, 1105 → 105 W.  Values outside 1000..2000 are returned unchanged.
     """
-    name = path.stem
-    in_data = False
-    rows: list[tuple[float, float]] = []
-    with path.open("r", encoding="utf-8", errors="ignore") as f:
-        for raw in f:
-            line = raw.strip()
-            if not line:
-                continue
-            if line.upper().startswith("[COURSE DATA]"):
-                in_data = True
-                continue
-            if line.startswith("[") and line.endswith("]") and in_data:
-                # reached another section
-                break
-            if in_data:
-                parts = line.replace(",", "\t").split()
-                if len(parts) < 2:
-                    continue
-                t = _parse_float(parts[0])
-                v = _parse_float(parts[1])
-                rows.append((t, v))
-
-    steps: list[WorkoutStep] = []
-    if not rows:
-        return Workout(name=name, steps=steps)
-
-    # Heuristic: if median between 20..200 -> %FTP, else assume watts
-    vals = [v for _, v in rows]
-    vals_sorted = sorted(vals)
-    mid = vals_sorted[len(vals_sorted) // 2]
-    as_pct = 20.0 <= mid <= 200.0
-
-    # Convert point data into steps (delta of successive times)
-    for i in range(1, len(rows)):
-        dt = max(0.0, rows[i][0] - rows[i - 1][0])
-        v = rows[i - 1][1]
-        # MRC: treat values as *power only* (either %FTP or watts)
-        if as_pct:
-            # power-only, %FTP; no explicit range
-            steps.append(
-                WorkoutStep(
-                    duration_s=dt,
-                    percent_ftp=v,
-                    # bands will be synthesized later (±5%)
-                ),
-            )
-        else:
-            # power-only, absolute watts; no explicit range
-            steps.append(
-                WorkoutStep(
-                    duration_s=dt,
-                    watts=v,
-                    # bands will be synthesized later (±5%)
-                ),
-            )
-
-    return Workout(name=name, steps=steps)
-
-
-def parse_erg(path: Path) -> Workout:
-    """
-    Minimal ERG parser.
-    Typical format:
-      [COURSE DATA]
-      time(sec)    watts_or_%ftp
-    If we see values <= 200 (most of the time) we treat as %FTP; else watts.
-    """
-    # ERG is often identical-enough for our minimal handling.
-    return parse_mrc(path)
+    if x is None:
+        return None
+    if 1000.0 <= x < 2000.0:
+        return x - 1000.0
+    return x
 
 
 def parse_fit(path: Path) -> Workout:
     """
-    FIT workout parser using fitparse (optional dependency).
-    Falls back to an empty workout if fitparse is missing.
+    Parse Intervals.icu-style FIT workouts including pace and repeat blocks.
+
+    Handles:
+      - Power (watts or %FTP), including files that store targets in generic
+        custom_target_value_low/high depending on target_type.
+      - Pace/Speed (m/s; auto-converts sec/km, sec/mi, cs/km, packed mmss)
+      - Repeat markers: duration_type == 'repeat_until_steps_cmplt'
+        with fields: 'duration_step' (start message_index) and 'repeat_steps' (total reps).
     """
+    from fitparse import FitFile
+
     name = path.stem
-    try:
-        from fitparse import FitFile  # type: ignore
-    except Exception:
-        return Workout(name=name, steps=[])
-
     ff = FitFile(str(path))
-    steps: list[WorkoutStep] = []
-    # FIT "workout_step" messages can include duration and target in various units
-    for m in ff.get_messages("workout_step"):
-        fields = {f.name: f.value for f in m}
-        dur_type = fields.get("duration_type")
-        tgt_type = fields.get("target_type")
-        duration_s = 0.0
 
-        # Duration (we support simple "time" steps)
-        if dur_type == "time" or "duration_time" in fields:
-            duration_s = float(fields.get("duration_time", 0.0))
-        elif "duration_value" in fields:
-            duration_s = float(fields["duration_value"])
+    # ---------- helpers ----------
+    def fnum(x) -> float | None:
+        try:
+            return float(x)
+        except Exception:
+            return None
 
-        if duration_s <= 0:
+    def first_non_none(d: dict, *keys):
+        for k in keys:
+            if k is None:
+                continue
+            if k in d and d[k] is not None:
+                return d[k]
+        return None
+
+    def pace_like_to_mps(v):
+        """
+        Convert common pace encodings → m/s:
+          - m/s (0.5..12) → as-is
+          - sec/km (120..1200) → 1000 / s_per_km
+          - sec/mi (200..2400) → 1609.344 / s_per_mi
+          - centiseconds/km (8000..200000) → (cs/100) s/km → 1000 / s_per_km
+          - packed mmss integer (e.g., 430 = 4:30 /km) → 1000 / (m*60 + s).
+        """
+        x = fnum(v)
+        if x is None or x <= 0:
+            return None
+        # looks like m/s
+        if 0.5 <= x <= 12.0:
+            return x
+        xi = int(x)
+        # packed mmss (integers only, seconds < 60) → sec/km
+        if 200 <= xi <= 1200 and (xi % 100) < 60 and abs(x - xi) < 1e-6:
+            mins, secs = xi // 100, xi % 100
+            s_per_km = mins * 60 + secs
+            return 1000.0 / s_per_km if s_per_km > 0 else None
+        # centiseconds/km → sec/km
+        if 8000 <= x <= 200000:
+            s_per_km = x / 100.0
+            if 120 <= s_per_km <= 1200:
+                return 1000.0 / s_per_km
+        # sec/km
+        if 120 <= x <= 1200:
+            return 1000.0 / x
+        # sec/mi
+        if 200 <= x <= 2400:
+            return 1609.344 / x
+        return None
+
+    # ---------- first pass: collect steps & repeat markers ----------
+    entries: list[dict] = []
+    for msg in ff.get_messages("workout_step"):
+        fields = {f.name: f.value for f in msg}
+        msg_idx = int(fields.get("message_index") or len(entries))
+
+        # Duration
+        duration_s = None
+        dt_time = fnum(fields.get("duration_time"))
+        dt_val = fnum(fields.get("duration_value"))
+        if dt_time is not None and dt_time > 0:
+            duration_s = dt_time
+        elif dt_val is not None and dt_val > 0:
+            duration_s = dt_val
+
+        dur_type = str(fields.get("duration_type") or "").lower()
+
+        # Repeat marker?
+        if "repeat_until_steps_cmplt" in dur_type:
+            try:
+                start_index = int(fields.get("duration_step"))
+                reps = int(fields.get("repeat_steps"))
+            except Exception:
+                continue
+            entries.append(
+                {
+                    "type": "repeat",
+                    "message_index": msg_idx,
+                    "start_index": start_index,
+                    "reps": reps,
+                },
+            )
             continue
 
-        # Prepare target containers
+        # Skip non-time steps
+        if duration_s is None or duration_s <= 0:
+            continue
+
+        tgt_type = str(fields.get("target_type") or "").lower()
+
+        # ---------- targets ----------
         watts = pct = speed = None
-        w_lo = w_hi = None
-        pct_lo = pct_hi = None
-        v_lo = v_hi = None
+        w_lo = w_hi = pct_lo = pct_hi = v_lo = v_hi = None
 
-        # Power (absolute watts)
-        if tgt_type in ("power", "power_3s", "power_lap") or (
-            "target_power_low" in fields or "target_power_high" in fields
-        ):
-            lo = fields.get("target_power_low")
-            hi = fields.get("target_power_high")
-            if lo is not None and hi is not None:
-                watts = 0.5 * (float(lo) + float(hi))
-                w_lo, w_hi = float(lo), float(hi)
-            elif lo is not None:
-                watts = float(lo)
+        # PACE / SPEED
+        if ("pace" in tgt_type) or ("speed" in tgt_type):
+            # Intervals.icu uses custom_target_speed_low/high for pace targets
+            lo_raw = first_non_none(
+                fields,
+                "custom_target_speed_low",
+                "target_speed_low",
+                # some files abuse generic value fields; allow if labeled as pace/speed
+                "custom_target_value_low" if ("pace" in tgt_type or "speed" in tgt_type) else None,
+            )
+            hi_raw = first_non_none(
+                fields,
+                "custom_target_speed_high",
+                "target_speed_high",
+                "custom_target_value_high" if ("pace" in tgt_type or "speed" in tgt_type) else None,
+            )
+            mid_raw = fields.get("target_value")
 
-        # Power (%FTP)
-        if (
-            tgt_type in ("power_percent_ftp", "power_3s_percent_ftp")
-            or "target_power_percent_low" in fields
-            or "target_power_percent_high" in fields
-        ):
-            lo = fields.get("target_power_percent_low")
-            hi = fields.get("target_power_percent_high")
-            if lo is not None and hi is not None:
-                pct = 0.5 * (float(lo) + float(hi))
-                pct_lo, pct_hi = float(lo), float(hi)
-            elif lo is not None:
-                pct = float(lo)
+            lo_mps = pace_like_to_mps(lo_raw)
+            hi_mps = pace_like_to_mps(hi_raw)
+            mid_mps = pace_like_to_mps(mid_raw)
 
-        # Pace/Speed (m/s)
-        if tgt_type in ("pace", "speed") or (
-            "target_speed_low" in fields or "target_speed_high" in fields
-        ):
-            slo = fields.get("target_speed_low")
-            shi = fields.get("target_speed_high")
-            if slo is not None and shi is not None:
-                speed = 0.5 * (float(slo) + float(shi))
-                v_lo, v_hi = float(slo), float(shi)
-            elif slo is not None:
-                speed = float(slo)
+            # Accept plausible raw m/s as a fallback
+            lf, hf, mf = fnum(lo_raw), fnum(hi_raw), fnum(mid_raw)
+            if lo_mps is None and lf is not None and 0.5 <= lf <= 12.0:
+                lo_mps = lf
+            if hi_mps is None and hf is not None and 0.5 <= hf <= 12.0:
+                hi_mps = hf
+            if mid_mps is None and mf is not None and 0.5 <= mf <= 12.0:
+                mid_mps = mf
 
-        # Prefer power if present; else pace
-        if watts is not None or pct is not None:
-            steps.append(
-                WorkoutStep(
-                    duration_s=duration_s,
-                    watts=watts,
-                    watts_lo=w_lo,
-                    watts_hi=w_hi,
-                    percent_ftp=pct,
-                    percent_ftp_lo=pct_lo,
-                    percent_ftp_hi=pct_hi,
-                    # ignore pace if power is present
-                )
+            if lo_mps is not None and hi_mps is not None:
+                v_lo, v_hi = lo_mps, hi_mps
+                speed = 0.5 * (v_lo + v_hi)
+            elif lo_mps is not None:
+                speed = lo_mps
+            elif mid_mps is not None:
+                speed = mid_mps
+
+        # POWER – %FTP
+        if ("percent" in tgt_type) or ("ftp" in tgt_type):
+            lo_raw = first_non_none(
+                fields,
+                "target_power_percent_low",
+                # some exports put % in generic value fields when target_type mentions percent
+                "custom_target_value_low",
+            )
+            hi_raw = first_non_none(
+                fields,
+                "target_power_percent_high",
+                "custom_target_value_high",
+            )
+            mid_raw = fields.get("target_value")
+            lo_f, hi_f, mid_f = fnum(lo_raw), fnum(hi_raw), fnum(mid_raw)
+            if lo_f is not None and hi_f is not None:
+                pct_lo, pct_hi = lo_f, hi_f
+                pct = 0.5 * (pct_lo + pct_hi)
+            elif lo_f is not None:
+                pct = lo_f
+            elif mid_f is not None and 0 < mid_f <= 300:
+                pct = mid_f  # plausible %FTP
+
+        # POWER – absolute watts
+        elif "power" in tgt_type:
+            lo_raw = first_non_none(
+                fields,
+                "custom_target_power_low",
+                "target_power_low",
+                # allow generic value fields if type is power (but not percent)
+                "custom_target_value_low"
+                if ("percent" not in tgt_type and "ftp" not in tgt_type)
+                else None,
+            )
+            hi_raw = first_non_none(
+                fields,
+                "custom_target_power_high",
+                "target_power_high",
+                "custom_target_value_high"
+                if ("percent" not in tgt_type and "ftp" not in tgt_type)
+                else None,
+            )
+            mid_raw = fields.get("target_value")
+            lo_f, hi_f, mid_f = fnum(lo_raw), fnum(hi_raw), fnum(mid_raw)
+            lo_w = _decode_power_value(lo_f)
+            hi_w = _decode_power_value(hi_f)
+            mid_w = _decode_power_value(mid_f)
+
+            if lo_w is not None and hi_w is not None:
+                w_lo, w_hi = lo_w, hi_w
+                watts = 0.5 * (w_lo + w_hi)
+            elif lo_w is not None:
+                watts = lo_w
+            elif mid_w is not None:
+                watts = mid_w
+
+        # ---------- build step (prefer power, then pace; else duration-only) ----------
+        if (watts is not None) or (pct is not None) or (w_lo is not None) or (pct_lo is not None):
+            step = WorkoutStep(
+                duration_s=float(duration_s),
+                watts=watts,
+                watts_lo=w_lo,
+                watts_hi=w_hi,
+                percent_ftp=pct,
+                percent_ftp_lo=pct_lo,
+                percent_ftp_hi=pct_hi,
+            )
+        elif (speed is not None) or (v_lo is not None):
+            step = WorkoutStep(
+                duration_s=float(duration_s),
+                speed_mps=speed,
+                speed_mps_lo=v_lo,
+                speed_mps_hi=v_hi,
             )
         else:
-            steps.append(
-                WorkoutStep(
-                    duration_s=duration_s,
-                    speed_mps=speed,
-                    speed_mps_lo=v_lo,
-                    speed_mps_hi=v_hi,
-                )
-            )
+            step = WorkoutStep(duration_s=float(duration_s))
 
-    return Workout(name=name, steps=steps)
+        entries.append({"type": "step", "message_index": msg_idx, "step": step})
+
+    # ---------- second pass: expand repeats ----------
+    entries.sort(key=lambda e: e["message_index"])
+    final_steps: list[WorkoutStep] = []
+
+    for e in entries:
+        if e["type"] == "step":
+            final_steps.append(e["step"])
+        else:
+            start = int(e["start_index"])
+            end = int(e["message_index"])
+            reps = int(e["reps"])
+            # Collect the block of steps between start..end (message_index)
+            block: list[WorkoutStep] = []
+            for e2 in entries:
+                if e2["type"] != "step":
+                    continue
+                mi = int(e2["message_index"])
+                if start <= mi < end:
+                    block.append(e2["step"])
+            if not block or reps <= 1:
+                continue
+            # Append (reps-1) more copies
+            for _ in range(reps - 1):
+                for s in block:
+                    final_steps.append(WorkoutStep(**s.__dict__))
+
+    return Workout(name=name, steps=final_steps)
 
 
 # -----------------------
@@ -620,7 +723,7 @@ def parse_intervals_icu_json(path: Path) -> Workout:
 # Discovery
 # -----------------------
 
-SUPPORTED_EXTS = (".mrc", ".erg", ".fit", ".json")
+SUPPORTED_EXTS = (".fit", ".json")
 
 
 def discover_workouts(folder: Path) -> list[Path]:
@@ -629,12 +732,83 @@ def discover_workouts(folder: Path) -> list[Path]:
 
 def load_workout(path: Path) -> Workout:
     ext = path.suffix.lower()
-    if ext == ".mrc":
-        return parse_mrc(path)
-    if ext == ".erg":
-        return parse_erg(path)
     if ext == ".fit":
         return parse_fit(path)
     if ext == ".json":
         return parse_intervals_icu_json(path)
     return Workout(name=path.stem, steps=[])
+
+
+def normalize_workout(workout: Workout, ftp_watts: int = 250) -> dict:
+    """
+    Produce a stable, source-agnostic structure for tests/snapshots.
+    IMPORTANT: We only emit bands (lo/hi) when the source provided them.
+               If a step had a single target, we emit mid and set lo/hi = None.
+    """
+    def _emit_power(step: WorkoutStep) -> dict | None:
+        # Prefer absolute watts fields when present
+        if (step.watts_lo is not None) or (step.watts_hi is not None) or (step.watts is not None):
+            # Explicit band?
+            if (step.watts_lo is not None) and (step.watts_hi is not None):
+                mid = step.watts if step.watts is not None else 0.5 * (step.watts_lo + step.watts_hi)
+                return {
+                    "mid": float(mid),
+                    "lo": float(step.watts_lo),
+                    "hi": float(step.watts_hi),
+                }
+            # Single absolute target
+            if step.watts is not None:
+                return {"mid": float(step.watts), "lo": None, "hi": None}
+
+        # Percent FTP path
+        if (
+            (step.percent_ftp_lo is not None) or (step.percent_ftp_hi is not None) or
+            (step.percent_ftp is not None)
+        ):
+            if (step.percent_ftp_lo is not None) and (step.percent_ftp_hi is not None):
+                mid_pct = step.percent_ftp if step.percent_ftp is not None else 0.5 * (
+                    step.percent_ftp_lo + step.percent_ftp_hi
+                )
+                return {
+                    "mid": float(ftp_watts) * float(mid_pct) / 100.0,
+                    "lo": float(ftp_watts) * float(step.percent_ftp_lo) / 100.0,
+                    "hi": float(ftp_watts) * float(step.percent_ftp_hi) / 100.0,
+                }
+            if step.percent_ftp is not None:
+                return {"mid": float(ftp_watts) * float(step.percent_ftp) / 100.0, "lo": None, "hi": None}
+
+        return None
+
+    def _emit_pace(step: WorkoutStep) -> dict | None:
+        # Explicit band?
+        if (step.speed_mps_lo is not None) and (step.speed_mps_hi is not None):
+            mid = step.speed_mps if step.speed_mps is not None else 0.5 * (
+                float(step.speed_mps_lo) + float(step.speed_mps_hi)
+            )
+            return {
+                "mid_mps": float(mid),
+                "lo_mps": float(step.speed_mps_lo),
+                "hi_mps": float(step.speed_mps_hi),
+            }
+        # Single target
+        if step.speed_mps is not None:
+            return {"mid_mps": float(step.speed_mps), "lo_mps": None, "hi_mps": None}
+        return None
+
+    out_steps: list[dict] = []
+    for s in workout.steps:
+        p = _emit_power(s)
+        if p is not None:
+            out_steps.append({"duration_s": float(s.duration_s), "kind": "power", "power": p})
+            continue
+        v = _emit_pace(s)
+        if v is not None:
+            out_steps.append({"duration_s": float(s.duration_s), "kind": "pace", "pace": v})
+            continue
+        out_steps.append({"duration_s": float(s.duration_s), "kind": "none"})
+
+    return {
+        "name": workout.name,
+        "total_seconds": float(workout.total_seconds),
+        "steps": out_steps,
+    }
