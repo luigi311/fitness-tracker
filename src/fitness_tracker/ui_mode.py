@@ -37,12 +37,6 @@ class ModeSelectView(Gtk.Box):
         title.set_halign(Gtk.Align.CENTER)
         self.append(title)
 
-        btn_free = Gtk.Button.new_with_label("Start Free Run")
-        btn_free.add_css_class("suggested-action")
-        btn_free.set_halign(Gtk.Align.CENTER)
-        btn_free.connect("clicked", lambda *_: self._on_start_free_run())
-        self.append(btn_free)
-
         # Workout list UI
         self._list = Gtk.ListBox()
         self._list.set_selection_mode(Gtk.SelectionMode.SINGLE)
@@ -56,11 +50,29 @@ class ModeSelectView(Gtk.Box):
         frame.set_child(sc)
         self.append(frame)
 
+        btn_free = Gtk.Button.new_with_label("Start Free Run")
+        btn_free.add_css_class("suggested-action")
+        btn_free.set_halign(Gtk.Align.CENTER)
+        btn_free.connect("clicked", lambda *_: self._on_start_free_run())
+
         self._btn_start_w = Gtk.Button.new_with_label("Start Selected Workout")
         self._btn_start_w.set_sensitive(False)  # updated in refresh()
         self._btn_start_w.set_halign(Gtk.Align.CENTER)
         self._btn_start_w.connect("clicked", self._on_start_selected_clicked)
-        self.append(self._btn_start_w)
+
+        # --- FlowBox containing just the two pairs ---
+        controls = Gtk.FlowBox()
+        controls.set_selection_mode(Gtk.SelectionMode.NONE)
+        controls.set_homogeneous(True)     # nav_pair and act_pair get equal cell widths
+        controls.set_column_spacing(8)
+        controls.set_row_spacing(8)
+        controls.set_min_children_per_line(1)   # stacks on very narrow screens
+        controls.set_max_children_per_line(2)   # side-by-side when there’s room
+
+        controls.insert(btn_free, -1)
+        controls.insert(self._btn_start_w, -1)
+
+        self.append(controls)
 
         # initial population
         self.refresh()
@@ -82,6 +94,7 @@ class ModeSelectView(Gtk.Box):
                 self._list.append(row)
 
             self._btn_start_w.set_sensitive(bool(self._paths))
+            self._btn_start_w.add_css_class("suggested-action")
 
             # select first row (async so rows are realized)
             if self._paths:
