@@ -1,6 +1,7 @@
 import asyncio
 import subprocess
 import threading
+import requests
 from configparser import ConfigParser
 
 import gi
@@ -36,6 +37,12 @@ class SettingsPageUI:
 
         # pebble
         self.pebble_map: dict[str, str] = {}
+
+        # Intervals ICU
+        self.icu_id_entry = None
+        self.icu_key_entry = None
+        self.btn_fetch_icu = None
+
 
     def build_page(self) -> Gtk.Widget:
         # General settings group
@@ -235,6 +242,36 @@ class SettingsPageUI:
         ftp_row.add_suffix(self.ftp_spin)
         personal_group.add(ftp_row)
 
+        # --- Intervals.icu provider ---
+        icu_group = Adw.PreferencesGroup()
+        icu_group.set_title("Intervals.icu")
+
+        row_icu_id = Adw.ActionRow()
+        row_icu_id.set_title("Athlete ID")
+        self.icu_id_entry = Gtk.Entry()
+        self.icu_id_entry.set_hexpand(True)
+        self.icu_id_entry.set_text(self.app.icu_athlete_id or "")
+        row_icu_id.add_suffix(self.icu_id_entry)
+        icu_group.add(row_icu_id)
+
+        row_icu_key = Adw.ActionRow()
+        row_icu_key.set_title("API Key")
+        self.icu_key_entry = Gtk.Entry()
+        self.icu_key_entry.set_visibility(False)  # hide text (password-like)
+        self.icu_key_entry.set_hexpand(True)
+        self.icu_key_entry.set_text(self.app.icu_api_key or "")
+        row_icu_key.add_suffix(self.icu_key_entry)
+        icu_group.add(row_icu_key)
+
+        row_fetch = Adw.ActionRow()
+        row_fetch.set_title("Fetch Week's Running Workouts")
+        self.btn_fetch_icu = Gtk.Button(label="Fetch")
+        self.btn_fetch_icu.get_style_context().add_class("suggested-action")
+        self.btn_fetch_icu.connect("clicked", self._on_fetch_icu)
+        row_fetch.add_suffix(self.btn_fetch_icu)
+        icu_group.add(row_fetch)
+
+
         # Save Button
         action_group = Adw.PreferencesGroup()
         action_group.set_title("Actions")
@@ -267,6 +304,7 @@ class SettingsPageUI:
         container.append(dev_group)
         container.append(pebble_group)
         container.append(personal_group)
+        container.append(icu_group)
         container.append(action_group)
         # Return the scroller so the page scrolls on small windows
         scroller.set_child(container)
@@ -492,6 +530,41 @@ class SettingsPageUI:
             self.pebble_port_row.set_visible(use_emu)
         return False
 
+    def _on_fetch_icu(self, _button: Gtk.Button):
+        from datetime import date
+        from fitness_tracker.workout_providers import week_window_from
+        from fitness_tracker.workout_providers.intervals_icu import IntervalsICUProvider
+
+        aid = (self.icu_id_entry.get_text() or "").strip()
+        key = (self.icu_key_entry.get_text() or "").strip()
+        if not (aid and key):
+            self.app.show_toast("Intervals.icu Athlete ID and API key required")
+            return
+
+        self.btn_fetch_icu.set_sensitive(False)
+        self.app.show_toast("Fetching workouts from Intervals.icu…")
+
+        def worker():
+            try:
+                provider = IntervalsICUProvider(athlete_id=aid, api_key=key, ext="fit")
+                start, end = week_window_from(date.today())
+                out_dir = self.app.workouts_running_provider_dir
+                n = 0
+                for _dw in provider.fetch_between("running", start, end, out_dir):
+                    n += 1
+                GLib.idle_add(self.app.show_toast, f"Fetched {n} workout(s)")
+                # simply refresh the existing list
+                GLib.idle_add(self.app.tracker.mode_view.refresh)
+            except requests.HTTPError as e:
+                GLib.idle_add(self.app.show_toast, f"Intervals.icu error: {e.response.status_code}")
+            except Exception as e:
+                GLib.idle_add(self.app.show_toast, f"Fetch failed: {e}")
+            finally:
+                GLib.idle_add(self.btn_fetch_icu.set_sensitive, True)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+
     def _on_save_settings(self, _button):
         self.app.database_dsn = self.dsn_entry.get_text()
 
@@ -530,6 +603,9 @@ class SettingsPageUI:
         self.app.max_hr = self.max_spin.get_value_as_int()
         self.app.ftp_watts = self.ftp_spin.get_value_as_int()
 
+        self.app.icu_athlete_id = self.icu_id_entry.get_text().strip()
+        self.app.icu_api_key = self.icu_key_entry.get_text().strip()
+
         cfg = ConfigParser()
         cfg["server"] = {"database_dsn": self.app.database_dsn}
         cfg["sensors"] = {
@@ -554,6 +630,11 @@ class SettingsPageUI:
             "resting_hr": str(self.app.resting_hr),
             "max_hr": str(self.app.max_hr),
             "ftp_watts": str(self.app.ftp_watts),
+        }
+
+        cfg["intervals_icu"] = {
+            "athlete_id": self.app.icu_athlete_id,
+            "api_key": self.app.icu_api_key,
         }
 
         with open(self.app.config_file, "w") as f:

@@ -43,19 +43,9 @@ class ModeSelectView(Gtk.Box):
         btn_free.connect("clicked", lambda *_: self._on_start_free_run())
         self.append(btn_free)
 
-        # Workout list
-        self._paths = discover_workouts(self._workouts_running_dir)
+        # Workout list UI
         self._list = Gtk.ListBox()
         self._list.set_selection_mode(Gtk.SelectionMode.SINGLE)
-
-        for p in self._paths:
-            row = Adw.ActionRow()
-            row.set_title(p.stem)
-            row.set_subtitle(p.suffix.lower().lstrip(".").upper())
-            self._list.append(row)
-
-        if self._paths:
-            GLib.idle_add(lambda: self._list.select_row(self._list.get_row_at_index(0)))
 
         sc = Gtk.ScrolledWindow()
         sc.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
@@ -67,10 +57,35 @@ class ModeSelectView(Gtk.Box):
         self.append(frame)
 
         self._btn_start_w = Gtk.Button.new_with_label("Start Selected Workout")
-        self._btn_start_w.set_sensitive(bool(self._paths))
+        self._btn_start_w.set_sensitive(False)  # updated in refresh()
         self._btn_start_w.set_halign(Gtk.Align.CENTER)
         self._btn_start_w.connect("clicked", self._on_start_selected_clicked)
         self.append(self._btn_start_w)
+
+        # initial population
+        self.refresh()
+
+    def refresh(self) -> None:
+            """Re-scan the workouts dir and repopulate the list without duplicating UI."""
+            # discover and sort
+            self._paths = discover_workouts(self._workouts_running_dir)
+
+            # clear all rows
+            for row in list(self._list):   # Gtk.ListBox is iterable over rows
+                self._list.remove(row)
+
+            # repopulate
+            for p in self._paths:
+                row = Adw.ActionRow()
+                row.set_title(p.stem)
+                row.set_subtitle(p.suffix.lower().lstrip(".").upper())
+                self._list.append(row)
+
+            self._btn_start_w.set_sensitive(bool(self._paths))
+
+            # select first row (async so rows are realized)
+            if self._paths:
+                GLib.idle_add(lambda: self._list.select_row(self._list.get_row_at_index(0)))
 
     def _on_start_selected_clicked(self, *_):
         row = self._list.get_selected_row()

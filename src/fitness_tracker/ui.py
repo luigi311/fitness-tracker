@@ -81,6 +81,9 @@ class FitnessAppUI(Adw.Application):
         self.workouts_running_dir = app_dir / "workouts" / "running"
         self.workouts_running_dir.mkdir(parents=True, exist_ok=True)
 
+        self.workouts_running_provider_dir = self.workouts_running_dir / "intervals_icu"
+        self.workouts_running_provider_dir.mkdir(parents=True, exist_ok=True)
+
         # load existing configuration
         self.cfg = ConfigParser()
         self.database_dsn = ""
@@ -106,6 +109,10 @@ class FitnessAppUI(Adw.Application):
         self.pebble_mac = None
         self.pebble_bridge = None
         self.pebble_port = 47527
+
+        # Intervals.icu config
+        self.icu_athlete_id: str = ""
+        self.icu_api_key: str = ""
 
         if self.config_file.exists():
             self.cfg.read(self.config_file)
@@ -140,6 +147,11 @@ class FitnessAppUI(Adw.Application):
             )
             self.pebble_mac = self.cfg.get("pebble", "mac", fallback=None)
             self.pebble_port = self.cfg.getint("pebble", "port", fallback=47527)
+
+            # Intervals.icu
+            self.icu_athlete_id = self.cfg.get("intervals_icu", "athlete_id", fallback="")
+            self.icu_api_key = self.cfg.get("intervals_icu", "api_key", fallback="")
+
 
     def show_toast(self, message: str):
         print(message)

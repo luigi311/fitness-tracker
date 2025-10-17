@@ -17,6 +17,7 @@ dependencies = [
     "matplotlib>=3.10.3",
     "psycopg2-binary>=2.9.10",
     "pygobject>=3.52.3",
+    "requests>=2.32.5",
     "sqlalchemy>=2.0.41",
 ]
 
