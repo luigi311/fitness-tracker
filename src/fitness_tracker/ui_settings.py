@@ -542,7 +542,6 @@ class SettingsPageUI:
             return
 
         self.btn_fetch_icu.set_sensitive(False)
-        self.app.show_toast("Fetching workouts from Intervals.icu…")
 
         def worker():
             try:
@@ -552,7 +551,6 @@ class SettingsPageUI:
                 n = 0
                 for _dw in provider.fetch_between("running", start, end, out_dir):
                     n += 1
-                GLib.idle_add(self.app.show_toast, f"Fetched {n} workout(s)")
                 # simply refresh the existing list
                 GLib.idle_add(self.app.tracker.mode_view.refresh)
             except requests.HTTPError as e:
