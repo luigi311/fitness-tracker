@@ -320,8 +320,7 @@ class HistoryPageUI:
         return None
 
     def _fetch_summaries(self) -> list[ActivitySummary]:
-        # Handle test mode or first-run (no recorder)
-        if self.app.test_mode or not self.app.recorder:
+        if not self.app.recorder:
             return []
 
         cutoff = self._filter_cutoff()
@@ -512,7 +511,7 @@ class HistoryPageUI:
         return row
 
     def _build_sparkline(self, act_id: int) -> Optional[Gtk.Widget]:
-        if self.app.test_mode or not self.app.recorder:
+        if not self.app.recorder:
             return None
 
         with self.app.recorder.db.Session() as session:
@@ -561,7 +560,7 @@ class HistoryPageUI:
         hr_mode = self._cmp_metric_id == "hr"
         self._apply_chart_style(ax, draw_hr_zones=hr_mode)
 
-        if self.app.test_mode or not self.app.recorder or not self.selected_ids:
+        if not self.app.recorder or not self.selected_ids:
             ax.set_title("Select activities to compare.", color=self.app.DARK_FG)
             self._cmp_canvas.draw_idle()
             return
@@ -680,7 +679,7 @@ class HistoryPageUI:
 
     # ---- Details dialog ----
     def _open_details_dialog(self, act_id: int):
-        if self.app.test_mode or not self.app.recorder:
+        if not self.app.recorder:
             return
 
         dlg = Adw.Dialog()
@@ -934,7 +933,7 @@ class HistoryPageUI:
         """
         Generate a TCX and prompt the user to save it.
         """
-        if self.app.test_mode or not self.app.recorder:
+        if not self.app.recorder:
             return
 
         # Build a default filename from the activity start time

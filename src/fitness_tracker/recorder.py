@@ -36,9 +36,13 @@ class Recorder:
         *,
         on_running_update: Callable[[float, float, int, float | None, float | None], None]
         | None = None,
+        test_mode: bool = False,
     ):
         self._ble_lock = asyncio.Lock()  # Lock for BLE operations
         self._thread: threading.Thread | None = None
+
+        # Disable write when in test mode
+        self.test_mode = bool(test_mode)
 
         # Cache resolved addresses so we don’t keep scanning
         self._hr_addr_cache: str | None = hr_device_address
@@ -109,13 +113,18 @@ class Recorder:
 
     def start_recording(self):
         if not self._recording:
-            self._activity_id = self.db.start_activity()
+            # Only create an activity when not in test mode
+            if not self.test_mode:
+                self._activity_id = self.db.start_activity()
+            else:
+                self._activity_id = None
             self._recording = True
             self._start_ms = None
 
     def stop_recording(self):
         if self._recording:
-            self.db.stop_activity(self._activity_id)
+            if self._activity_id is not None:
+                self.db.stop_activity(self._activity_id)
             self._recording = False
 
     def _run(self):
@@ -139,7 +148,7 @@ class Recorder:
         GLib.idle_add(self.on_bpm, delta_ms, smoothed_bpm)
 
         # Persist to the DB if recording
-        if self._recording:
+        if self._recording and self._activity_id:
             self.db.insert_heart_rate(self._activity_id, delta_ms, smoothed_bpm, rr, energy)
 
     # --- Running handling ---
@@ -161,7 +170,7 @@ class Recorder:
         GLib.idle_add(self.on_running, delta_ms, speed_mps, cadence, dist_m, watts)
 
         # Persist to DB if recording
-        if self._recording:
+        if self._recording and self._activity_id:
             self.db.insert_running_metrics(
                 self._activity_id,
                 delta_ms,

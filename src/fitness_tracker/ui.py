@@ -203,25 +203,26 @@ class FitnessAppUI(Adw.Application):
             # Start/stop Pebble according to config
             self.apply_pebble_settings()
 
-            # Only spin up the BLE recorder when NOT in test mode
+            # Always create a Recorder so the DB is available for History.
+            # In test mode, make it read-only and don't start BLE threads.
+            self.recorder = Recorder(
+                on_bpm_update=self.tracker.on_bpm,
+                on_running_update=self.tracker.on_running,
+                database_url=f"sqlite:///{self.database}",
+                hr_device_name=self.hr_name,
+                hr_device_address=self.hr_address or None,
+                speed_device_name=self.speed_name,
+                speed_device_address=self.speed_address or None,
+                cadence_device_name=self.cadence_name,
+                cadence_device_address=self.cadence_address or None,
+                power_device_name=self.power_name,
+                power_device_address=self.power_address or None,
+                on_error=self.show_toast,
+                test_mode=self.test_mode,
+            )
             if not self.test_mode:
-                self.recorder = Recorder(
-                    on_bpm_update=self.tracker.on_bpm,
-                    on_running_update=self.tracker.on_running,
-                    database_url=f"sqlite:///{self.database}",
-                    hr_device_name=self.hr_name,
-                    hr_device_address=self.hr_address or None,
-                    speed_device_name=self.speed_name,
-                    speed_device_address=self.speed_address or None,
-                    cadence_device_name=self.cadence_name,
-                    cadence_device_address=self.cadence_address or None,
-                    power_device_name=self.power_name,
-                    power_device_address=self.power_address or None,
-                    on_error=self.show_toast,
-                )
+                # Only spin BLE loops when not in test mode
                 self.recorder.start()
-            else:
-                self.recorder = None
 
             # Load history
             # threading.Thread(target=self.history.load_history, daemon=True).start()
