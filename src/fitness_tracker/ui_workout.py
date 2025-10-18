@@ -360,6 +360,8 @@ class WorkoutView(Gtk.Box):
         for m in ("top", "bottom", "start", "end"):
             getattr(self, f"set_margin_{m}")(12)
 
+        self.type = "run"
+
         clamp = Adw.Clamp(maximum_size=820, tightening_threshold=680)
         self.append(clamp)
 
@@ -532,7 +534,9 @@ class WorkoutView(Gtk.Box):
         if pace is not None:
             self.card_pace.set_value(pace)
         if cadence_spm is not None:
-            self.card_cad.set_value(str(int(cadence_spm)))
+            # Running is double the cadence
+            out = int(cadence_spm*2) if self.type == "run" else int(cadence_spm)
+            self.card_cad.set_value(str(out))
         if speed_mph is not None:
             self.card_spd.set_value(f"{float(speed_mph):.1f}")
         if dist_mi is not None:

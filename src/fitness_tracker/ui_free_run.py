@@ -95,6 +95,8 @@ class FreeRunView(Gtk.Box):
         for m in ("top", "bottom", "start", "end"):
             getattr(self, f"set_margin_{m}")(12)
 
+        self.type = "run"
+
         # Start/Stop row
         row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         row.set_halign(Gtk.Align.CENTER)
@@ -159,7 +161,8 @@ class FreeRunView(Gtk.Box):
     def set_metrics(self, dist_mi, pace_str, cadence, mph, bpm, watts) -> None:
         self.card_distance.set_value(f"{dist_mi:.2f}")
         self.card_pace.set_value(pace_str)
-        self.card_cadence.set_value(f"{int(cadence)}")
+        # Running is double the cadence
+        self.card_cadence.set_value(f"{int(cadence*2) if self.type == "run" else int(cadence)}")
         self.card_mph.set_value(f"{mph:.1f}")
         self.card_hr.set_value(f"{int(bpm)}")
         self.card_power.set_value(f"{int(watts)}")

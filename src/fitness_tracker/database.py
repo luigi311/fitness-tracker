@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import (
@@ -9,6 +9,8 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    String,
+    Text,
     UniqueConstraint,
     create_engine,
     event,
@@ -72,6 +74,26 @@ class RunningMetrics(Base):
         Index("ix_run_activity_time", "activity_id", "timestamp_ms"),
     )
 
+class ActivityUpload(Base):
+    __tablename__ = "activity_uploads"
+
+    id = Column(Integer, primary_key=True)
+    activity_id = Column(Integer, ForeignKey("activities.id", ondelete="CASCADE"), nullable=False)
+    provider = Column(String(64), nullable=False)  # e.g. "intervals_icu"
+    status = Column(String(16), nullable=False, default="pending")  # "pending"|"ok"|"failed"
+    uploaded_at = Column(DateTime(timezone=True))  # when status->ok
+    provider_activity_id = Column(String(128))     # remote id if returned
+    payload_hash = Column(String(64))              # optional content hash (dedupe)
+    last_error = Column(Text)
+
+    activity = relationship("Activity", backref="uploads")
+
+    __table_args__ = (
+        UniqueConstraint("activity_id", "provider", name="uq_activity_provider"),
+        Index("ix_upload_provider_status", "provider", "status"),
+        Index("ix_upload_activity", "activity_id"),
+    )
+
 
 def _sqlite_pragmas(dbapi_con, _con_record):
     cur = dbapi_con.cursor()
@@ -122,6 +144,79 @@ class DatabaseManager:
             act = session.get(Activity, activity_id)
             act.end_time = datetime.now(tz=ZoneInfo("UTC"))
             session.commit()
+
+    def list_not_uploaded(self, provider: str) -> list[Activity]:
+            """All activities that have no successful upload row for this provider."""
+            with self.Session() as session:
+                # activities that EITHER:
+                #  - have no row at all for this provider, OR
+                #  - have a row but not status 'ok' (so we can retry failures)
+                subq_ok = (
+                    session.query(ActivityUpload.activity_id)
+                    .filter(ActivityUpload.provider == provider, ActivityUpload.status == "ok")
+                    .subquery()
+                )
+                acts = (
+                    session.query(Activity)
+                    .filter(~Activity.id.in_(subq_ok))  # not in OK list
+                    .order_by(Activity.start_time.asc())
+                    .all()
+                )
+                return acts
+
+    def mark_upload_ok(
+        self,
+        activity_id: int,
+        provider: str,
+        provider_activity_id: str | None = None,
+        payload_hash: str | None = None,
+    ) -> None:
+        with self.Session() as session:
+            row = (
+                session.query(ActivityUpload)
+                .filter_by(activity_id=activity_id, provider=provider)
+                .one_or_none()
+            )
+            now = datetime.now(timezone.utc)
+            if row is None:
+                row = ActivityUpload(
+                    activity_id=activity_id,
+                    provider=provider,
+                )
+                session.add(row)
+            row.status = "ok"
+            row.uploaded_at = now
+            row.provider_activity_id = provider_activity_id or row.provider_activity_id
+            row.payload_hash = payload_hash or row.payload_hash
+            row.last_error = None
+            session.commit()
+
+    def mark_upload_failed(
+        self,
+        activity_id: int,
+        provider: str,
+        error_message: str,
+        payload_hash: str | None = None,
+    ) -> None:
+        with self.Session() as session:
+            row = (
+                session.query(ActivityUpload)
+                .filter_by(activity_id=activity_id, provider=provider)
+                .one_or_none()
+            )
+            if row is None:
+                row = ActivityUpload(
+                    activity_id=activity_id,
+                    provider=provider,
+                )
+                session.add(row)
+            row.status = "failed"
+            row.uploaded_at = None
+            row.last_error = error_message[:1000]  # keep it bounded
+            if payload_hash:
+                row.payload_hash = payload_hash
+            session.commit()
+
 
     def insert_heart_rate(
         self,

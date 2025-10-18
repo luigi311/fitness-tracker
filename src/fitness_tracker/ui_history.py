@@ -12,9 +12,10 @@ from matplotlib.figure import Figure
 from matplotlib.ticker import FuncFormatter
 
 from fitness_tracker.database import Activity, HeartRate, RunningMetrics
+from fitness_tracker.exporters import activity_to_tcx
 
 gi.require_versions({"Gtk": "4.0", "Adw": "1"})
-from gi.repository import GLib, Gtk, Adw  # noqa: E402
+from gi.repository import GLib, Gtk, Adw, Gio  # noqa: E402
 
 
 # ---------- Helpers / small data structures ----------
@@ -451,6 +452,14 @@ class HistoryPageUI:
         title.set_hexpand(True)
         title.set_xalign(0)
         head.append(title)
+
+        # Export button
+        export_btn = Gtk.Button.new_with_label("Export")
+        export_btn.add_css_class("flat")
+        export_btn.set_has_frame(False)
+        export_btn.set_tooltip_text("Export this activity to a TCX file")
+        export_btn.connect("clicked", lambda _b, aid=a.id: self._on_export_clicked(aid))
+        head.append(export_btn)
 
         chk = Gtk.CheckButton()
         chk.set_active(a.id in self.selected_ids)
@@ -920,3 +929,75 @@ class HistoryPageUI:
         ax.yaxis.label.set_color(self.app.DARK_FG)
         ax.tick_params(colors=self.app.DARK_FG)
         ax.grid(color=self.app.DARK_GRID)
+
+    def _on_export_clicked(self, act_id: int):
+        """
+        Generate a TCX and prompt the user to save it.
+        """
+        if self.app.test_mode or not self.app.recorder:
+            return
+
+        # Build a default filename from the activity start time
+        with self.app.recorder.db.Session() as session:
+            act = session.get(Activity, act_id)
+            if not act:
+                self.app.show_toast("Activity not found")
+                return
+            local_start = _tz_aware_localize(act.start_time)
+            default_name = local_start.strftime("Run_%Y-%m-%d_%H-%M.tcx")
+
+            # Gather samples
+            hrs = (
+                session.query(HeartRate)
+                .filter_by(activity_id=act_id)
+                .order_by(HeartRate.timestamp_ms)
+                .all()
+            )
+            runs = (
+                session.query(RunningMetrics)
+                .filter_by(activity_id=act_id)
+                .order_by(RunningMetrics.timestamp_ms)
+                .all()
+            )
+
+        try:
+            tcx_bytes = activity_to_tcx(act=act, heart_rates=hrs, running=runs, sport="Running")
+        except Exception as e:
+            self.app.show_toast(f"Export failed: {e}")
+            return
+
+        # File save dialog (GTK4)
+        dialog = Gtk.FileDialog.new()
+        dialog.set_title("Save TCX")
+        # Suggest default name
+        init_file = Gio.File.new_for_path(default_name)
+        dialog.set_initial_file(init_file)
+        # Limit to .tcx by default (still lets user change)
+        filter_tcx = Gtk.FileFilter()
+        filter_tcx.set_name("TCX files")
+        filter_tcx.add_suffix("tcx")
+        dialog.set_default_filter(filter_tcx)
+
+        def _on_save_done(_dlg, res):
+            try:
+                gfile = dialog.save_finish(res)
+                if not gfile:
+                    return  # user cancelled
+                # Ensure .tcx extension
+                path = gfile.get_path() or default_name
+                if not path.lower().endswith(".tcx"):
+                    path += ".tcx"
+                # Write bytes
+                out = Gio.File.new_for_path(path)
+                out.replace_contents(
+                    tcx_bytes,
+                    None,  # etag
+                    False,  # make_backup
+                    Gio.FileCreateFlags.REPLACE_DESTINATION,
+                    None,  # cancellable
+                )
+                self.app.show_toast(f"Saved: {path}")
+            except Exception as e:
+                self.app.show_toast(f"Save failed: {e}")
+
+        dialog.save(self.app.window, None, _on_save_done)
