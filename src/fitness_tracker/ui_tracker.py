@@ -646,7 +646,7 @@ class TrackerPageUI:
     # ---- connection dots
     def _update_metric_statuses(self) -> None:
         rec = getattr(self.app, "recorder", None)
-        if not rec:
+        if self.app.test_mode or not rec:
             hr_ok = speed_ok = cad_ok = pow_ok = True
         else:
             hr_ok = bool(rec.hr_connected)
