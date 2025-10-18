@@ -1,8 +1,10 @@
 {
   "name": "Fitness-Tracker",
-  "author": "MakeAwesomeHappen",
+  "author": "Luigi311",
   "version": "1.0.0",
-  "keywords": ["pebble-app"],
+  "keywords": [
+    "pebble-app"
+  ],
   "private": true,
   "dependencies": {},
   "pebble": {

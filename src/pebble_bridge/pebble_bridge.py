@@ -16,6 +16,9 @@ KEY_DISTANCE = 4
 KEY_STATUS = 5
 KEY_UNITS = 6
 KEY_POWER = 7
+KEY_TGT_KIND = 8
+KEY_TGT_LO   = 9
+KEY_TGT_HI   = 10
 
 
 class PebbleBridge:
@@ -68,6 +71,9 @@ class PebbleBridge:
         status: int | None = None,
         power_w: int | None = None,
         units: int | None = None,
+        tgt_kind: int | None = None,
+        tgt_lo: float | None = None,
+        tgt_hi: float | None = None,
     ) -> None:
         """Update the latest metrics (None = no change)."""
         with self._lock:
@@ -82,9 +88,20 @@ class PebbleBridge:
             if status is not None:
                 self._state[KEY_STATUS] = int(status)
             if units is not None:
-                self._state[KEY_UNITS] = int(units)  # 0 metric, 1 imperial (optional)
+                # 0 metric, 1 imperial (optional)
+                self._state[KEY_UNITS] = int(units)
             if power_w is not None:
                 self._state[KEY_POWER] = int(power_w)
+            if tgt_kind is not None:
+                # 0 none, 1 power, 2 pace
+                self._state[KEY_TGT_KIND] = int(tgt_kind)
+            if tgt_lo is not None:
+                # power in W as-is, pace in m/s * 100
+                val = int(round(tgt_lo if tgt_kind == 1 else (tgt_lo * 100.0)))
+                self._state[KEY_TGT_LO] = val
+            if tgt_hi is not None:
+                val = int(round(tgt_hi if tgt_kind == 1 else (tgt_hi * 100.0)))
+                self._state[KEY_TGT_HI] = val
 
     # --- internal ---
     def _connect(self) -> None:
@@ -135,6 +152,12 @@ class PebbleBridge:
             d[KEY_UNITS] = Uint8(payload[KEY_UNITS])
         if KEY_POWER in payload:
             d[KEY_POWER] = Uint16(payload[KEY_POWER])
+        if KEY_TGT_KIND in payload:
+            d[KEY_TGT_KIND] = Uint8(payload[KEY_TGT_KIND])
+        if KEY_TGT_LO in payload:
+            d[KEY_TGT_LO] = Uint16(payload[KEY_TGT_LO])
+        if KEY_TGT_HI in payload:
+            d[KEY_TGT_HI] = Uint16(payload[KEY_TGT_HI])
 
         self._appmsg.send_message(UUID(self.app_uuid), d)
 
