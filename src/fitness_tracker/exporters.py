@@ -9,12 +9,17 @@ from fitness_tracker.database import Activity, HeartRate, RunningMetrics
 # ---------- Helpers ----------
 
 
-def _iso_utc(dt):
-    """Render a tz-aware datetime as ISO-8601 Zulu (Intervals/Garmin style)."""
+def _iso_with_local_offset(dt):
+    """
+    Render a datetime as ISO-8601 with its timezone offset
+    - If naive, assume it's UTC (how we store in DB) and then convert to local.
+    - Intervals.icu respects the embedded offset for display.
+    """
     if dt.tzinfo is None:
-        # Be conservative: treat naive times as UTC
         dt = dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    # Convert to the machine's local timezone for human-friendly wall time
+    local_dt = dt.astimezone()  # system local tz with correct DST
+    return local_dt.isoformat(timespec="seconds")
 
 
 def _sec_str(act: Activity, running: list[RunningMetrics], heart_rates: list[HeartRate]) -> str:
@@ -103,9 +108,9 @@ def activity_to_tcx(
     )
     activities = SubElement(tcx, "Activities")
     act_node = SubElement(activities, "Activity", {"Sport": sport})
-    SubElement(act_node, "Id").text = _iso_utc(act.start_time)
+    SubElement(act_node, "Id").text = _iso_with_local_offset(act.start_time)
 
-    lap = SubElement(act_node, "Lap", {"StartTime": _iso_utc(act.start_time)})
+    lap = SubElement(act_node, "Lap", {"StartTime": _iso_with_local_offset(act.start_time)})
     SubElement(lap, "TotalTimeSeconds").text = _sec_str(act, running, heart_rates)
     SubElement(lap, "DistanceMeters").text = _lap_distance_m_str(running)
     SubElement(lap, "Intensity").text = "Active"
@@ -121,11 +126,11 @@ def activity_to_tcx(
         # Use RunningMetrics timeline
         base_ms = running[0].timestamp_ms
         for r in running:
-            # Absolute UTC time = start_time + delta_ms
-            t_utc = act.start_time.astimezone(timezone.utc) + timedelta(milliseconds=r.timestamp_ms)
+            t_local = (act.start_time if act.start_time.tzinfo else act.start_time.replace(tzinfo=timezone.utc))
+            t_local = t_local.astimezone() + timedelta(milliseconds=r.timestamp_ms)
 
             tp = SubElement(track, "Trackpoint")
-            SubElement(tp, "Time").text = _iso_utc(t_utc)
+            SubElement(tp, "Time").text = _iso_with_local_offset(t_local)
 
             # Distance: prefer total_distance_m; else integrate speed
             if r.total_distance_m is not None:
@@ -172,9 +177,10 @@ def activity_to_tcx(
     else:
         # HR-only fallback timeline
         for h in heart_rates:
-            t_utc = act.start_time.astimezone(timezone.utc) + timedelta(milliseconds=h.timestamp_ms)
+            t_local = (act.start_time if act.start_time.tzinfo else act.start_time.replace(tzinfo=timezone.utc))
+            t_local = t_local.astimezone() + timedelta(milliseconds=h.timestamp_ms)
             tp = SubElement(track, "Trackpoint")
-            SubElement(tp, "Time").text = _iso_utc(t_utc)
+            SubElement(tp, "Time").text = _iso_with_local_offset(t_local)
             # Distance unknown -> keep last (0 unless set elsewhere)
             SubElement(tp, "DistanceMeters").text = f"{last_dist_m:.3f}"
             hr = SubElement(tp, "HeartRateBpm")
