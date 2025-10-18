@@ -623,7 +623,7 @@ class TrackerPageUI:
             cur_mph = max(2.0, min(10.0, cur_mph + random.uniform(-0.3, 0.3)))
         self._last_mph = cur_mph
         self._last_cadence = max(
-            150, min(190, getattr(self, "_last_cadence", 172) + random.uniform(-2, 2))
+            75, min(95, getattr(self, "_last_cadence", 86) + random.uniform(-2, 2))
         )
 
         if self._running:
