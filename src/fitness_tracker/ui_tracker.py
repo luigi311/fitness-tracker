@@ -20,6 +20,8 @@ from gi.repository import Adw, GLib
 if TYPE_CHECKING:
     from pathlib import Path
 
+# Pebble bridge workout constants
+TGT_NONE, TGT_POWER, TGT_PACE = 0, 1, 2
 
 class TrackerPageUI:
     def __init__(self, app: "FitnessAppUI") -> None:
@@ -99,6 +101,9 @@ class TrackerPageUI:
     #  Page show / run control
     # -------------------------
     def _show_free_run_page(self) -> None:
+        if self.app.pebble_bridge:
+            self.app.pebble_bridge.update(tgt_kind=TGT_NONE)
+
         # Build page but DO NOT start timers/recording yet
         self._armed = True
         self._running = False
@@ -360,6 +365,14 @@ class TrackerPageUI:
                 target_w_lo=w_lo,
                 target_w_hi=w_hi,
             )
+            if self.app.pebble_bridge:
+                lo = float(w_lo if w_lo is not None else w_mid * 0.95)
+                hi = float(w_hi if w_hi is not None else w_mid * 1.05)
+                self.app.pebble_bridge.update(
+                    tgt_kind=TGT_POWER,
+                    tgt_lo=w_lo,
+                    tgt_hi=w_hi,
+                )
         elif v_mid is not None:
             mph = self._rt_mph if not self.app.test_mode else getattr(self, "_last_mph", 0.0)
             cur_mps = float(mph) * 0.44704
@@ -371,6 +384,17 @@ class TrackerPageUI:
                 target_mps_lo=v_lo,
                 target_mps_hi=v_hi,
             )
+            if self.app.pebble_bridge:
+                lo = float(v_lo if v_lo is not None else v_mid * 0.97)
+                hi = float(v_hi if v_hi is not None else v_mid * 1.03)
+                self.app.pebble_bridge.update(
+                    tgt_kind=TGT_PACE,
+                    tgt_lo=lo,   # m/s
+                    tgt_hi=hi,   # m/s
+                )
+        else:
+            if self.app.pebble_bridge:
+                self.app.pebble_bridge.update(tgt_kind=TGT_NONE)
 
         # step progress — ONLY advance when running
         if self._running:
@@ -408,6 +432,10 @@ class TrackerPageUI:
             self.free_view.set_recording(True)
             self._update_metric_statuses()
             self.app.show_toast("✅ Workout complete. Continuing in Free Run…")
+
+            if self.app.pebble_bridge:
+                self.app.pebble_bridge.update(tgt_kind=TGT_NONE)
+
 
     def _skip_step(self, direction: int) -> None:
         if not self._workout or self._active_step_index < 0:
