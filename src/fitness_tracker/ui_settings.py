@@ -3,6 +3,7 @@ import subprocess
 import threading
 import requests
 from configparser import ConfigParser
+from fitness_tracker.upload_providers.intervals_icu import upload_not_uploaded
 
 import gi
 from bleak import BleakScanner
@@ -42,6 +43,7 @@ class SettingsPageUI:
         self.icu_id_entry = None
         self.icu_key_entry = None
         self.btn_fetch_icu = None
+        self.btn_upload_icu = None
 
 
     def build_page(self) -> Gtk.Widget:
@@ -270,6 +272,14 @@ class SettingsPageUI:
         self.btn_fetch_icu.connect("clicked", self._on_fetch_icu)
         row_fetch.add_suffix(self.btn_fetch_icu)
         icu_group.add(row_fetch)
+
+        row_upload = Adw.ActionRow()
+        row_upload.set_title("Upload completed workouts")
+        self.btn_upload_icu = Gtk.Button(label="Upload")
+        self.btn_upload_icu.get_style_context().add_class("suggested-action")
+        self.btn_upload_icu.connect("clicked", self._on_upload_icu)
+        row_upload.add_suffix(self.btn_upload_icu)
+        icu_group.add(row_upload)
 
 
         # Save Button
@@ -673,3 +683,32 @@ class SettingsPageUI:
             GLib.idle_add(button.set_sensitive, True)
 
         threading.Thread(target=do_sync, daemon=True).start()
+
+    def _on_upload_icu(self, _button: Gtk.Button):
+        aid = (self.icu_id_entry.get_text() or "").strip()
+        key = (self.icu_key_entry.get_text() or "").strip()
+        if not key:
+            self.app.show_toast("Intervals.icu API key required")
+            return
+        # Persist to app state so helper can read it
+        self.app.icu_athlete_id = aid or "0"
+        self.app.icu_api_key = key
+
+        self.btn_upload_icu.set_sensitive(False)
+        self.app.show_toast("Uploading…")
+
+        def worker():
+            try:
+                results = upload_not_uploaded(self.app)
+                ok = sum(1 for _, s, _ in results if s)
+                fail = [err for _, s, err in results if not s]
+                if ok:
+                    GLib.idle_add(self.app.show_toast, f"✅ Uploaded {ok} new {"activies" if ok > 1 else "activity"}")
+                if fail:
+                    GLib.idle_add(self.app.show_toast, f"⚠️ {len(fail)} failed")
+            except Exception as e:
+                GLib.idle_add(self.app.show_toast, f"Upload failed: {e}")
+            finally:
+                GLib.idle_add(self.btn_upload_icu.set_sensitive, True)
+
+        threading.Thread(target=worker, daemon=True).start()
