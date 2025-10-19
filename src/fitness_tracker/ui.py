@@ -195,15 +195,25 @@ class FitnessAppUI(Adw.Application):
             print(f"Pebble bridge started ({mode})")
         except Exception as e:
             self.pebble_bridge = None
+            print(e)
 
-    def apply_sensor_settings(self):
-        # Stop old recorder if exists
+    def apply_sensor_settings(self) -> None:
         try:
             if self.recorder:
+                # Check for sensor changes in existing recorder
+                # If none then skip teardown and recreation as unneeded
+                if (
+                    self.hr_address == self.recorder.hr_address
+                    and self.speed_address == self.recorder.speed_address
+                    and self.cadence_address == self.recorder.cadence_address
+                    and self.power_address == self.recorder.power_address
+                ):
+                    return
+
                 with contextlib.suppress(Exception):
                     self.recorder.shutdown()
-        except Exception:
-            pass
+        except Exception as e:
+            print(e)
 
         # Build recorder with sensors
         self.recorder = Recorder(
