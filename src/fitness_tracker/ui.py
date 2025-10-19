@@ -160,8 +160,15 @@ class FitnessAppUI(Adw.Application):
         self.toast_overlay.add_toast(toast)
 
     def apply_pebble_settings(self):
-        # stop any existing bridge
         if self.pebble_bridge:
+            # Skip teardown and recreation if no settings change
+            if (
+                self.pebble_mac ==  self.pebble_bridge.mac
+                and self.pebble_use_emulator == self.pebble_bridge.use_emulator
+                and self.pebble_port == self.pebble_bridge.port
+            ):
+                return
+
             with contextlib.suppress(Exception):
                 self.pebble_bridge.stop()
         self.pebble_bridge = None
