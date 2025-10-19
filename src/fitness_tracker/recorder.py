@@ -24,14 +24,14 @@ class Recorder:
         self,
         on_bpm_update: Callable[[float, int], None],
         database_url: str,
-        hr_device_name: str | None,
-        hr_device_address: str | None,
-        speed_device_name: str | None,
-        speed_device_address: str | None,
-        cadence_device_name: str | None,
-        cadence_device_address: str | None,
-        power_device_name: str | None,
-        power_device_address: str | None,
+        hr_name: str | None,
+        hr_address: str | None,
+        speed_name: str | None,
+        speed_address: str | None,
+        cadence_name: str | None,
+        cadence_address: str | None,
+        power_name: str | None,
+        power_address: str | None,
         on_error: Callable[[str], None],
         *,
         on_running_update: Callable[[float, float, int, float | None, float | None], None]
@@ -43,12 +43,6 @@ class Recorder:
 
         # Disable write when in test mode
         self.test_mode = bool(test_mode)
-
-        # Cache resolved addresses so we don’t keep scanning
-        self._hr_addr_cache: str | None = hr_device_address
-        self._speed_addr_cache: str | None = speed_device_address
-        self._cadence_addr_cache: str | None = cadence_device_address
-        self._power_addr_cache: str | None = power_device_address
 
         self.on_bpm = on_bpm_update
         self.on_running = on_running_update
@@ -62,14 +56,14 @@ class Recorder:
         self._start_ms = None
 
         # Sensors
-        self.hr_device_name = hr_device_name
-        self.hr_device_address = hr_device_address
-        self.speed_device_name = speed_device_name
-        self.speed_device_address = speed_device_address
-        self.cadence_device_name = cadence_device_name
-        self.cadence_device_address = cadence_device_address
-        self.power_device_name = power_device_name
-        self.power_device_address = power_device_address
+        self.hr_name = hr_name
+        self.hr_address = hr_address
+        self.speed_name = speed_name
+        self.speed_address = speed_address
+        self.cadence_name = cadence_name
+        self.cadence_address = cadence_address
+        self.power_name = power_name
+        self.power_address = power_address
 
         # Rolling 3 bpm for smoothinng out hr readings
         self._bpm_history: deque[int] = deque(maxlen=3)
@@ -178,7 +172,7 @@ class Recorder:
         device_tasks = [asyncio.create_task(self._hr_loop())]
 
         have_any_running = any(
-            [self.speed_device_address, self.cadence_device_address, self.power_device_address]
+            [self.speed_address, self.cadence_address, self.power_address]
         )
         if have_any_running and self.on_running:
             device_tasks.append(asyncio.create_task(self._running_loop()))
@@ -201,24 +195,24 @@ class Recorder:
         while not self._stop_event.is_set():
             try:
                 # Resolve address ONCE (if not provided)
-                if not self._hr_addr_cache and self.hr_device_name:
+                if not self.hr_address and self.hr_name:
                     async with self._ble_lock:
                         devices = await BleakScanner.discover(
                             timeout=5.0, service_uuids=[HEART_RATE_SERVICE_UUID]
                         )
-                    cand = next((d for d in devices if d.name == self.hr_device_name), None)
+                    cand = next((d for d in devices if d.name == self.hr_name), None)
                     if cand:
-                        self._hr_addr_cache = cand.address
+                        self.hr_address = cand.address
 
                 # Find device by address (no general scan)
-                if not self._hr_addr_cache:
+                if not self.hr_address:
                     await asyncio.sleep(3.0)
                     continue
+
                 async with self._ble_lock:
                     target = await BleakScanner.find_device_by_address(
-                        self._hr_addr_cache, timeout=5.0
+                        self.hr_address, timeout=5.0
                     )
-
                 if not target:
                     if self.hr_connected:
                         self.hr_connected = False
@@ -255,9 +249,9 @@ class Recorder:
 
     async def _running_loop(self) -> None:
         mux = RunningMux(
-            speed_addr=self.speed_device_address or self.cadence_device_address,
-            cadence_addr=self.cadence_device_address,
-            power_addr=self.power_device_address,
+            speed_addr=self.speed_address or self.cadence_address,
+            cadence_addr=self.cadence_address,
+            power_addr=self.power_address,
             on_sample=self._handle_running_sample,
             on_status=self._on_ble_error,
             on_link=self._on_running_link,
