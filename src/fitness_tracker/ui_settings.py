@@ -72,8 +72,6 @@ class SettingsPageUI:
         self.hr_row = Adw.ActionRow()
         self.hr_row.set_title("Select HRM")
         self.hr_spinner = Gtk.Spinner()
-        if not self.app.hr_name:
-            self.hr_spinner.start()
         self.hr_combo = Gtk.ComboBoxText()
         self.hr_combo.set_hexpand(True)
         self.hr_row.add_prefix(self.hr_spinner)
@@ -95,8 +93,6 @@ class SettingsPageUI:
         self.speed_row = Adw.ActionRow()
         self.speed_row.set_title("Select Speed Device")
         self.speed_spinner = Gtk.Spinner()
-        if not self.app.speed_name:
-            self.speed_spinner.start()
         self.speed_combo = Gtk.ComboBoxText()
         self.speed_combo.set_hexpand(True)
         self.speed_row.add_prefix(self.speed_spinner)
@@ -120,8 +116,6 @@ class SettingsPageUI:
         self.cadence_row = Adw.ActionRow()
         self.cadence_row.set_title("Select Cadence Device")
         self.cadence_spinner = Gtk.Spinner()
-        if not self.app.cadence_name:
-            self.cadence_spinner.start()
         self.cadence_combo = Gtk.ComboBoxText()
         self.cadence_combo.set_hexpand(True)
         self.cadence_row.add_prefix(self.cadence_spinner)
@@ -145,8 +139,6 @@ class SettingsPageUI:
         self.power_row = Adw.ActionRow()
         self.power_row.set_title("Select Power Device")
         self.power_spinner = Gtk.Spinner()
-        if not self.app.power_name:
-            self.power_spinner.start()
         self.power_combo = Gtk.ComboBoxText()
         self.power_combo.set_hexpand(True)
         self.power_row.add_prefix(self.power_spinner)
@@ -325,8 +317,6 @@ class SettingsPageUI:
             self.hr_combo.append_text(self.app.hr_name)
             self.hr_combo.set_active(0)
             self.hr_map = {self.app.hr_name: self.app.hr_address}
-        else:
-            threading.Thread(target=self._fill_devices_hr, daemon=True).start()
 
         # Prepopulate Speed
         if self.app.speed_name:
@@ -342,23 +332,16 @@ class SettingsPageUI:
             self.cadence_combo.set_active(0)
             self.cadence_map = {self.app.cadence_name: self.app.cadence_address}
 
-        if not (self.app.speed_name or self.app.cadence_name):
-            threading.Thread(target=self._fill_devices_speed_cadence, daemon=True).start()
-
         # Prepopulate Power
         if self.app.power_name:
             self.power_spinner.stop()
             self.power_combo.append_text(self.app.power_name)
             self.power_combo.set_active(0)
             self.power_map = {self.app.power_name: self.app.power_address}
-        else:
-            threading.Thread(target=self._fill_devices_power, daemon=True).start()
 
         # Prepopulate Pebble
         if self.app.pebble_use_emulator:
             self.pebble_row.set_subtitle("Emulator mode")
-        else:
-            threading.Thread(target=self._fill_devices_pebble, daemon=True).start()
 
         # Hide/show Pebble BT rows based on emulator switch to reduce vertical size
         self.pebble_emu_switch.connect("notify::active", self._on_pebble_mode_toggled)
