@@ -49,7 +49,7 @@ wheels = [
 [[package]]
 name = "bleaksport"
 version = "0.1.0"
-source = { git = "https://github.com/luigi311/bleaksport#404d603922b340d4d8da45493073578f4a2a53f3" }
+source = { git = "https://github.com/luigi311/bleaksport#dbbfca187fd4039ca964ac02891bc31611f9f68e" }
 dependencies = [
     { name = "bleak" },
 ]

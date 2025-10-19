@@ -160,8 +160,15 @@ class FitnessAppUI(Adw.Application):
         self.toast_overlay.add_toast(toast)
 
     def apply_pebble_settings(self):
-        # stop any existing bridge
         if self.pebble_bridge:
+            # Skip teardown and recreation if no settings change
+            if (
+                self.pebble_mac ==  self.pebble_bridge.mac
+                and self.pebble_use_emulator == self.pebble_bridge.use_emulator
+                and self.pebble_port == self.pebble_bridge.port
+            ):
+                return
+
             with contextlib.suppress(Exception):
                 self.pebble_bridge.stop()
         self.pebble_bridge = None
@@ -195,6 +202,47 @@ class FitnessAppUI(Adw.Application):
             print(f"Pebble bridge started ({mode})")
         except Exception as e:
             self.pebble_bridge = None
+            print(e)
+
+    def apply_sensor_settings(self) -> None:
+        try:
+            if self.recorder:
+                # Check for sensor changes in existing recorder
+                # If none then skip teardown and recreation as unneeded
+                if (
+                    self.hr_address == self.recorder.hr_address
+                    and self.speed_address == self.recorder.speed_address
+                    and self.cadence_address == self.recorder.cadence_address
+                    and self.power_address == self.recorder.power_address
+                ):
+                    return
+
+                with contextlib.suppress(Exception):
+                    self.recorder.shutdown()
+        except Exception as e:
+            print(e)
+
+        # Build recorder with sensors
+        self.recorder = Recorder(
+            on_bpm_update=self.tracker.on_bpm,
+            on_running_update=self.tracker.on_running,
+            database_url=f"sqlite:///{self.database}",
+            hr_name=self.hr_name,
+            hr_address=self.hr_address,
+            speed_name=self.speed_name,
+            speed_address=self.speed_address,
+            cadence_name=self.cadence_name,
+            cadence_address=self.cadence_address,
+            power_name=self.power_name,
+            power_address=self.power_address,
+            on_error=self.show_toast,
+            test_mode=self.test_mode,
+        )
+        if not self.test_mode:
+            # Only spin BLE loops when not in test mode
+            self.recorder.start()
+
+        self.tracker._update_metric_statuses()
 
     def do_activate(self):
         if not self.window:
@@ -203,29 +251,8 @@ class FitnessAppUI(Adw.Application):
             # Start/stop Pebble according to config
             self.apply_pebble_settings()
 
-            # Always create a Recorder so the DB is available for History.
-            # In test mode, make it read-only and don't start BLE threads.
-            self.recorder = Recorder(
-                on_bpm_update=self.tracker.on_bpm,
-                on_running_update=self.tracker.on_running,
-                database_url=f"sqlite:///{self.database}",
-                hr_device_name=self.hr_name,
-                hr_device_address=self.hr_address or None,
-                speed_device_name=self.speed_name,
-                speed_device_address=self.speed_address or None,
-                cadence_device_name=self.cadence_name,
-                cadence_device_address=self.cadence_address or None,
-                power_device_name=self.power_name,
-                power_device_address=self.power_address or None,
-                on_error=self.show_toast,
-                test_mode=self.test_mode,
-            )
-            if not self.test_mode:
-                # Only spin BLE loops when not in test mode
-                self.recorder.start()
-
-            # Load history
-            # threading.Thread(target=self.history.load_history, daemon=True).start()
+            # Start/stop recorder with sensors
+            self.apply_sensor_settings()
 
         self.window.present()
 

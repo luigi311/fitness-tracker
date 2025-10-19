@@ -651,6 +651,9 @@ class SettingsPageUI:
         # Apply Pebble settings right away (start/stop bridge without restart)
         GLib.idle_add(self.app.apply_pebble_settings)
 
+        # Apply sensor settings right away (start/stop recorder with new sensors without restart)
+        GLib.idle_add(self.app.apply_sensor_settings)
+
         toast = Adw.Toast.new("Settings saved successfully")
         GLib.idle_add(self.app.toast_overlay.add_toast, toast)
 
