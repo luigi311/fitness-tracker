@@ -7,7 +7,7 @@ from collections.abc import Callable
 from statistics import median
 
 import gi
-from bleak import BleakClient, BleakError, BleakScanner
+from bleak import BleakError, BleakScanner
 from bleaksport.running import RunningMux, RunningSample
 
 from fitness_tracker.database import DatabaseManager
@@ -80,22 +80,6 @@ class Recorder:
         self.cadence_connected = False
         self.power_connected = False
 
-    def _pick_running_address(self) -> str | None:
-        """Return a single address to use for RSCS/CPS if all configured running sensors share it."""
-        addrs = {
-            a
-            for a in (
-                self.speed_device_address,
-                self.cadence_device_address,
-                self.power_device_address,
-            )
-            if a
-        }
-        # if none configured -> None; if exactly one unique -> use it; else -> None (means you'd implement multi later)
-        if len(addrs) == 1:
-            return next(iter(addrs))
-        return None
-
     def start(self):
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
@@ -106,6 +90,9 @@ class Recorder:
 
         def _stop():
             self._stop_event.set()
+
+        # Stop recording on shutdown
+        self.stop_recording()
 
         self.loop.call_soon_threadsafe(_stop)
         if self._thread:
@@ -132,7 +119,7 @@ class Recorder:
         self.loop.run_until_complete(self._workflow())
 
     # --- HR handling ---
-    def _handle_sample(self, t_ms: int, bpm: int, rr: float | None, energy: float | None):
+    def _handle_hr_sample(self, t_ms: int, bpm: int, rr: float | None, energy: float | None):
         # initialize the session start
         if self._start_ms is None:
             self._start_ms = t_ms
@@ -248,7 +235,7 @@ class Recorder:
                         ):
                             if not self.hr_connected:
                                 self.hr_connected = True
-                            self._handle_sample(t_ms, bpm, rr, energy)
+                            self._handle_hr_sample(t_ms, bpm, rr, energy)
                 except BleakError as e:
                     self.hr_connected = False
                     if INPROGRESS_RE.search(str(e)):
