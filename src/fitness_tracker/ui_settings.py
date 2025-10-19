@@ -337,6 +337,10 @@ class SettingsPageUI:
         # Prepopulate Pebble
         if self.app.pebble_use_emulator:
             self.pebble_row.set_subtitle("Emulator mode")
+        if self.app.pebble_name and self.pebble_combo:
+            self.pebble_combo.append_text(self.app.pebble_name)
+            self.pebble_combo.set_active(0)
+            self.pebble_map = {self.app.pebble_name: self.app.pebble_address}
 
         # Hide/show Pebble BT rows based on emulator switch to reduce vertical size
         self.pebble_emu_switch.connect("notify::active", self._on_pebble_mode_toggled)
@@ -488,9 +492,9 @@ class SettingsPageUI:
                 else:
                     self.pebble_row.set_subtitle("")
                     # auto-select saved MAC if present
-                    if self.app.pebble_mac:
+                    if self.app.pebble_address:
                         for i, disp in enumerate(names):
-                            if display_map[disp] == self.app.pebble_mac:
+                            if display_map[disp] == self.app.pebble_address:
                                 self.pebble_combo.set_active(i)
                                 break
                 self.pebble_map = display_map
@@ -580,10 +584,12 @@ class SettingsPageUI:
         if self.pebble_port_spin:
             self.app.pebble_port = self.pebble_port_spin.get_value_as_int()
         if self.app.pebble_use_emulator:
-            self.app.pebble_mac = ""
+            self.app.pebble_name = ""
+            self.app.pebble_address = ""
         else:
             disp = self.pebble_combo.get_active_text() or ""
-            self.app.pebble_mac = self.pebble_map.get(disp, self.app.pebble_mac)
+            self.app.pebble_name = disp
+            self.app.pebble_address = self.pebble_map.get(disp, self.app.pebble_address)
 
         self.app.resting_hr = self.rest_spin.get_value_as_int()
         self.app.max_hr = self.max_spin.get_value_as_int()
@@ -608,7 +614,8 @@ class SettingsPageUI:
         cfg["pebble"] = {
             "enable": str(self.app.pebble_enable),
             "use_emulator": str(self.app.pebble_use_emulator),
-            "mac": self.app.pebble_mac or "",
+            "name": self.app.pebble_name or "",
+            "mac": self.app.pebble_address or "",
             "port": str(self.app.pebble_port),
         }
 
