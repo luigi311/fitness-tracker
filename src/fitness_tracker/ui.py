@@ -106,7 +106,8 @@ class FitnessAppUI(Adw.Application):
         self.pebble_enable = True
         self.pebble_use_emulator = True
         self.pebble_uuid = "f4fcdac7-f58e-4d22-96bd-48cf98e25d09"  # UUID of pebble app
-        self.pebble_mac = None
+        self.pebble_name = None
+        self.pebble_address = None
         self.pebble_bridge = None
         self.pebble_port = 47527
 
@@ -145,7 +146,8 @@ class FitnessAppUI(Adw.Application):
                 "use_emulator",
                 fallback=self.pebble_use_emulator,
             )
-            self.pebble_mac = self.cfg.get("pebble", "mac", fallback=None)
+            self.pebble_name = self.cfg.get("pebble", "name", fallback=None)
+            self.pebble_address = self.cfg.get("pebble", "mac", fallback=None)
             self.pebble_port = self.cfg.getint("pebble", "port", fallback=47527)
 
             # Intervals.icu
@@ -163,7 +165,7 @@ class FitnessAppUI(Adw.Application):
         if self.pebble_bridge:
             # Skip teardown and recreation if no settings change
             if (
-                self.pebble_mac ==  self.pebble_bridge.mac
+                self.pebble_address ==  self.pebble_bridge.mac
                 and self.pebble_use_emulator == self.pebble_bridge.use_emulator
                 and self.pebble_port == self.pebble_bridge.port
             ):
@@ -184,14 +186,14 @@ class FitnessAppUI(Adw.Application):
                 if not hasattr(socket, "AF_BLUETOOTH"):
                     # Do not attempt to start the bridge if no Bluetooth support
                     # Clear out connection info
-                    self.pebble_mac = None
+                    self.pebble_address = None
 
                     raise RuntimeError("No Bluetooth support in Python socket module")
 
 
             self.pebble_bridge = PebbleBridge(
                 app_uuid=self.pebble_uuid,
-                mac=self.pebble_mac,
+                mac=self.pebble_address,
                 send_hz=2.0,
                 use_emulator=self.pebble_use_emulator,
                 port=self.pebble_port,
