@@ -24,7 +24,7 @@ class SettingsPageUI:
         self.pebble_row: Adw.ActionRow | None = None
         self.pebble_enable_row: Adw.SwitchRow | None = None
         self.pebble_emu_switch: Adw.SwitchRow | None = None
-        self.pebble_rescan_row: Adw.ActionRow | None = None
+        self.pebble_scan_row: Adw.ActionRow | None = None
         self.pebble_spinner: Gtk.Spinner | None = None
         self.pebble_combo: Gtk.ComboBoxText | None = None
         self.pebble_port_row: Adw.ActionRow | None = None
@@ -78,16 +78,15 @@ class SettingsPageUI:
         self.hr_row.add_suffix(self.hr_combo)
         dev_group.add(self.hr_row)
 
-        hr_rescan_row = Adw.ActionRow()
-        hr_rescan_row.set_title("Rescan HRM")
-        self.hr_rescan_button = Gtk.Button(label="Rescan")
-        self.hr_rescan_button.get_style_context().add_class("suggested-action")
-        self.hr_rescan_button.connect(
+        hr_scan_row = Adw.ActionRow()
+        self.hr_scan_button = Gtk.Button(label="Scan")
+        self.hr_scan_button.get_style_context().add_class("suggested-action")
+        self.hr_scan_button.connect(
             "clicked",
             lambda _: threading.Thread(target=self._fill_devices_hr, daemon=True).start(),
         )
-        hr_rescan_row.add_suffix(self.hr_rescan_button)
-        dev_group.add(hr_rescan_row)
+        hr_scan_row.add_suffix(self.hr_scan_button)
+        dev_group.add(hr_scan_row)
 
         # Speed
         self.speed_row = Adw.ActionRow()
@@ -99,18 +98,17 @@ class SettingsPageUI:
         self.speed_row.add_suffix(self.speed_combo)
         dev_group.add(self.speed_row)
 
-        speed_rescan_row = Adw.ActionRow()
-        speed_rescan_row.set_title("Rescan Speed Devices")
-        self.speed_rescan_button = Gtk.Button(label="Rescan")
-        self.speed_rescan_button.get_style_context().add_class("suggested-action")
-        self.speed_rescan_button.connect(
+        speed_scan_row = Adw.ActionRow()
+        self.speed_scan_button = Gtk.Button(label="Scan")
+        self.speed_scan_button.get_style_context().add_class("suggested-action")
+        self.speed_scan_button.connect(
             "clicked",
             lambda _: threading.Thread(
                 target=self._fill_devices_speed_cadence, daemon=True
             ).start(),
         )
-        speed_rescan_row.add_suffix(self.speed_rescan_button)
-        dev_group.add(speed_rescan_row)
+        speed_scan_row.add_suffix(self.speed_scan_button)
+        dev_group.add(speed_scan_row)
 
         # Cadence
         self.cadence_row = Adw.ActionRow()
@@ -122,18 +120,17 @@ class SettingsPageUI:
         self.cadence_row.add_suffix(self.cadence_combo)
         dev_group.add(self.cadence_row)
 
-        cadence_rescan_row = Adw.ActionRow()
-        cadence_rescan_row.set_title("Rescan Cadence Devices")
-        self.cadence_rescan_button = Gtk.Button(label="Rescan")
-        self.cadence_rescan_button.get_style_context().add_class("suggested-action")
-        self.cadence_rescan_button.connect(
+        cadence_scan_row = Adw.ActionRow()
+        self.cadence_scan_button = Gtk.Button(label="Scan")
+        self.cadence_scan_button.get_style_context().add_class("suggested-action")
+        self.cadence_scan_button.connect(
             "clicked",
             lambda _: threading.Thread(
                 target=self._fill_devices_speed_cadence, daemon=True
             ).start(),
         )
-        cadence_rescan_row.add_suffix(self.cadence_rescan_button)
-        dev_group.add(cadence_rescan_row)
+        cadence_scan_row.add_suffix(self.cadence_scan_button)
+        dev_group.add(cadence_scan_row)
 
         # Power
         self.power_row = Adw.ActionRow()
@@ -145,16 +142,15 @@ class SettingsPageUI:
         self.power_row.add_suffix(self.power_combo)
         dev_group.add(self.power_row)
 
-        power_rescan_row = Adw.ActionRow()
-        power_rescan_row.set_title("Rescan Power Devices")
-        self.power_rescan_button = Gtk.Button(label="Rescan")
-        self.power_rescan_button.get_style_context().add_class("suggested-action")
-        self.power_rescan_button.connect(
+        power_scan_row = Adw.ActionRow()
+        self.power_scan_button = Gtk.Button(label="Scan")
+        self.power_scan_button.get_style_context().add_class("suggested-action")
+        self.power_scan_button.connect(
             "clicked",
             lambda _: threading.Thread(target=self._fill_devices_power, daemon=True).start(),
         )
-        power_rescan_row.add_suffix(self.power_rescan_button)
-        dev_group.add(power_rescan_row)
+        power_scan_row.add_suffix(self.power_scan_button)
+        dev_group.add(power_scan_row)
 
         # Pebble
         pebble_group = Adw.PreferencesGroup()
@@ -196,17 +192,16 @@ class SettingsPageUI:
         self.pebble_port_row.add_suffix(self.pebble_port_spin)
         pebble_group.add(self.pebble_port_row)
 
-        # Rescan button
-        self.pebble_rescan_row = Adw.ActionRow()
-        self.pebble_rescan_row.set_title("Rescan Pebble")
-        self.pebble_rescan_button = Gtk.Button(label="Rescan")
-        self.pebble_rescan_button.get_style_context().add_class("suggested-action")
-        self.pebble_rescan_button.connect(
+        self.pebble_scan_row = Adw.ActionRow()
+        self.pebble_scan_row.set_title("Scan Pebble")
+        self.pebble_scan_button = Gtk.Button(label="Scan")
+        self.pebble_scan_button.get_style_context().add_class("suggested-action")
+        self.pebble_scan_button.connect(
             "clicked",
             lambda _b: threading.Thread(target=self._fill_devices_pebble, daemon=True).start(),
         )
-        self.pebble_rescan_row.add_suffix(self.pebble_rescan_button)
-        pebble_group.add(self.pebble_rescan_row)
+        self.pebble_scan_row.add_suffix(self.pebble_scan_button)
+        pebble_group.add(self.pebble_scan_row)
 
         # Personal info group (for HR, weight, height, etc.)
         personal_group = Adw.PreferencesGroup()
@@ -517,8 +512,8 @@ class SettingsPageUI:
         if self.pebble_row:
             self.pebble_row.set_visible(not use_emu)
             self.pebble_row.set_subtitle("Emulator mode" if use_emu else "")
-        if self.pebble_rescan_row:
-            self.pebble_rescan_row.set_visible(not use_emu)
+        if self.pebble_scan_row:
+            self.pebble_scan_row.set_visible(not use_emu)
         if self.pebble_port_row:
             self.pebble_port_row.set_visible(use_emu)
         return False
