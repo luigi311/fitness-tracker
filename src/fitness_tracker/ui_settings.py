@@ -47,23 +47,10 @@ class SettingsPageUI:
 
 
     def build_page(self) -> Gtk.Widget:
-        # General settings group
-        prefs_vbox = Adw.PreferencesGroup()
-        prefs_vbox.set_title("General Settings")
-
         # Outer scroller so the page never overflows vertically
         scroller = Gtk.ScrolledWindow()
         scroller.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         scroller.set_vexpand(True)
-
-        # Database DSN row
-        dsn_row = Adw.ActionRow()
-        dsn_row.set_title("Database DSN")
-        self.dsn_entry = Gtk.Entry()
-        self.dsn_entry.set_hexpand(True)
-        self.dsn_entry.set_text(self.app.database_dsn)
-        dsn_row.add_suffix(self.dsn_entry)
-        prefs_vbox.add(dsn_row)
 
         # ----- Sensors group -----
         dev_group = Adw.PreferencesGroup()
@@ -269,6 +256,18 @@ class SettingsPageUI:
         icu_group.add(row_upload)
 
 
+        # Database settings
+        database_group = Adw.PreferencesGroup()
+        database_group.set_title("Database Settings")
+        # Database DSN row
+        dsn_row = Adw.ActionRow()
+        dsn_row.set_title("Database DSN")
+        self.dsn_entry = Gtk.Entry()
+        self.dsn_entry.set_hexpand(True)
+        self.dsn_entry.set_text(self.app.database_dsn)
+        dsn_row.add_suffix(self.dsn_entry)
+        database_group.add(dsn_row)
+
         # Save Button
         action_group = Adw.PreferencesGroup()
         action_group.set_title("Actions")
@@ -297,11 +296,11 @@ class SettingsPageUI:
         container.set_margin_bottom(12)
         container.set_margin_start(12)
         container.set_margin_end(12)
-        container.append(prefs_vbox)
         container.append(dev_group)
         container.append(pebble_group)
         container.append(personal_group)
         container.append(icu_group)
+        container.append(database_group)
         container.append(action_group)
         # Return the scroller so the page scrolls on small windows
         scroller.set_child(container)
