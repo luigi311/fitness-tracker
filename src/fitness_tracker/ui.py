@@ -275,7 +275,15 @@ class FitnessAppUI(Adw.Application):
         header_bar.set_show_title(True)
 
         # Add header bar to the top of toolbar
-        toolbar_view.add_top_bar(header_bar)
+        header_bar = Adw.HeaderBar()
+        header_bar.set_show_title(True)
+
+        self.header_revealer = Gtk.Revealer()
+        self.header_revealer.set_transition_type(Gtk.RevealerTransitionType.SLIDE_DOWN)
+        self.header_revealer.set_reveal_child(False)  # default to hidden (mobile)
+
+        self.header_revealer.set_child(header_bar)
+        toolbar_view.add_top_bar(self.header_revealer)
 
         # Create ViewStack
         self.stack = Adw.ViewStack()
@@ -303,6 +311,11 @@ class FitnessAppUI(Adw.Application):
 
         toolbar_view.set_content(self.stack)
         toolbar_view.add_bottom_bar(switcher_bar)
+
+        cond = Adw.BreakpointCondition.parse("min-width: 700sp")
+        bp = Adw.Breakpoint.new(cond)
+        bp.add_setter(self.header_revealer, "reveal-child", True)
+        self.window.add_breakpoint(bp)
 
     def calculate_hr_zones(self):
         """Returns a mapping of zone names to (lower_bpm, upper_bpm) using Karvonen formula."""
