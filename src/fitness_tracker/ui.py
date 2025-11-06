@@ -270,6 +270,13 @@ class FitnessAppUI(Adw.Application):
         toolbar_view = Adw.ToolbarView()
         self.toast_overlay.set_child(toolbar_view)
 
+        # Create HeaderBar for desktop usage
+        header_bar = Adw.HeaderBar()
+        header_bar.set_show_title(True)
+
+        # Add header bar to the top of toolbar
+        toolbar_view.add_top_bar(header_bar)
+
         # Create ViewStack
         self.stack = Adw.ViewStack()
         self.stack.set_vexpand(True)
