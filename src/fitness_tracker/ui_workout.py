@@ -207,11 +207,6 @@ class TargetGauge(Gtk.DrawingArea):
         ctx.line_to(xn, yn)
         ctx.stroke()
 
-        # hub
-        ctx.set_source_rgba(fg.red, fg.green, fg.blue, 0.85)
-        ctx.arc(cx, cy, 5.2, 0, 2 * math.pi)
-        ctx.fill()
-
         # --- text
         # Headline (large)
         layout = area.create_pango_layout(self._headline)
@@ -235,21 +230,6 @@ class TargetGauge(Gtk.DrawingArea):
         ctx.set_source_rgba(fg.red, fg.green, fg.blue, 0.8)
         ctx.move_to(cx - w2 / 2.0, cy - radius * 0.14 - h2 / 2.0)
         PangoCairo.show_layout(ctx, layout2)
-
-        # Delta from center (percentage)
-        if self._tgt_ctr > 0:
-            delta_pct = (self._value - self._tgt_ctr) / self._tgt_ctr * 100.0
-            sign = "+" if delta_pct >= 0 else "−"
-            txt = f"{sign}{abs(delta_pct):.0f}% vs target"
-            layout3 = area.create_pango_layout(txt)
-            d3 = layout3.get_font_description() or area.get_pango_context().get_font_description()
-            d3 = d3.copy()
-            d3.set_size(int(12 * Pango.SCALE))
-            layout3.set_font_description(d3)
-            w3, h3 = layout3.get_pixel_size()
-            ctx.set_source_rgba(fg.red, fg.green, fg.blue, 0.6)
-            ctx.move_to(cx - w3 / 2.0, cy + radius * 0.20 - h3 / 2.0)
-            PangoCairo.show_layout(ctx, layout3)
 
 
 # ---------------- small metric widgets ---------------- #
@@ -418,7 +398,7 @@ class WorkoutView(Gtk.Box):
         flow.set_selection_mode(Gtk.SelectionMode.NONE)
         flow.set_valign(Gtk.Align.FILL)
         flow.set_halign(Gtk.Align.FILL)
-        flow.set_homogeneous(True)          # all cells same size
+        flow.set_homogeneous(True)  # all cells same size
         flow.set_column_spacing(12)
         flow.set_row_spacing(12)
         # Optional: keep items short so more fit per row
@@ -432,7 +412,14 @@ class WorkoutView(Gtk.Box):
         # Gauge readout pill (value mirrors the gauge target — power or pace)
         self.card_pp = _MetricPill("Gauge", "")  # unit set dynamically
 
-        for w in (self.card_hr, self.card_cad, self.card_spd, self.card_dst, self.card_pace, self.card_pwr):
+        for w in (
+            self.card_hr,
+            self.card_cad,
+            self.card_spd,
+            self.card_dst,
+            self.card_pace,
+            self.card_pwr,
+        ):
             flow.insert(w, -1)
 
         content.append(flow)
@@ -463,13 +450,13 @@ class WorkoutView(Gtk.Box):
 
         # --- Pair boxes so they wrap as units and keep equal inner widths ---
         nav_pair = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        nav_pair.set_homogeneous(True)     # Prev/Next same width
+        nav_pair.set_homogeneous(True)  # Prev/Next same width
         nav_pair.set_hexpand(True)
         nav_pair.append(self.btn_prev)
         nav_pair.append(self.btn_next)
 
         act_pair = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        act_pair.set_homogeneous(True)     # Start/Stop same width
+        act_pair.set_homogeneous(True)  # Start/Stop same width
         act_pair.set_hexpand(True)
         act_pair.append(self.btn_stop)
         act_pair.append(self.btn_start)
@@ -477,11 +464,11 @@ class WorkoutView(Gtk.Box):
         # --- FlowBox containing just the two pairs ---
         controls = Gtk.FlowBox()
         controls.set_selection_mode(Gtk.SelectionMode.NONE)
-        controls.set_homogeneous(True)     # nav_pair and act_pair get equal cell widths
+        controls.set_homogeneous(True)  # nav_pair and act_pair get equal cell widths
         controls.set_column_spacing(8)
         controls.set_row_spacing(8)
-        controls.set_min_children_per_line(1)   # stacks on very narrow screens
-        controls.set_max_children_per_line(2)   # side-by-side when there’s room
+        controls.set_min_children_per_line(1)  # stacks on very narrow screens
+        controls.set_max_children_per_line(2)  # side-by-side when there’s room
 
         controls.insert(nav_pair, -1)
         controls.insert(act_pair, -1)
@@ -535,7 +522,7 @@ class WorkoutView(Gtk.Box):
             self.card_pace.set_value(pace)
         if cadence_spm is not None:
             # Running is double the cadence
-            out = int(cadence_spm*2) if self.type == "run" else int(cadence_spm)
+            out = int(cadence_spm * 2) if self.type == "run" else int(cadence_spm)
             self.card_cad.set_value(str(out))
         if speed_mph is not None:
             self.card_spd.set_value(f"{float(speed_mph):.1f}")
