@@ -351,6 +351,15 @@ class WorkoutView(Gtk.Box):
         # Header
         self.title_label = Gtk.Label(xalign=0.0)
         self.title_label.add_css_class("title-2")
+        # Prevent long titles from widening the window:
+        #  - single line
+        #  - ellipsize at the end
+        #  - limit natural width so the window won’t expand
+        self.title_label.set_single_line_mode(True)
+        self.title_label.set_ellipsize(Pango.EllipsizeMode.END)
+        self.title_label.set_max_width_chars(36)   # tune as you like
+        self.title_label.set_hexpand(True)
+        self.title_label.set_halign(Gtk.Align.FILL)
         self.title_label.set_text(title)
         content.append(self.title_label)
 
