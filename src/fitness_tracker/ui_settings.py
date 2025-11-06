@@ -599,7 +599,7 @@ class SettingsPageUI:
 
         cfg = ConfigParser()
         cfg["server"] = {"database_dsn": self.app.database_dsn}
-        cfg["sensors"] = {
+        cfg["sensors_running"]= {
             "hr_name": self.app.hr_name,
             "hr_address": self.app.hr_address,
             "speed_name": self.app.speed_name,
