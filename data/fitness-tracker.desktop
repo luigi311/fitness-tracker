@@ -2,7 +2,7 @@
 Type=Application
 Name=Fitness Tracker
 Comment=Track your workouts and heart rate on Linux
-Exec=fitness-tracker
+Exec=fitness-tracker.pex
 Icon=fitness-tracker
 Terminal=false
 Categories=Utility;Health;Fitness;
