@@ -61,7 +61,7 @@ class _MetricCard(Gtk.Frame):
 class _Timer(Gtk.Frame):
     def __init__(self) -> None:
         super().__init__()
-        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         for m in ("top", "bottom", "start", "end"):
             getattr(box, f"set_margin_{m}")(16)
 
@@ -98,7 +98,7 @@ class FreeRunView(Gtk.Box):
         self.type = "run"
 
         # Start/Stop row
-        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         row.set_halign(Gtk.Align.CENTER)
 
         self.btn_start = Gtk.Button.new_with_label("▶️  Start")
@@ -112,7 +112,7 @@ class FreeRunView(Gtk.Box):
         self.append(row)
 
         # Grid metrics
-        grid = Gtk.Grid(column_spacing=12, row_spacing=12)
+        grid = Gtk.Grid(column_spacing=6, row_spacing=6)
         self.timer = _Timer()
         grid.attach(self.timer, 0, 0, 2, 1)
 

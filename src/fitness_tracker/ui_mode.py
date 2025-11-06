@@ -24,7 +24,7 @@ class ModeSelectView(Gtk.Box):
         on_start_free_run,
         on_start_workout,  # (path: Path) -> None
     ) -> None:
-        super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         for m in ("top", "bottom", "start", "end"):
             getattr(self, f"set_margin_{m}")(12)
 

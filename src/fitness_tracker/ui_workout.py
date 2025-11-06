@@ -336,7 +336,7 @@ class WorkoutView(Gtk.Box):
     """
 
     def __init__(self, *, title: str, on_prev, on_next, on_stop, on_start_record) -> None:
-        super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         for m in ("top", "bottom", "start", "end"):
             getattr(self, f"set_margin_{m}")(12)
 
@@ -345,7 +345,7 @@ class WorkoutView(Gtk.Box):
         clamp = Adw.Clamp(maximum_size=820, tightening_threshold=680)
         self.append(clamp)
 
-        content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         clamp.set_child(content)
 
         # Header
@@ -364,7 +364,7 @@ class WorkoutView(Gtk.Box):
         content.append(self.title_label)
 
         # Timers row (Remaining / Elapsed)
-        timers = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        timers = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         self.timer_elapsed = _TimerBig("Elapsed")
         self.timer_remaining = _TimerBig("Remaining")
         timers.append(self.timer_elapsed)

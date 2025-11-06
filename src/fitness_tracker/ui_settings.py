@@ -291,7 +291,7 @@ class SettingsPageUI:
         action_group.add(sync_row)
 
         # Layout container
-        container = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        container = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         container.set_margin_top(12)
         container.set_margin_bottom(12)
         container.set_margin_start(12)

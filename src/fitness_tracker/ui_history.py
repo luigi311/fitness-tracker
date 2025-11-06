@@ -116,7 +116,7 @@ class HistoryPageUI:
 
     # ---- Public: build page ----
     def build_page(self) -> Gtk.Widget:
-        outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         for m in ("top", "bottom", "start", "end"):
             getattr(outer, f"set_margin_{m}")(12)
 
@@ -247,7 +247,7 @@ class HistoryPageUI:
     # ---- Summary header (totals) ----
     def _build_summary_header(self) -> Gtk.Widget:
         frame = Gtk.Frame()
-        grid = Gtk.Grid(column_spacing=12, row_spacing=6)
+        grid = Gtk.Grid(column_spacing=6, row_spacing=6)
         for m in ("top", "bottom", "start", "end"):
             getattr(grid, f"set_margin_{m}")(6)
 
@@ -685,7 +685,7 @@ class HistoryPageUI:
         dlg = Adw.Dialog()
         dlg.set_title("Activity Details")
 
-        content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         for m in ("top", "bottom", "start", "end"):
             getattr(content, f"set_margin_{m}")(12)
 
@@ -772,7 +772,7 @@ class HistoryPageUI:
         content.append(hdr)
 
         # Charts list (stack vertically, no overflow)
-        charts_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        charts_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         sc = Gtk.ScrolledWindow()
         sc.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         sc.set_vexpand(True)
