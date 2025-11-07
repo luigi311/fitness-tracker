@@ -74,6 +74,10 @@ class Recorder:
         self.cadence_connected = False
         self.power_connected = False
 
+        # Clearing total distance on new recording
+        self._running_mux: RunningMux | None = None
+        self._dist0_m = None             # Fallback if sensor doesn't support reset
+
     def start(self):
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
@@ -101,6 +105,8 @@ class Recorder:
                 self._activity_id = None
             self._recording = True
             self._start_ms = None
+            self._dist0_m = None
+            self._schedule_reset_distance()
 
     def stop_recording(self):
         if self._recording:
@@ -146,6 +152,14 @@ class Recorder:
         cadence = int(sample.cadence_spm or 0)
         dist_m = sample.total_distance_m  # may be None
         watts = float(sample.power_watts) if sample.power_watts is not None else None
+
+        # Adjust distance by baseline if needed
+        if self._recording:
+            if self._dist0_m is None and dist_m is not None:
+                # If SC reset worked, first distance will be ~0; if not, this becomes our baseline.
+                self._dist0_m = float(dist_m)
+            if dist_m is not None and self._dist0_m is not None:
+                dist_m = max(0.0, float(dist_m) - self._dist0_m)
 
         # Update UI
         GLib.idle_add(self.on_running, delta_ms, speed_mps, cadence, dist_m, watts)
@@ -256,11 +270,13 @@ class Recorder:
             on_status=self._on_ble_error,
             on_link=self._on_running_link,
         )
+        self._running_mux = mux
         try:
             await mux.start()
         finally:
             with contextlib.suppress(Exception):
                 await mux.stop()
+            self._running_mux = None
 
     def _on_running_link(self, _addr: str, connected: bool, rsc_ok: bool, cps_ok: bool) -> None:
         # RSCS drives both speed & cadence cards
@@ -270,3 +286,40 @@ class Recorder:
 
     def _on_ble_error(self, msg: str) -> None:
         GLib.idle_add(lambda: self.on_error(msg))
+
+    def _schedule_reset_distance(self) -> None:
+        """Kick an async reset in the BLE loop without blocking the UI."""
+        if not self.loop.is_running():
+            return
+        try:
+            asyncio.run_coroutine_threadsafe(self._reset_distance_workflow(), self.loop)
+        except Exception as e:
+            self._on_ble_error(f"Failed to schedule distance reset: {e}")
+
+    async def _reset_distance_workflow(self, *, wait_s: float = 6.0) -> None:
+        """
+        Wait up to wait_s for RSCS to be connected, then try SC Control Point reset.
+        Fall back silently (baseline subtraction will handle it).
+        """
+        # Wait a little for the RSCS link to come up
+        t0 = self.loop.time()
+        while (self.loop.time() - t0) < wait_s and not self._stop_event.is_set():
+            if self.speed_connected and self._running_mux:
+                break
+            await asyncio.sleep(0.2)
+
+        mux = self._running_mux
+        if not mux:
+            return
+
+        try:
+            ok = await mux.reset_distance()
+            if ok:
+                # Optional: set baseline to 0 so first sample shows exactly 0.00 mi.
+                self._dist0_m = 0.0
+            else:
+                # Not supported / timed out — baseline logic will take over
+                print("Sensor didn't accept distance reset; using baseline")
+        except Exception as e:
+            # Don’t fail the session; just fall back
+            print(f"SC Control Point reset failed: {e}")
