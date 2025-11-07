@@ -76,7 +76,7 @@ class Recorder:
 
         # Clearing total distance on new recording
         self._running_mux: RunningMux | None = None
-        self._dist0_m = None             # Fallback if sensor doesnt support reset
+        self._dist0_m = None             # Fallback if sensor doesn't support reset
 
     def start(self):
         self._thread = threading.Thread(target=self._run, daemon=True)
@@ -289,9 +289,9 @@ class Recorder:
 
     def _schedule_reset_distance(self) -> None:
         """Kick an async reset in the BLE loop without blocking the UI."""
-        if not self._running_mux:
-            # The mux may still be starting; this coroutine will wait for link.
-            pass
+        # Check if loop is running before scheduling
+        if not self.loop.is_running():
+            return
         try:
             asyncio.run_coroutine_threadsafe(self._reset_distance_workflow(), self.loop)
         except Exception as e:
@@ -309,6 +309,7 @@ class Recorder:
                 break
             await asyncio.sleep(0.2)
 
+        # Capture the mux value immediately after the wait loop to avoid race conditions
         mux = self._running_mux
         if not mux:
             return
@@ -320,7 +321,7 @@ class Recorder:
                 self._dist0_m = 0.0
             else:
                 # Not supported / timed out — baseline logic will take over
-                print("Sensor didn't accept distance reset; using baseline")
+                self._on_ble_error("Sensor didn't accept distance reset; using baseline")
         except Exception as e:
             # Don’t fail the session; just fall back
-            print(f"SC Control Point reset failed: {e}")
+            self._on_ble_error(f"SC Control Point reset failed: {e}")
