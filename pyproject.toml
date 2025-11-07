@@ -73,4 +73,4 @@ possibly-unbound-import = "error"
 
 [tool.uv.sources]
 libpebble2 = { git = "https://github.com/luigi311/libpebble2", branch = "modern" }
-bleaksport = { git = "https://github.com/luigi311/bleaksport" }
+bleaksport = { git = "https://github.com/luigi311/bleaksport", branch = "main" }
