@@ -23,6 +23,7 @@ if TYPE_CHECKING:
 # Pebble bridge workout constants
 TGT_NONE, TGT_POWER, TGT_PACE = 0, 1, 2
 
+
 class TrackerPageUI:
     def __init__(self, app: "FitnessAppUI") -> None:
         self.app = app
@@ -65,6 +66,8 @@ class TrackerPageUI:
         self._active_step_index: int = -1
         self._manual_offset_s: float = 0.0
         self._sim_target_mph: float | None = None
+        self._hrsim_last_ms: int | None = None
+        self._hrsim_bpm: float | None = None
 
         # UI pages
         self.nav: Adw.NavigationView | None = None
@@ -73,8 +76,8 @@ class TrackerPageUI:
         self.workout_view: WorkoutView | None = None
 
     # ---- build
-    def build_page(self):
-        self.nav = Adw.NavigationView()
+    def build_page(self) -> Adw.NavigationView:
+        nav = Adw.NavigationView()
 
         self.mode_view = ModeSelectView(
             workouts_running_dir=self.app.workouts_running_dir,
@@ -82,11 +85,12 @@ class TrackerPageUI:
             on_start_workout=self._start_workout_from_path,
         )
         self.mode_page = Adw.NavigationPage.new(self.mode_view, "Choose Activity")
-        self.nav.add(self.mode_page)
+        nav.add(self.mode_page)
 
         if self._status_timer_id is None:
             self._status_timer_id = GLib.timeout_add_seconds(1, self._tick_status)
 
+        self.nav = nav
         return self.nav
 
     # ---- mode callbacks
@@ -127,7 +131,7 @@ class TrackerPageUI:
         # If test mode, we still feed preview samples, but we gate timers/progress
         if self.app.test_mode and self._test_source is None:
             self._hrsim_last_ms = None
-            self._hrsim_bpm = float(self.app.resting_hr)
+            self._hrsim_bpm = float(self.app.resting_hr or 60)
             self._test_source = GLib.timeout_add(1000, self._tick_test)
 
     def _show_workout_page(self) -> None:
@@ -155,7 +159,7 @@ class TrackerPageUI:
 
         if self.app.test_mode and self._test_source is None:
             self._hrsim_last_ms = None
-            self._hrsim_bpm = float(self.app.resting_hr)
+            self._hrsim_bpm = float(self.app.resting_hr or 60)
             self._test_source = GLib.timeout_add(1000, self._tick_test)
 
     def _begin_run_now(self) -> None:
@@ -193,10 +197,18 @@ class TrackerPageUI:
     # ---- nav helpers
     def _push(self, child, title: str):
         page = Adw.NavigationPage.new(child, title)
-        self.nav.push(page)
+        if self.nav:
+            self.nav.push(page)
+        else:
+            msg = "NavigationView not initialized"
+            raise RuntimeError(msg)
 
     def _pop_to_mode(self):
-        self.nav.pop_to_page(self.mode_page)
+        if self.nav:
+            self.nav.pop_to_page(self.mode_page)
+        else:
+            msg = "NavigationView not initialized"
+            raise RuntimeError(msg)
 
     # ---- recorder callbacks (public)
     def on_bpm(self, delta_ms: float, bpm: int) -> None:
@@ -325,9 +337,7 @@ class TrackerPageUI:
         # target text
         tgt_txt = "Target: —"
         if w_mid is not None:
-            tgt_txt = (
-                f"Target: {int(round(w_lo or w_mid * 0.95))}–{int(round(w_hi or w_mid * 1.05))} W"
-            )
+            tgt_txt = f"Target: {round(w_lo or w_mid * 0.95)} - {round(w_hi or w_mid * 1.05)} W"
         elif v_mid is not None:
             tgt_txt = f"Target: {self._pace_from_mps(v_mid)} /mi"
             if v_lo is not None and v_hi is not None:
@@ -337,7 +347,7 @@ class TrackerPageUI:
                 a = self._pace_from_mps(v_lo)
                 b = self._pace_from_mps(v_hi)
                 pace_a, pace_b = (a, b) if lo_s <= hi_s else (b, a)
-                tgt_txt = f"Target: {pace_a}–{pace_b} /mi"
+                tgt_txt = f"Target: {pace_a} - {pace_b} /mi"
 
         # next preview
         nxt_text = "Next: —"
@@ -345,7 +355,7 @@ class TrackerPageUI:
             ns = self._workout.steps[idx + 1]
             if ns.watts is not None or ns.percent_ftp is not None:
                 nxt_w = ns.target_watts(self.app.ftp_watts)
-                nxt_text = f"Next: {int(round(nxt_w))} W for {int(ns.duration_s)} s"
+                nxt_text = f"Next: {round(nxt_w)} W for {int(ns.duration_s)} s"
             elif ns.speed_mps is not None:
                 nxt_text = (
                     f"Next: {self._pace_from_mps(ns.speed_mps)} /mi for {int(ns.duration_s)} s"
@@ -357,7 +367,7 @@ class TrackerPageUI:
         # gauge update (choose power vs pace)
         if w_mid is not None:
             cur_w = float(
-                self._rt_watts if not self.app.test_mode else getattr(self, "_last_power", 0.0)
+                self._rt_watts if not self.app.test_mode else getattr(self, "_last_power", 0.0),
             )
             self.workout_view.set_gauge_power(
                 current_w=cur_w,
@@ -389,12 +399,11 @@ class TrackerPageUI:
                 hi = float(v_hi if v_hi is not None else v_mid * 1.03)
                 self.app.pebble_bridge.update(
                     tgt_kind=TGT_PACE,
-                    tgt_lo=lo,   # m/s
-                    tgt_hi=hi,   # m/s
+                    tgt_lo=lo,  # m/s
+                    tgt_hi=hi,  # m/s
                 )
-        else:
-            if self.app.pebble_bridge:
-                self.app.pebble_bridge.update(tgt_kind=TGT_NONE)
+        elif self.app.pebble_bridge:
+            self.app.pebble_bridge.update(tgt_kind=TGT_NONE)
 
         # step progress — ONLY advance when running
         if self._running:
@@ -427,15 +436,15 @@ class TrackerPageUI:
             self.free_view = FreeRunView(self.app)
             self.free_view.btn_stop.connect("clicked", lambda *_: self._stop_run_and_back())
             # Replace the top page: pop workout, push free-run
-            self.nav.pop()
-            self._push(self.free_view, "Free Run")
-            self.free_view.set_recording(True)
-            self._update_metric_statuses()
+            if self.nav:
+                self.nav.pop()
+                self._push(self.free_view, "Free Run")
+                self.free_view.set_recording(True)
+                self._update_metric_statuses()
             self.app.show_toast("✅ Workout complete. Continuing in Free Run…")
 
             if self.app.pebble_bridge:
                 self.app.pebble_bridge.update(tgt_kind=TGT_NONE)
-
 
     def _skip_step(self, direction: int) -> None:
         if not self._workout or self._active_step_index < 0:
@@ -534,7 +543,7 @@ class TrackerPageUI:
             return
         # elapsed
         self.workout_view.set_elapsed_text(
-            self._fmt_hhmmss(elapsed_s)[-5:]
+            self._fmt_hhmmss(elapsed_s)[-5:],
         )  # show mm:ss for legibility
 
         # remaining in current step
@@ -565,7 +574,7 @@ class TrackerPageUI:
         self._last_ms = t_ms
         t_min = max(0.0, t_ms / 60000.0)
         dt_s = 1.0
-        if getattr(self, "_hrsim_last_ms", None) is not None:
+        if self._hrsim_last_ms:
             dt_s = max(0.001, (t_ms - self._hrsim_last_ms) / 1000.0)
         self._hrsim_last_ms = t_ms
 
@@ -579,7 +588,7 @@ class TrackerPageUI:
             if w is not None:
                 target_power = float(w)
             elif v_mps is not None:
-                 # Pace-targeted step: drive simulated power from speed
+                # Pace-targeted step: drive simulated power from speed
                 self._sim_target_mph = float(v_mps) * 2.23693629
                 mph = self._sim_target_mph
                 # very simple running-power proxy (keeps values sensible in 5–10 mph)
@@ -609,10 +618,14 @@ class TrackerPageUI:
             hr_target = z2_lo - random.uniform(0, 5)
             tau = 45.0
         alpha = 1.0 - math.exp(-dt_s / tau)
+        if self._hrsim_bpm is None:
+            self._hrsim_bpm = float(self.app.resting_hr or 60)
         self._hrsim_bpm += alpha * (hr_target - self._hrsim_bpm)
         self._hrsim_bpm += random.uniform(-0.8, 0.8)
-        self._hrsim_bpm = float(max(self.app.resting_hr, min(self.app.max_hr, self._hrsim_bpm)))
-        bpm = int(round(self._hrsim_bpm))
+        self._hrsim_bpm = float(
+            max(self.app.resting_hr or 60, min(self.app.max_hr or 190, self._hrsim_bpm))
+        )
+        bpm = round(self._hrsim_bpm)
 
         target_mph = getattr(self, "_sim_target_mph", None)
         cur_mph = getattr(self, "_last_mph", 6.8)
@@ -645,7 +658,7 @@ class TrackerPageUI:
 
     # ---- connection dots
     def _update_metric_statuses(self) -> None:
-        rec = getattr(self.app, "recorder", None)
+        rec = self.app.recorder if self.app.recorder else None
         if self.app.test_mode or not rec:
             hr_ok = speed_ok = cad_ok = pow_ok = True
         else:
@@ -681,7 +694,7 @@ class TrackerPageUI:
     def _zone_info(self, hr: float):
         zones = self.app.calculate_hr_zones()
         order = list(zones.keys())
-        for name, color in zip(order, self.app.ZONE_COLORS):
+        for name, color in zip(order, self.app.ZONE_COLORS, strict=True):
             lo, hi = zones[name]
             if lo <= hr < hi:
                 return name, lo, hi, self._rgb(color)
