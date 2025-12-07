@@ -123,7 +123,7 @@ class TrackerPageUI:
 
         self._push(self.free_view, "Free Run")
         # initial statuses & preview values
-        self._update_metric_statuses()
+        self.update_metric_statuses()
         self._update_free_preview_timer_and_cards()
 
         # In preview we DO NOT call recorder.start_recording()
@@ -154,7 +154,7 @@ class TrackerPageUI:
         # Prime UI in preview (t=0)
         self._update_workout_guidance(elapsed_s=0)
         self.workout_view.set_progress(0.0)
-        self._update_metric_statuses()
+        self.update_metric_statuses()
         self._update_workout_preview_timers()
 
         if self.app.test_mode and self._test_source is None:
@@ -440,7 +440,7 @@ class TrackerPageUI:
                 self.nav.pop()
                 self._push(self.free_view, "Free Run")
                 self.free_view.set_recording(True)
-                self._update_metric_statuses()
+                self.update_metric_statuses()
             self.app.show_toast("✅ Workout complete. Continuing in Free Run…")
 
             if self.app.pebble_bridge:
@@ -657,7 +657,7 @@ class TrackerPageUI:
         return True
 
     # ---- connection dots
-    def _update_metric_statuses(self) -> None:
+    def update_metric_statuses(self) -> None:
         rec = self.app.recorder if self.app.recorder else None
         if self.app.test_mode or not rec:
             hr_ok = speed_ok = cad_ok = pow_ok = True
@@ -675,7 +675,7 @@ class TrackerPageUI:
             )
 
     def _tick_status(self) -> bool:
-        self._update_metric_statuses()
+        self.update_metric_statuses()
         return True
 
     # ---- resets & utils

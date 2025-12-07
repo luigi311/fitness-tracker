@@ -1,6 +1,6 @@
 import contextlib
+import socket
 from configparser import ConfigParser
-from os.path import expanduser
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -74,7 +74,7 @@ class FitnessAppUI(Adw.Application):
         self.history_filter = "week"
 
         # Set up application directory
-        app_dir = Path(expanduser("~/.local/share/io.Luigi311.Fitness"))
+        app_dir = Path("~/.local/share/io.Luigi311.Fitness").expanduser()
         app_dir.mkdir(parents=True, exist_ok=True)
         self.database = app_dir / "fitness.db"
         self.config_file = app_dir / "config.ini"
@@ -155,13 +155,13 @@ class FitnessAppUI(Adw.Application):
             self.icu_api_key = self.cfg.get("intervals_icu", "api_key", fallback="")
 
 
-    def show_toast(self, message: str):
+    def show_toast(self, message: str) -> None:
         print(message)
         # Create and display a toast on our overlay
         toast = Adw.Toast.new(message)
         self.toast_overlay.add_toast(toast)
 
-    def apply_pebble_settings(self):
+    def apply_pebble_settings(self) -> None:
         if self.pebble_bridge:
             # Skip teardown and recreation if no settings change
             if (
@@ -180,15 +180,16 @@ class FitnessAppUI(Adw.Application):
             return
 
         try:
-            if not self.pebble_use_emulator:
+            if not self.pebble_use_emulator and not hasattr(socket, "AF_BLUETOOTH"):
                 # Check if python sock has AF_BLUETOOTH support
-                import socket
-                if not hasattr(socket, "AF_BLUETOOTH"):
-                    # Do not attempt to start the bridge if no Bluetooth support
-                    # Clear out connection info
-                    self.pebble_address = None
+                # Do not attempt to start the bridge if no Bluetooth support
+                # Clear out connection info
+                self.pebble_address = None
 
-                    raise RuntimeError("No Bluetooth support in Python socket module")
+                msg = "No Bluetooth support in Python socket module"
+                print(msg)
+                self.show_toast(msg)
+                return
 
 
             self.pebble_bridge = PebbleBridge(
@@ -244,7 +245,7 @@ class FitnessAppUI(Adw.Application):
             # Only spin BLE loops when not in test mode
             self.recorder.start()
 
-        self.tracker._update_metric_statuses()
+        self.tracker.update_metric_statuses()
 
     def do_activate(self):
         if not self.window:
@@ -339,7 +340,7 @@ class FitnessAppUI(Adw.Application):
         zones = self.calculate_hr_zones()
         colors = self.ZONE_COLORS
         alpha = 0.25
-        for (_, (low, high)), color in zip(zones.items(), colors):
+        for (_, (low, high)), color in zip(zones.items(), colors, strict=True):
             ax.axhspan(low, high, facecolor=color, alpha=alpha)
 
     def do_shutdown(self):
