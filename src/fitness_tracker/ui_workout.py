@@ -544,7 +544,7 @@ class WorkoutView(Gtk.Box):
         self.card_hr.set_connected(hr_ok)
         # pace/power card dot represents the active target domain:
         # if power is the workout driver, use pow_ok; else use spd_ok
-        # (It’s fine if both toggle—dot is just a hint.)
+        # (It's fine if both toggle—dot is just a hint.)
         self.card_pace.set_connected(spd_ok)
         self.card_cad.set_connected(cad_ok)
         self.card_spd.set_connected(spd_ok)
@@ -555,10 +555,10 @@ class WorkoutView(Gtk.Box):
     def set_gauge_power(
         self,
         *,
-        current_w: float | int,
-        target_w: float | int,
-        target_w_lo: float | int | None = None,
-        target_w_hi: float | int | None = None,
+        current_w: float,
+        target_w: float,
+        target_w_lo: float | None = None,
+        target_w_hi: float | None = None,
     ) -> None:
         """
         Show a power band; if you don't have a range, pass only target_w and
@@ -574,7 +574,7 @@ class WorkoutView(Gtk.Box):
             hi = float(max(target_w_lo, target_w_hi))
 
         headline = f"{round(cur)} W"
-        subline = f"Target: {round(lo)}–{round(hi)} W"
+        subline = f"Target: {round(lo)} - {round(hi)} W"
         self.gauge.set_state(
             kind="power",
             value=cur,
