@@ -6,6 +6,10 @@ from typing import TYPE_CHECKING
 
 import gi
 from pebble_bridge import PebbleBridge
+from xdg_base_dirs import (
+    xdg_config_home,
+    xdg_data_home,
+)
 
 from fitness_tracker.recorder import Recorder
 from fitness_tracker.ui_history import HistoryPageUI
@@ -74,11 +78,14 @@ class FitnessAppUI(Adw.Application):
         self.history_filter = "week"
 
         # Set up application directory
-        app_dir = Path("~/.local/share/io.Luigi311.Fitness").expanduser()
-        app_dir.mkdir(parents=True, exist_ok=True)
-        self.database = app_dir / "fitness.db"
-        self.config_file = app_dir / "config.ini"
-        self.workouts_running_dir = app_dir / "workouts" / "running"
+        data_dir = Path(xdg_data_home()) / "fitness_tracker"
+        config_dir = Path(xdg_config_home()) / "fitness_tracker"
+        data_dir.mkdir(parents=True, exist_ok=True)
+        config_dir.mkdir(parents=True, exist_ok=True)
+
+        self.database = data_dir / "fitness.db"
+        self.config_file = config_dir / "config.ini"
+        self.workouts_running_dir = data_dir / "workouts" / "running"
         self.workouts_running_dir.mkdir(parents=True, exist_ok=True)
 
         # load existing configuration
@@ -117,16 +124,16 @@ class FitnessAppUI(Adw.Application):
             self.database_dsn = self.cfg.get("server", "database_dsn", fallback="")
 
             # HR device
-            self.hr_name = self.cfg.get("sensors", "hr_name", fallback="")
-            self.hr_address = self.cfg.get("sensors", "hr_address", fallback="")
+            self.hr_name = self.cfg.get("sensors_running", "hr_name", fallback="")
+            self.hr_address = self.cfg.get("sensors_running", "hr_address", fallback="")
 
-            # Sensors
-            self.speed_name = self.cfg.get("sensors", "speed_name", fallback="")
-            self.speed_address = self.cfg.get("sensors", "speed_address", fallback="")
-            self.cadence_name = self.cfg.get("sensors", "cadence_name", fallback="")
-            self.cadence_address = self.cfg.get("sensors", "cadence_address", fallback="")
-            self.power_name = self.cfg.get("sensors", "power_name", fallback="")
-            self.power_address = self.cfg.get("sensors", "power_address", fallback="")
+            # Sensors Running
+            self.speed_name = self.cfg.get("sensors_running", "speed_name", fallback="")
+            self.speed_address = self.cfg.get("sensors_running", "speed_address", fallback="")
+            self.cadence_name = self.cfg.get("sensors_running", "cadence_name", fallback="")
+            self.cadence_address = self.cfg.get("sensors_running", "cadence_address", fallback="")
+            self.power_name = self.cfg.get("sensors_running", "power_name", fallback="")
+            self.power_address = self.cfg.get("sensors_running", "power_address", fallback="")
 
             self.resting_hr = self.cfg.getint("personal", "resting_hr", fallback=60)
             self.max_hr = self.cfg.getint("personal", "max_hr", fallback=180)
