@@ -235,6 +235,7 @@ class TrackerPageUI:
         # release page refs and go home
         self.free_view = None
         self.workout_view = None
+        GLib.idle_add(self.app.history.refresh)
         self._pop_to_mode()
 
     # ---- nav helpers
