@@ -1,5 +1,5 @@
 import asyncio
-from typing import AsyncGenerator, Callable
+from collections.abc import AsyncGenerator, Callable
 
 from bleak import BleakClient, BleakError
 from bleakheart import HeartRate
@@ -9,8 +9,10 @@ HEART_RATE_SERVICE_UUID = "0000180d-0000-1000-8000-00805f9b34fb"
 
 # 16-bit SIG-assigned UUID for the standard Heart Rate Service
 async def connect_and_stream(
-    device, frame_queue: asyncio.Queue, on_disconnect: Callable[[str], None]
-) -> AsyncGenerator[tuple[int, int, int, float], None]:
+    device,
+    frame_queue: asyncio.Queue,
+    on_disconnect: Callable[[str], None],
+) -> AsyncGenerator[tuple[int, int, int, float]] | None:
     """
     Connect to a BLE heart-rate device and stream data tuples
     of (timestamp_ms, bpm, rr_interval, energy_kj).

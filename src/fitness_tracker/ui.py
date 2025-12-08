@@ -81,9 +81,6 @@ class FitnessAppUI(Adw.Application):
         self.workouts_running_dir = app_dir / "workouts" / "running"
         self.workouts_running_dir.mkdir(parents=True, exist_ok=True)
 
-        self.workouts_running_provider_dir = self.workouts_running_dir / "intervals_icu"
-        self.workouts_running_provider_dir.mkdir(parents=True, exist_ok=True)
-
         # load existing configuration
         self.cfg = ConfigParser()
         self.database_dsn = ""

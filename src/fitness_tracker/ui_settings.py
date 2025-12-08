@@ -1,19 +1,17 @@
 import asyncio
 import contextlib
+import datetime
 import subprocess
 import threading
 from configparser import ConfigParser
-from datetime import date
 
 import gi
 import requests
 from bleak import BleakScanner
 from bleaksport.discover import discover_power_devices, discover_speed_cadence_devices
 
+from fitness_tracker import upload_providers, workout_providers
 from fitness_tracker.hr_provider import HEART_RATE_SERVICE_UUID
-from fitness_tracker.upload_providers.intervals_icu import upload_not_uploaded
-from fitness_tracker.workout_providers import week_window_from
-from fitness_tracker.workout_providers.intervals_icu import IntervalsICUProvider
 
 gi.require_versions({"Gtk": "4.0", "Adw": "1"})
 from gi.repository import Adw, GLib, Gtk  # noqa: E402
@@ -548,6 +546,9 @@ class SettingsPageUI:
         if not self.icu_id_entry or not self.icu_key_entry or not self.btn_fetch_icu:
             return
 
+        out_dir = self.app.workouts_running_dir / "intervals_icu"
+        out_dir.mkdir(parents=True, exist_ok=True)
+
         aid = (self.icu_id_entry.get_text() or "").strip()
         key = (self.icu_key_entry.get_text() or "").strip()
         if not (aid and key):
@@ -558,12 +559,17 @@ class SettingsPageUI:
 
         def worker():
             try:
-                provider = IntervalsICUProvider(athlete_id=aid, api_key=key, ext="fit")
-                start, end = week_window_from(date.today())
-                out_dir = self.app.workouts_running_provider_dir
-                n = 0
-                for _dw in provider.fetch_between("running", start, end, out_dir):
-                    n += 1
+                provider = workout_providers.IntervalsICUProvider(
+                    athlete_id=aid,
+                    api_key=key,
+                    ext="fit",
+                )
+
+                today = datetime.datetime.now(tz=datetime.UTC).date()
+                start, end = (today, today + datetime.timedelta(days=6))
+
+                provider.fetch_between("running", start, end, out_dir)
+
                 # simply refresh the existing list
                 GLib.idle_add(self.app.tracker.mode_view.refresh)
             except requests.HTTPError as e:
@@ -713,13 +719,18 @@ class SettingsPageUI:
 
         def worker():
             try:
-                results = upload_not_uploaded(self.app)
+                provider = upload_providers.IntervalsICUUploader(athlete_id=aid, api_key=key)
+                results = provider.upload_not_uploaded(self.app)
+                if not results:
+                    GLib.idle_add(self.app.show_toast, "No new activities to upload")
+                    return
+
                 ok = sum(1 for _, s, _ in results if s)
                 fail = [err for _, s, err in results if not s]
                 if ok:
                     GLib.idle_add(
                         self.app.show_toast,
-                        f"✅ Uploaded {ok} new {'activies' if ok > 1 else 'activity'}",
+                        f"✅ Uploaded {ok} new {'activities' if ok > 1 else 'activity'}",
                     )
                 if fail:
                     GLib.idle_add(self.app.show_toast, f"⚠️ {len(fail)} failed")
