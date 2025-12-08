@@ -69,6 +69,10 @@ class TrackerPageUI:
         self._hrsim_last_ms: int | None = None
         self._hrsim_bpm: float | None = None
 
+        # UI timer state
+        self._timer_source_id: int | None = None
+        self._elapsed_display_s: int = 0
+
         # UI pages
         self.nav: Adw.NavigationView | None = None
         self.mode_view: ModeSelectView | None = None
@@ -100,6 +104,35 @@ class TrackerPageUI:
         self._workout_path = path
         self._manual_offset_s = 0.0
         self._show_workout_page()
+
+    def _tick_timer(self) -> bool:
+        """
+        1 Hz UI timer:
+        - updates the free-run timer label
+        - updates workout timers / guidance / completion
+        Independent of sensor sample timing.
+        """
+        if not self._running:
+            # stop the timeout
+            self._timer_source_id = None
+            return False
+
+        self._elapsed_display_s = int(time.monotonic() - self._start_monotonic)
+        elapsed_s = self._elapsed_display_s
+
+        # Free-run timer
+        if self.free_view:
+            hh, rem = divmod(elapsed_s, 3600)
+            mm, ss = divmod(rem, 60)
+            self.free_view.set_timer(f"{hh:02d}:{mm:02d}:{ss:02d}")
+
+        # Workout timers / guidance
+        if self.workout_view and self._workout:
+            self._update_workout_guidance(elapsed_s)
+            self._update_workout_running_timers(elapsed_s)
+            self._maybe_complete_workout(elapsed_s)
+
+        return True
 
     # -------------------------
     #  Page show / run control
@@ -169,9 +202,14 @@ class TrackerPageUI:
         self._running = True
         self._armed = True
         self._start_monotonic = time.monotonic()
+        self._elapsed_display_s = 0
         self._last_ms = 0
         if self.app.recorder:
             self.app.recorder.start_recording()
+
+        # start 1 Hz UI timer (decoupled from sensors)
+        if self._timer_source_id is None:
+            self._timer_source_id = GLib.timeout_add_seconds(1, self._tick_timer)
 
         # flip Start/Stop sensitivity on workout page if present
         if self.workout_view:
@@ -183,6 +221,11 @@ class TrackerPageUI:
         # Always stop timers/recording
         self._running = False
         self._armed = False
+
+        if self._timer_source_id is not None:
+            GLib.source_remove(self._timer_source_id)
+            self._timer_source_id = None
+
         if self.app.recorder:
             self.app.recorder.stop_recording()
         if self._test_source:
@@ -276,13 +319,6 @@ class TrackerPageUI:
         if self.free_view and hasattr(self.free_view, "update_chart"):
             self.free_view.update_chart(x, hr, pw, hr_rgb=rgb)
 
-        # workout guidance (and completion detection) — only when running
-        elapsed_s = max(0, int(t_ms // 1_000))
-        if self._running and self.workout_view and self._workout:
-            self._update_workout_guidance(elapsed_s)
-            self._update_workout_running_timers(elapsed_s)
-            self._maybe_complete_workout(elapsed_s)
-
         # cards/timer
         mph = self._rt_mph if not self.app.test_mode else getattr(self, "_last_mph", 0.0)
         cadence = self._rt_cadence if not self.app.test_mode else getattr(self, "_last_cadence", 0)
@@ -295,12 +331,6 @@ class TrackerPageUI:
         watts_val = round(self._rt_watts if not self.app.test_mode else watts)
 
         self._set_cards(dist_mi, pace_str, cadence, mph, bpm, watts_val)
-
-        # free run timer
-        if self.free_view:
-            hh, rem = divmod(elapsed_s, 3600)
-            mm, ss = divmod(rem, 60)
-            self.free_view.set_timer(f"{hh:02d}:{mm:02d}:{ss:02d}")
 
         # pebble bridge
         if self.app.pebble_bridge:
@@ -449,11 +479,12 @@ class TrackerPageUI:
     def _skip_step(self, direction: int) -> None:
         if not self._workout or self._active_step_index < 0:
             return
+
         starts = [0.0]
         for s in self._workout.steps:
             starts.append(starts[-1] + s.duration_s)
 
-        current_elapsed = max(0.0, (self._last_ms or 0.0) / 1000.0)
+        current_elapsed = float(self._elapsed_display_s if self._running else 0.0)
         t_s = max(0.0, current_elapsed + self._manual_offset_s)
 
         target_idx = min(
@@ -461,8 +492,10 @@ class TrackerPageUI:
             len(self._workout.steps) - 1,
         )
         target_start = starts[target_idx]
+
         # Immediate jump (preview and running both supported)
         self._manual_offset_s += (target_start - t_s) + 0.001
+
         # refresh guidance with either running time or preview time 0
         self._update_workout_guidance(int(current_elapsed if self._running else 0))
 
@@ -732,16 +765,20 @@ class TrackerPageUI:
     def _current_power_for_time(self, _t_ms: float) -> float:
         if not self.app.test_mode:
             return float(self._rt_watts or 0.0)
+
         last = getattr(self, "_last_power", 250.0)
         target_watts = last
         self._sim_target_mph = None
-        if self._workout and self._last_ms is not None:
-            t_s = (self._last_ms / 1000.0 if self._running else 0.0) + self._manual_offset_s
+
+        if self._workout:
+            t_s = (self._elapsed_display_s if self._running else 0.0) + self._manual_offset_s
             w, v_mps, _ = self._workout.target_at(t_s, self.app.ftp_watts)
+
             if w is not None:
                 target_watts = float(w)
             elif v_mps is not None:
                 self._sim_target_mph = float(v_mps) * 2.23693629
+
         self._last_power = last + 0.25 * (target_watts - last)
         return self._last_power
 
