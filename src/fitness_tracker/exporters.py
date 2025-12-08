@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from datetime import timedelta, timezone
+from datetime import UTC, timedelta, timezone
+from typing import TYPE_CHECKING
 from xml.etree.ElementTree import Element, SubElement, tostring
 
-from fitness_tracker.database import Activity, HeartRate, RunningMetrics
-
+if TYPE_CHECKING:
+    from fitness_tracker.database import Activity, HeartRate, RunningMetrics
 
 # ---------- Helpers ----------
 
@@ -16,7 +17,7 @@ def _iso_with_local_offset(dt):
     - Intervals.icu respects the embedded offset for display.
     """
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
+        dt = dt.replace(tzinfo=UTC)
     # Convert to the machine's local timezone for human-friendly wall time
     local_dt = dt.astimezone()  # system local tz with correct DST
     return local_dt.isoformat(timespec="seconds")
@@ -142,8 +143,7 @@ def activity_to_tcx(
                 base_ms = r.timestamp_ms
 
             # Ensure non-decreasing distance
-            if dist_m < last_dist_m:
-                dist_m = last_dist_m
+            dist_m = max(dist_m, last_dist_m)
             SubElement(tp, "DistanceMeters").text = f"{dist_m:.3f}"
             last_dist_m = dist_m
 
@@ -168,16 +168,16 @@ def activity_to_tcx(
                     SubElement(
                         tpx,
                         "{http://www.garmin.com/xmlschemas/ActivityExtension/v2}Watts",
-                    ).text = str(int(round(float(r.power_watts))))
+                    ).text = str(round(float(r.power_watts)))
                 if r.cadence_spm is not None:
                     SubElement(
                         tpx,
                         "{http://www.garmin.com/xmlschemas/ActivityExtension/v2}RunCadence",
-                    ).text = str(int(round(float(r.cadence_spm))))
+                    ).text = str(round(float(r.cadence_spm)))
     else:
         # HR-only fallback timeline
         for h in heart_rates:
-            t_local = (act.start_time if act.start_time.tzinfo else act.start_time.replace(tzinfo=timezone.utc))
+            t_local = (act.start_time if act.start_time.tzinfo else act.start_time.replace(tzinfo=UTC))
             t_local = t_local.astimezone() + timedelta(milliseconds=h.timestamp_ms)
             tp = SubElement(track, "Trackpoint")
             SubElement(tp, "Time").text = _iso_with_local_offset(t_local)

@@ -1,11 +1,15 @@
 import contextlib
+import socket
 from configparser import ConfigParser
-from os.path import expanduser
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import gi
 from pebble_bridge import PebbleBridge
+from xdg_base_dirs import (
+    xdg_config_home,
+    xdg_data_home,
+)
 
 from fitness_tracker.recorder import Recorder
 from fitness_tracker.ui_history import HistoryPageUI
@@ -74,15 +78,15 @@ class FitnessAppUI(Adw.Application):
         self.history_filter = "week"
 
         # Set up application directory
-        app_dir = Path(expanduser("~/.local/share/io.Luigi311.Fitness"))
-        app_dir.mkdir(parents=True, exist_ok=True)
-        self.database = app_dir / "fitness.db"
-        self.config_file = app_dir / "config.ini"
-        self.workouts_running_dir = app_dir / "workouts" / "running"
-        self.workouts_running_dir.mkdir(parents=True, exist_ok=True)
+        data_dir = Path(xdg_data_home()) / "fitness_tracker"
+        config_dir = Path(xdg_config_home()) / "fitness_tracker"
+        data_dir.mkdir(parents=True, exist_ok=True)
+        config_dir.mkdir(parents=True, exist_ok=True)
 
-        self.workouts_running_provider_dir = self.workouts_running_dir / "intervals_icu"
-        self.workouts_running_provider_dir.mkdir(parents=True, exist_ok=True)
+        self.database = data_dir / "fitness.db"
+        self.config_file = config_dir / "config.ini"
+        self.workouts_running_dir = data_dir / "workouts" / "running"
+        self.workouts_running_dir.mkdir(parents=True, exist_ok=True)
 
         # load existing configuration
         self.cfg = ConfigParser()
@@ -120,16 +124,16 @@ class FitnessAppUI(Adw.Application):
             self.database_dsn = self.cfg.get("server", "database_dsn", fallback="")
 
             # HR device
-            self.hr_name = self.cfg.get("sensors", "hr_name", fallback="")
-            self.hr_address = self.cfg.get("sensors", "hr_address", fallback="")
+            self.hr_name = self.cfg.get("sensors_running", "hr_name", fallback="")
+            self.hr_address = self.cfg.get("sensors_running", "hr_address", fallback="")
 
-            # Sensors
-            self.speed_name = self.cfg.get("sensors", "speed_name", fallback="")
-            self.speed_address = self.cfg.get("sensors", "speed_address", fallback="")
-            self.cadence_name = self.cfg.get("sensors", "cadence_name", fallback="")
-            self.cadence_address = self.cfg.get("sensors", "cadence_address", fallback="")
-            self.power_name = self.cfg.get("sensors", "power_name", fallback="")
-            self.power_address = self.cfg.get("sensors", "power_address", fallback="")
+            # Sensors Running
+            self.speed_name = self.cfg.get("sensors_running", "speed_name", fallback="")
+            self.speed_address = self.cfg.get("sensors_running", "speed_address", fallback="")
+            self.cadence_name = self.cfg.get("sensors_running", "cadence_name", fallback="")
+            self.cadence_address = self.cfg.get("sensors_running", "cadence_address", fallback="")
+            self.power_name = self.cfg.get("sensors_running", "power_name", fallback="")
+            self.power_address = self.cfg.get("sensors_running", "power_address", fallback="")
 
             self.resting_hr = self.cfg.getint("personal", "resting_hr", fallback=60)
             self.max_hr = self.cfg.getint("personal", "max_hr", fallback=180)
@@ -155,13 +159,13 @@ class FitnessAppUI(Adw.Application):
             self.icu_api_key = self.cfg.get("intervals_icu", "api_key", fallback="")
 
 
-    def show_toast(self, message: str):
+    def show_toast(self, message: str) -> None:
         print(message)
         # Create and display a toast on our overlay
         toast = Adw.Toast.new(message)
         self.toast_overlay.add_toast(toast)
 
-    def apply_pebble_settings(self):
+    def apply_pebble_settings(self) -> None:
         if self.pebble_bridge:
             # Skip teardown and recreation if no settings change
             if (
@@ -180,15 +184,16 @@ class FitnessAppUI(Adw.Application):
             return
 
         try:
-            if not self.pebble_use_emulator:
+            if not self.pebble_use_emulator and not hasattr(socket, "AF_BLUETOOTH"):
                 # Check if python sock has AF_BLUETOOTH support
-                import socket
-                if not hasattr(socket, "AF_BLUETOOTH"):
-                    # Do not attempt to start the bridge if no Bluetooth support
-                    # Clear out connection info
-                    self.pebble_address = None
+                # Do not attempt to start the bridge if no Bluetooth support
+                # Clear out connection info
+                self.pebble_address = None
 
-                    raise RuntimeError("No Bluetooth support in Python socket module")
+                msg = "No Bluetooth support in Python socket module"
+                print(msg)
+                self.show_toast(msg)
+                return
 
 
             self.pebble_bridge = PebbleBridge(
@@ -244,7 +249,7 @@ class FitnessAppUI(Adw.Application):
             # Only spin BLE loops when not in test mode
             self.recorder.start()
 
-        self.tracker._update_metric_statuses()
+        self.tracker.update_metric_statuses()
 
     def do_activate(self):
         if not self.window:
@@ -339,7 +344,7 @@ class FitnessAppUI(Adw.Application):
         zones = self.calculate_hr_zones()
         colors = self.ZONE_COLORS
         alpha = 0.25
-        for (_, (low, high)), color in zip(zones.items(), colors):
+        for (_, (low, high)), color in zip(zones.items(), colors, strict=True):
             ax.axhspan(low, high, facecolor=color, alpha=alpha)
 
     def do_shutdown(self):

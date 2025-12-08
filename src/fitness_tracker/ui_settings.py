@@ -1,19 +1,20 @@
 import asyncio
+import contextlib
+import datetime
 import subprocess
 import threading
-import requests
 from configparser import ConfigParser
-from fitness_tracker.upload_providers.intervals_icu import upload_not_uploaded
 
 import gi
+import requests
 from bleak import BleakScanner
 from bleaksport.discover import discover_power_devices, discover_speed_cadence_devices
 
+from fitness_tracker import upload_providers, workout_providers
 from fitness_tracker.hr_provider import HEART_RATE_SERVICE_UUID
 
 gi.require_versions({"Gtk": "4.0", "Adw": "1"})
 from gi.repository import Adw, GLib, Gtk  # noqa: E402
-import contextlib
 
 
 class SettingsPageUI:
@@ -44,7 +45,6 @@ class SettingsPageUI:
         self.icu_key_entry = None
         self.btn_fetch_icu = None
         self.btn_upload_icu = None
-
 
     def build_page(self) -> Gtk.Widget:
         # Outer scroller so the page never overflows vertically
@@ -144,51 +144,61 @@ class SettingsPageUI:
         pebble_group.set_title("Pebble Watch")
 
         # Enable
-        self.pebble_enable_row = Adw.SwitchRow()
-        self.pebble_enable_row.set_title("Enable Pebble")
-        self.pebble_enable_row.set_active(self.app.pebble_enable)
-        pebble_group.add(self.pebble_enable_row)
+        pebble_enable_row = Adw.SwitchRow()
+        pebble_enable_row.set_title("Enable Pebble")
+        pebble_enable_row.set_active(self.app.pebble_enable)
+        pebble_group.add(pebble_enable_row)
+        self.pebble_enable_row = pebble_enable_row
 
         # Emulator vs Watch
-        self.pebble_emu_switch = Adw.SwitchRow()
-        self.pebble_emu_switch.set_title("Use Emulator")
-        self.pebble_emu_switch.set_active(self.app.pebble_use_emulator)
-        pebble_group.add(self.pebble_emu_switch)
+        pebble_emu_switch = Adw.SwitchRow()
+        pebble_emu_switch.set_title("Use Emulator")
+        pebble_emu_switch.set_active(self.app.pebble_use_emulator)
+        pebble_group.add(pebble_emu_switch)
+        self.pebble_emu_switch = pebble_emu_switch
 
-        self.pebble_row = Adw.ActionRow()
-        self.pebble_row.set_title("Pebble")
-        self.pebble_spinner = Gtk.Spinner()
-        self.pebble_combo = Gtk.ComboBoxText()
-        self.pebble_combo.set_hexpand(False)
-        self.pebble_combo.set_size_request(240, -1)
-        self.pebble_combo.set_halign(Gtk.Align.END)
-        self.pebble_combo.connect("changed", self._on_pebble_combo_changed)
-        self.pebble_row.add_prefix(self.pebble_spinner)
-        self.pebble_row.add_suffix(self.pebble_combo)
-        if hasattr(self.pebble_row, "set_title_lines"):
-            self.pebble_row.set_title_lines(1)
-        pebble_group.add(self.pebble_row)
+        pebble_row = Adw.ActionRow()
+        pebble_row.set_title("Pebble")
+        pebble_spinner = Gtk.Spinner()
+        pebble_combo = Gtk.ComboBoxText()
+        pebble_combo.set_hexpand(False)
+        pebble_combo.set_size_request(240, -1)
+        pebble_combo.set_halign(Gtk.Align.END)
+        pebble_combo.connect("changed", self._on_pebble_combo_changed)
+        pebble_row.add_prefix(pebble_spinner)
+        pebble_row.add_suffix(pebble_combo)
+        if hasattr(pebble_row, "set_title_lines"):
+            pebble_row.set_title_lines(1)
+        pebble_group.add(pebble_row)
+        self.pebble_row = pebble_row
+        self.pebble_spinner = pebble_spinner
+        self.pebble_combo = pebble_combo
 
         # Emulator port (only visible when using emulator)
-        self.pebble_port_row = Adw.ActionRow()
-        self.pebble_port_row.set_title("Emulator Port")
-        self.pebble_port_spin = Gtk.SpinButton.new_with_range(1, 65535, 1)
-        self.pebble_port_spin.set_value(self.app.pebble_port or 47527)
-        self.pebble_port_spin.set_hexpand(False)
-        self.pebble_port_spin.set_width_chars(6)
-        self.pebble_port_row.add_suffix(self.pebble_port_spin)
-        pebble_group.add(self.pebble_port_row)
+        pebble_port_row = Adw.ActionRow()
+        pebble_port_row.set_title("Emulator Port")
+        pebble_port_spin = Gtk.SpinButton.new_with_range(1, 65535, 1)
+        pebble_port_spin.set_value(self.app.pebble_port or 47527)
+        pebble_port_spin.set_hexpand(False)
+        pebble_port_spin.set_width_chars(6)
+        pebble_port_row.add_suffix(pebble_port_spin)
+        pebble_group.add(pebble_port_row)
+        self.pebble_port_row = pebble_port_row
+        self.pebble_port_spin = pebble_port_spin
 
-        self.pebble_scan_row = Adw.ActionRow()
-        self.pebble_scan_row.set_title("Scan Pebble")
-        self.pebble_scan_button = Gtk.Button(label="Scan")
-        self.pebble_scan_button.get_style_context().add_class("suggested-action")
-        self.pebble_scan_button.connect(
+        # Scan button
+        pebble_scan_row = Adw.ActionRow()
+        pebble_scan_row.set_title("Scan Pebble")
+        pebble_scan_button = Gtk.Button(label="Scan")
+        pebble_scan_button.get_style_context().add_class("suggested-action")
+        pebble_scan_button.connect(
             "clicked",
             lambda _b: threading.Thread(target=self._fill_devices_pebble, daemon=True).start(),
         )
-        self.pebble_scan_row.add_suffix(self.pebble_scan_button)
-        pebble_group.add(self.pebble_scan_row)
+        pebble_scan_row.add_suffix(pebble_scan_button)
+        pebble_group.add(pebble_scan_row)
+        self.pebble_scan_row = pebble_scan_row
+        self.pebble_scan_button = pebble_scan_button
 
         # Personal info group (for HR, weight, height, etc.)
         personal_group = Adw.PreferencesGroup()
@@ -254,7 +264,6 @@ class SettingsPageUI:
         self.btn_upload_icu.connect("clicked", self._on_upload_icu)
         row_upload.add_suffix(self.btn_upload_icu)
         icu_group.add(row_upload)
-
 
         # Database settings
         database_group = Adw.PreferencesGroup()
@@ -334,7 +343,7 @@ class SettingsPageUI:
             self.power_map = {self.app.power_name: self.app.power_address}
 
         # Prepopulate Pebble
-        if self.app.pebble_use_emulator:
+        if self.app.pebble_use_emulator and self.pebble_row:
             self.pebble_row.set_subtitle("Emulator mode")
         if self.app.pebble_name and self.pebble_combo:
             self.pebble_combo.append_text(self.app.pebble_name)
@@ -342,8 +351,9 @@ class SettingsPageUI:
             self.pebble_map = {self.app.pebble_name: self.app.pebble_address}
 
         # Hide/show Pebble BT rows based on emulator switch to reduce vertical size
-        self.pebble_emu_switch.connect("notify::active", self._on_pebble_mode_toggled)
-        self._on_pebble_mode_toggled(self.pebble_emu_switch)
+        if self.pebble_emu_switch:
+            self.pebble_emu_switch.connect("notify::active", self._on_pebble_mode_toggled)
+            self._on_pebble_mode_toggled(self.pebble_emu_switch)
 
         return scroller
 
@@ -424,6 +434,9 @@ class SettingsPageUI:
         asyncio.run(_scan())
 
     def _fill_devices_pebble(self):
+        if not self.pebble_spinner or not self.pebble_row or not self.pebble_combo:
+            return
+
         GLib.idle_add(self.pebble_spinner.start)
         GLib.idle_add(self.pebble_row.set_subtitle, "Scanning for Pebble…")
 
@@ -472,6 +485,9 @@ class SettingsPageUI:
             return display_to_mac
 
         def worker():
+            if not self.pebble_spinner or not self.pebble_row or not self.pebble_combo:
+                return
+
             try:
                 name_to_mac = _scan_cli()
             except Exception as e:
@@ -482,6 +498,9 @@ class SettingsPageUI:
             names = sorted(display_map.keys())
 
             def _update_ui():
+                if not self.pebble_spinner or not self.pebble_row or not self.pebble_combo:
+                    return False
+
                 self.pebble_spinner.stop()
                 self.pebble_combo.remove_all()
                 for disp in names:
@@ -505,6 +524,8 @@ class SettingsPageUI:
 
     def _on_pebble_combo_changed(self, _combo: Gtk.ComboBoxText):
         """Show the MAC in a tooltip only (keeps UI clean)."""
+        if not self.pebble_combo or not self.pebble_map:
+            return
         disp = self.pebble_combo.get_active_text() or ""
         mac = self.pebble_map.get(disp, "")
         self.pebble_combo.set_tooltip_text(mac or None)
@@ -522,9 +543,11 @@ class SettingsPageUI:
         return False
 
     def _on_fetch_icu(self, _button: Gtk.Button):
-        from datetime import date
-        from fitness_tracker.workout_providers import week_window_from
-        from fitness_tracker.workout_providers.intervals_icu import IntervalsICUProvider
+        if not self.icu_id_entry or not self.icu_key_entry or not self.btn_fetch_icu:
+            return
+
+        out_dir = self.app.workouts_running_dir / "intervals_icu"
+        out_dir.mkdir(parents=True, exist_ok=True)
 
         aid = (self.icu_id_entry.get_text() or "").strip()
         key = (self.icu_key_entry.get_text() or "").strip()
@@ -536,12 +559,17 @@ class SettingsPageUI:
 
         def worker():
             try:
-                provider = IntervalsICUProvider(athlete_id=aid, api_key=key, ext="fit")
-                start, end = week_window_from(date.today())
-                out_dir = self.app.workouts_running_provider_dir
-                n = 0
-                for _dw in provider.fetch_between("running", start, end, out_dir):
-                    n += 1
+                provider = workout_providers.IntervalsICUProvider(
+                    athlete_id=aid,
+                    api_key=key,
+                    ext="fit",
+                )
+
+                today = datetime.datetime.now(tz=datetime.UTC).date()
+                start, end = (today, today + datetime.timedelta(days=6))
+
+                provider.fetch_between("running", start, end, out_dir)
+
                 # simply refresh the existing list
                 GLib.idle_add(self.app.tracker.mode_view.refresh)
             except requests.HTTPError as e:
@@ -549,10 +577,10 @@ class SettingsPageUI:
             except Exception as e:
                 GLib.idle_add(self.app.show_toast, f"Fetch failed: {e}")
             finally:
-                GLib.idle_add(self.btn_fetch_icu.set_sensitive, True)
+                if self.btn_fetch_icu:
+                    GLib.idle_add(self.btn_fetch_icu.set_sensitive, True)
 
         threading.Thread(target=worker, daemon=True).start()
-
 
     def _on_save_settings(self, _button):
         self.app.database_dsn = self.dsn_entry.get_text()
@@ -578,15 +606,19 @@ class SettingsPageUI:
             self.app.power_address = self.power_map[self.app.power_name]
 
         # Pebble
-        self.app.pebble_enable = self.pebble_enable_row.get_active()
-        self.app.pebble_use_emulator = self.pebble_emu_switch.get_active()
+        self.app.pebble_enable = (
+            self.pebble_enable_row.get_active() if self.pebble_enable_row else False
+        )
+        self.app.pebble_use_emulator = (
+            self.pebble_emu_switch.get_active() if self.pebble_emu_switch else False
+        )
         if self.pebble_port_spin:
             self.app.pebble_port = self.pebble_port_spin.get_value_as_int()
         if self.app.pebble_use_emulator:
             self.app.pebble_name = ""
             self.app.pebble_address = ""
         else:
-            disp = self.pebble_combo.get_active_text() or ""
+            disp = self.pebble_combo.get_active_text() if self.pebble_combo else ""
             self.app.pebble_name = disp
             self.app.pebble_address = self.pebble_map.get(disp, self.app.pebble_address)
 
@@ -594,12 +626,12 @@ class SettingsPageUI:
         self.app.max_hr = self.max_spin.get_value_as_int()
         self.app.ftp_watts = self.ftp_spin.get_value_as_int()
 
-        self.app.icu_athlete_id = self.icu_id_entry.get_text().strip()
-        self.app.icu_api_key = self.icu_key_entry.get_text().strip()
+        self.app.icu_athlete_id = self.icu_id_entry.get_text().strip() if self.icu_id_entry else ""
+        self.app.icu_api_key = self.icu_key_entry.get_text().strip() if self.icu_key_entry else ""
 
         cfg = ConfigParser()
         cfg["server"] = {"database_dsn": self.app.database_dsn}
-        cfg["sensors_running"]= {
+        cfg["sensors_running"] = {
             "hr_name": self.app.hr_name,
             "hr_address": self.app.hr_address,
             "speed_name": self.app.speed_name,
@@ -672,8 +704,8 @@ class SettingsPageUI:
         threading.Thread(target=do_sync, daemon=True).start()
 
     def _on_upload_icu(self, _button: Gtk.Button):
-        aid = (self.icu_id_entry.get_text() or "").strip()
-        key = (self.icu_key_entry.get_text() or "").strip()
+        aid = (self.icu_id_entry.get_text() if self.icu_id_entry else "").strip()
+        key = (self.icu_key_entry.get_text() if self.icu_key_entry else "").strip()
         if not key:
             self.app.show_toast("Intervals.icu API key required")
             return
@@ -681,21 +713,31 @@ class SettingsPageUI:
         self.app.icu_athlete_id = aid or "0"
         self.app.icu_api_key = key
 
-        self.btn_upload_icu.set_sensitive(False)
+        if self.btn_upload_icu:
+            self.btn_upload_icu.set_sensitive(False)
         self.app.show_toast("Uploading…")
 
         def worker():
             try:
-                results = upload_not_uploaded(self.app)
+                provider = upload_providers.IntervalsICUUploader(athlete_id=aid, api_key=key)
+                results = provider.upload_not_uploaded(self.app)
+                if not results:
+                    GLib.idle_add(self.app.show_toast, "No new activities to upload")
+                    return
+
                 ok = sum(1 for _, s, _ in results if s)
                 fail = [err for _, s, err in results if not s]
                 if ok:
-                    GLib.idle_add(self.app.show_toast, f"✅ Uploaded {ok} new {"activies" if ok > 1 else "activity"}")
+                    GLib.idle_add(
+                        self.app.show_toast,
+                        f"✅ Uploaded {ok} new {'activities' if ok > 1 else 'activity'}",
+                    )
                 if fail:
                     GLib.idle_add(self.app.show_toast, f"⚠️ {len(fail)} failed")
             except Exception as e:
                 GLib.idle_add(self.app.show_toast, f"Upload failed: {e}")
             finally:
-                GLib.idle_add(self.btn_upload_icu.set_sensitive, True)
+                if self.btn_upload_icu:
+                    GLib.idle_add(self.btn_upload_icu.set_sensitive, True)
 
         threading.Thread(target=worker, daemon=True).start()

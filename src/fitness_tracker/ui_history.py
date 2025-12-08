@@ -1,8 +1,9 @@
-import dataclasses
 import datetime
 import math
 import statistics
-from typing import Iterable, Optional
+from collections.abc import Iterable
+from dataclasses import dataclass
+from typing import Optional
 from zoneinfo import ZoneInfo
 
 import gi
@@ -21,21 +22,21 @@ from gi.repository import GLib, Gtk, Adw, Gio  # noqa: E402
 # ---------- Helpers / small data structures ----------
 
 
-@dataclasses.dataclass
+@dataclass
 class ActivitySummary:
     id: int
     start_local: datetime.datetime
     end_local: datetime.datetime
     duration_s: int
-    distance_m: Optional[float]
-    avg_bpm: Optional[float]
-    max_bpm: Optional[int]
-    avg_cadence: Optional[float]
-    avg_power: Optional[float]
+    distance_m: float | None
+    avg_bpm: float | None
+    max_bpm: int | None
+    avg_cadence: float | None
+    avg_power: float | None
     total_energy_kj: float
 
 
-def _safe_avg(vals: Iterable[float]) -> Optional[float]:
+def _safe_avg(vals: Iterable[float]) -> float | None:
     vals = [v for v in vals if v is not None]
     return (sum(vals) / len(vals)) if vals else None
 

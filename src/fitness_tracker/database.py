@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import (
@@ -74,6 +74,7 @@ class RunningMetrics(Base):
         Index("ix_run_activity_time", "activity_id", "timestamp_ms"),
     )
 
+
 class ActivityUpload(Base):
     __tablename__ = "activity_uploads"
 
@@ -82,8 +83,8 @@ class ActivityUpload(Base):
     provider = Column(String(64), nullable=False)  # e.g. "intervals_icu"
     status = Column(String(16), nullable=False, default="pending")  # "pending"|"ok"|"failed"
     uploaded_at = Column(DateTime(timezone=True))  # when status->ok
-    provider_activity_id = Column(String(128))     # remote id if returned
-    payload_hash = Column(String(64))              # optional content hash (dedupe)
+    provider_activity_id = Column(String(128))  # remote id if returned
+    payload_hash = Column(String(64))  # optional content hash (dedupe)
     last_error = Column(Text)
 
     activity = relationship("Activity", backref="uploads")
@@ -95,7 +96,7 @@ class ActivityUpload(Base):
     )
 
 
-def _sqlite_pragmas(dbapi_con, _con_record):
+def _sqlite_pragmas(dbapi_con, _con_record) -> None:
     cur = dbapi_con.cursor()
     cur.execute("PRAGMA journal_mode=WAL;")
     cur.execute("PRAGMA synchronous=NORMAL;")
@@ -106,7 +107,7 @@ def _sqlite_pragmas(dbapi_con, _con_record):
 class DatabaseManager:
     BATCH_SIZE = 25
 
-    def __init__(self, database_url: str):
+    def __init__(self, database_url: str) -> None:
         connect_args = {}
         if database_url.startswith("sqlite"):
             connect_args["check_same_thread"] = False
@@ -146,23 +147,24 @@ class DatabaseManager:
             session.commit()
 
     def list_not_uploaded(self, provider: str) -> list[Activity]:
-            """All activities that have no successful upload row for this provider."""
-            with self.Session() as session:
-                # activities that EITHER:
-                #  - have no row at all for this provider, OR
-                #  - have a row but not status 'ok' (so we can retry failures)
-                subq_ok = (
-                    session.query(ActivityUpload.activity_id)
-                    .filter(ActivityUpload.provider == provider, ActivityUpload.status == "ok")
-                    .subquery()
+        """All activities that have no successful upload row for this provider."""
+        with self.Session() as session:
+            # activities that EITHER:
+            #  - have no row at all for this provider, OR
+            #  - have a row but not status 'ok' (so we can retry failures)
+            return (
+                session.query(Activity)
+                .outerjoin(
+                    ActivityUpload,
+                    (Activity.id == ActivityUpload.activity_id)
+                    & (ActivityUpload.provider == provider),
                 )
-                acts = (
-                    session.query(Activity)
-                    .filter(~Activity.id.in_(subq_ok))  # not in OK list
-                    .order_by(Activity.start_time.asc())
-                    .all()
+                .filter(
+                    (ActivityUpload.id.is_(None)) | (ActivityUpload.status != "ok"),
                 )
-                return acts
+                .order_by(Activity.start_time)
+                .all()
+            )
 
     def mark_upload_ok(
         self,
@@ -177,7 +179,7 @@ class DatabaseManager:
                 .filter_by(activity_id=activity_id, provider=provider)
                 .one_or_none()
             )
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
             if row is None:
                 row = ActivityUpload(
                     activity_id=activity_id,
@@ -216,7 +218,6 @@ class DatabaseManager:
             if payload_hash:
                 row.payload_hash = payload_hash
             session.commit()
-
 
     def insert_heart_rate(
         self,
@@ -283,7 +284,8 @@ class DatabaseManager:
             with remote_engine.connect() as _:
                 pass
         except exc.SQLAlchemyError as e:
-            raise ConnectionError(f"❌  Could not connect to remote database: {e}")
+            msg = f"❌  Could not connect to remote database: {e}"
+            raise ConnectionError(msg)
 
         remote_engine = create_engine(database_dsn, echo=False)
         Base.metadata.create_all(remote_engine)

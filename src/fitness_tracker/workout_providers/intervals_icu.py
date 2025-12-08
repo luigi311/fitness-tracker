@@ -1,14 +1,18 @@
 from __future__ import annotations
+
 import base64
 import json
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
-from typing import Iterable, Literal
+from typing import TYPE_CHECKING, Literal
 
 import requests
 
-from . import DownloadedWorkout, Sport
+from .utils import DownloadedWorkout, Sport
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
 
 _API_BASE = "https://intervals.icu/api/v1"
 
@@ -16,8 +20,7 @@ _API_BASE = "https://intervals.icu/api/v1"
 class IntervalsICUProvider:
     athlete_id: str
     api_key: str
-    ext: Literal["fit","zwo","erg","mrc"] = "fit"
-    name: str = "intervals_icu"
+    ext: Literal["fit", "zwo", "erg", "mrc"] = "fit"
 
     def _auth(self):
         return requests.auth.HTTPBasicAuth("API_KEY", self.api_key)
@@ -31,7 +34,7 @@ class IntervalsICUProvider:
     ) -> Iterable[DownloadedWorkout]:
         """
         After a successful events request, remove all existing files in out_dir and
-        replace them with the latest week’s workouts for the chosen sport.
+        replace them with the latest week's workouts for the chosen sport.
         """
         out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -40,14 +43,18 @@ class IntervalsICUProvider:
             "oldest": start.isoformat(),
             "newest": end.isoformat(),
             "resolve": "true",
-            "ext": self.ext,   # include workout file payload
+            "ext": self.ext,  # include workout file payload
         }
         url = f"{_API_BASE}/athlete/{self.athlete_id}/events"
 
         # 1) Request & parse (raises on HTTP errors)
         r = requests.get(url, params=params, auth=self._auth(), timeout=20)
         r.raise_for_status()
-        events = r.json() if r.headers.get("content-type","").startswith("application/json") else json.loads(r.text)
+        events = (
+            r.json()
+            if r.headers.get("content-type", "").startswith("application/json")
+            else json.loads(r.text)
+        )
 
         # 2) Build the new set of files entirely in-memory first
         new_payloads: list[tuple[date, str, bytes]] = []
