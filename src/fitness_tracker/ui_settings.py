@@ -139,6 +139,34 @@ class SettingsPageUI:
         power_scan_row.add_suffix(self.power_scan_button)
         dev_group.add(power_scan_row)
 
+        # ----- Personal settings group -----
+        personal_group = Adw.PreferencesGroup()
+        personal_group.set_title("Personal Info")
+
+        # Resting HR
+        rest_row = Adw.ActionRow()
+        rest_row.set_title("Resting HR")
+        self.rest_spin = Gtk.SpinButton.new_with_range(30, 120, 1)
+        self.rest_spin.set_value(self.app.resting_hr)
+        rest_row.add_suffix(self.rest_spin)
+        personal_group.add(rest_row)
+
+        # Max HR
+        max_row = Adw.ActionRow()
+        max_row.set_title("Max HR")
+        self.max_spin = Gtk.SpinButton.new_with_range(100, 250, 1)
+        self.max_spin.set_value(self.app.max_hr)
+        max_row.add_suffix(self.max_spin)
+        personal_group.add(max_row)
+
+        # FTP (for workouts)
+        ftp_row = Adw.ActionRow()
+        ftp_row.set_title("FTP (Watts)")
+        self.ftp_spin = Gtk.SpinButton.new_with_range(50, 2000, 1)
+        self.ftp_spin.set_value(self.app.ftp_watts)
+        ftp_row.add_suffix(self.ftp_spin)
+        personal_group.add(ftp_row)
+
         # Pebble
         pebble_group = Adw.PreferencesGroup()
         pebble_group.set_title("Pebble Watch")
@@ -200,34 +228,6 @@ class SettingsPageUI:
         self.pebble_scan_row = pebble_scan_row
         self.pebble_scan_button = pebble_scan_button
 
-        # Personal info group (for HR, weight, height, etc.)
-        personal_group = Adw.PreferencesGroup()
-        personal_group.set_title("Personal Info")
-
-        # Resting HR
-        rest_row = Adw.ActionRow()
-        rest_row.set_title("Resting HR")
-        self.rest_spin = Gtk.SpinButton.new_with_range(30, 120, 1)
-        self.rest_spin.set_value(self.app.resting_hr)
-        rest_row.add_suffix(self.rest_spin)
-        personal_group.add(rest_row)
-
-        # Max HR
-        max_row = Adw.ActionRow()
-        max_row.set_title("Max HR")
-        self.max_spin = Gtk.SpinButton.new_with_range(100, 250, 1)
-        self.max_spin.set_value(self.app.max_hr)
-        max_row.add_suffix(self.max_spin)
-        personal_group.add(max_row)
-
-        # FTP (for workouts)
-        ftp_row = Adw.ActionRow()
-        ftp_row.set_title("FTP (Watts)")
-        self.ftp_spin = Gtk.SpinButton.new_with_range(50, 2000, 1)
-        self.ftp_spin.set_value(self.app.ftp_watts)
-        ftp_row.add_suffix(self.ftp_spin)
-        personal_group.add(ftp_row)
-
         # --- Intervals.icu provider ---
         icu_group = Adw.PreferencesGroup()
         icu_group.set_title("Intervals.icu")
@@ -249,22 +249,6 @@ class SettingsPageUI:
         row_icu_key.add_suffix(self.icu_key_entry)
         icu_group.add(row_icu_key)
 
-        row_fetch = Adw.ActionRow()
-        row_fetch.set_title("Fetch Week's Running Workouts")
-        self.btn_fetch_icu = Gtk.Button(label="Fetch")
-        self.btn_fetch_icu.get_style_context().add_class("suggested-action")
-        self.btn_fetch_icu.connect("clicked", self._on_fetch_icu)
-        row_fetch.add_suffix(self.btn_fetch_icu)
-        icu_group.add(row_fetch)
-
-        row_upload = Adw.ActionRow()
-        row_upload.set_title("Upload completed workouts")
-        self.btn_upload_icu = Gtk.Button(label="Upload")
-        self.btn_upload_icu.get_style_context().add_class("suggested-action")
-        self.btn_upload_icu.connect("clicked", self._on_upload_icu)
-        row_upload.add_suffix(self.btn_upload_icu)
-        icu_group.add(row_upload)
-
         # Database settings
         database_group = Adw.PreferencesGroup()
         database_group.set_title("Database Settings")
@@ -277,7 +261,7 @@ class SettingsPageUI:
         dsn_row.add_suffix(self.dsn_entry)
         database_group.add(dsn_row)
 
-        # Save Button
+        # ----- Actions group -----
         action_group = Adw.PreferencesGroup()
         action_group.set_title("Actions")
         save_row = Adw.ActionRow()
@@ -289,10 +273,27 @@ class SettingsPageUI:
         save_row.add_suffix(self.save_button)
         action_group.add(save_row)
 
-        # Sync button
+        row_fetch = Adw.ActionRow()
+        row_fetch.set_title("Fetch Intervals.icu week")
+        row_fetch.set_activatable(bool(self.app.icu_api_key))
+        self.btn_fetch_icu = Gtk.Button(label="Fetch")
+        self.btn_fetch_icu.get_style_context().add_class("suggested-action")
+        self.btn_fetch_icu.connect("clicked", self._on_fetch_icu)
+        row_fetch.add_suffix(self.btn_fetch_icu)
+        action_group.add(row_fetch)
+
+        row_upload = Adw.ActionRow()
+        row_upload.set_title("Upload to Intervals.icu")
+        row_upload.set_activatable(bool(self.app.icu_api_key))
+        self.btn_upload_icu = Gtk.Button(label="Upload")
+        self.btn_upload_icu.get_style_context().add_class("suggested-action")
+        self.btn_upload_icu.connect("clicked", self._on_upload_icu)
+        row_upload.add_suffix(self.btn_upload_icu)
+        action_group.add(row_upload)
+
         sync_row = Adw.ActionRow()
         sync_row.set_title("Sync to Database")
-        sync_row.set_activatable(True)
+        sync_row.set_activatable(bool(self.app.database_dsn))
         self.sync_button = Gtk.Button(label="Sync")
         self.sync_button.get_style_context().add_class("suggested-action")
         self.sync_button.connect("clicked", self._on_sync)
@@ -305,9 +306,9 @@ class SettingsPageUI:
         container.set_margin_bottom(12)
         container.set_margin_start(12)
         container.set_margin_end(12)
+        container.append(personal_group)
         container.append(dev_group)
         container.append(pebble_group)
-        container.append(personal_group)
         container.append(icu_group)
         container.append(database_group)
         container.append(action_group)
