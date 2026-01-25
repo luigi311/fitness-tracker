@@ -62,23 +62,35 @@ jobs:
             --scie eager \
             --scie-pbs-stripped
 
-      - name: Upload Pex
+      - name: Upload Full
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.name }}
-          path: |
-            dist/fitness_tracker
-            dist/fitness_tracker.pex
+          path: dist/fitness_tracker
 
-      - name: Upload pex to GitHub Releases
+      - name: Upload Pex
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}.pex
+          path: dist/fitness_tracker.pex
+
+      - name: Upload full to GitHub Releases
         if: startsWith(github.ref, 'refs/tags/')
         uses: svenstaro/upload-release-action@v2
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           tag: ${{ github.ref }}
           asset_name: ${{ matrix.name }}
-          file: ${{ github.workspace }}/dist/fitness_tracker*
-          file_glob: true
+          file: ${{ github.workspace }}/dist/fitness_tracker
+      
+      - name: Upload pex to GitHub Releases
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: svenstaro/upload-release-action@v2
+        with:
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          tag: ${{ github.ref }}
+          asset_name: ${{ matrix.name }}.pex
+          file: ${{ github.workspace }}/dist/fitness_tracker.pex
 
   package:
     needs: build
@@ -96,10 +108,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download dist
+      - name: Download full
         uses: actions/download-artifact@v4
         with:
           name: ${{ matrix.name }}
+          path: dist
+
+      - name: Download pex
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ matrix.name }}.pex
           path: dist
 
       - name: Fix permissions
