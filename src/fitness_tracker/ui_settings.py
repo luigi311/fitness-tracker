@@ -16,6 +16,8 @@ from fitness_tracker.hr_provider import HEART_RATE_SERVICE_UUID
 gi.require_versions({"Gtk": "4.0", "Adw": "1"})
 from gi.repository import Adw, GLib, Gtk  # noqa: E402
 
+NONE_LABEL = "None"
+
 
 class SettingsPageUI:
     def __init__(self, app: "FitnessAppUI"):
@@ -45,6 +47,23 @@ class SettingsPageUI:
         self.icu_key_entry = None
         self.btn_fetch_icu = None
         self.btn_upload_icu = None
+
+    def _combo_set_items_with_none(
+        self,
+        combo: Gtk.ComboBoxText,
+        names: list[str],
+        active_name: str | None,
+    ):
+        combo.remove_all()
+        combo.append_text(NONE_LABEL)
+        for n in names:
+            combo.append_text(n)
+
+        # Select saved name if present, else select None
+        if active_name and active_name in names:
+            combo.set_active(names.index(active_name) + 1)
+        else:
+            combo.set_active(0)
 
     def build_page(self) -> Gtk.Widget:
         # Outer scroller so the page never overflows vertically
@@ -377,32 +396,42 @@ class SettingsPageUI:
         scroller.set_child(container)
 
         # Prepopulate HRM
-        if self.app.hr_name:
-            self.hr_spinner.stop()
-            self.hr_combo.append_text(self.app.hr_name)
-            self.hr_combo.set_active(0)
-            self.hr_map = {self.app.hr_name: self.app.hr_address}
+        self._combo_set_items_with_none(
+            self.hr_combo,
+            ([self.app.hr_name] if self.app.hr_name else []),
+            self.app.hr_name,
+        )
+        self.hr_map = {self.app.hr_name: self.app.hr_address} if self.app.hr_name else {}
 
         # Prepopulate Speed
-        if self.app.speed_name:
-            self.speed_spinner.stop()
-            self.speed_combo.append_text(self.app.speed_name)
-            self.speed_combo.set_active(0)
-            self.speed_map = {self.app.speed_name: self.app.speed_address}
+        self._combo_set_items_with_none(
+            self.speed_combo,
+            ([self.app.speed_name] if self.app.speed_name else []),
+            self.app.speed_name,
+        )
+        self.speed_map = (
+            {self.app.speed_name: self.app.speed_address} if self.app.speed_name else {}
+        )
 
         # Prepopulate Cadence
-        if self.app.cadence_name:
-            self.cadence_spinner.stop()
-            self.cadence_combo.append_text(self.app.cadence_name)
-            self.cadence_combo.set_active(0)
-            self.cadence_map = {self.app.cadence_name: self.app.cadence_address}
+        self._combo_set_items_with_none(
+            self.cadence_combo,
+            ([self.app.cadence_name] if self.app.cadence_name else []),
+            self.app.cadence_name,
+        )
+        self.cadence_map = (
+            {self.app.cadence_name: self.app.cadence_address} if self.app.cadence_name else {}
+        )
 
         # Prepopulate Power
-        if self.app.power_name:
-            self.power_spinner.stop()
-            self.power_combo.append_text(self.app.power_name)
-            self.power_combo.set_active(0)
-            self.power_map = {self.app.power_name: self.app.power_address}
+        self._combo_set_items_with_none(
+            self.power_combo,
+            ([self.app.power_name] if self.app.power_name else []),
+            self.app.power_name,
+        )
+        self.power_map = (
+            {self.app.power_name: self.app.power_address} if self.app.power_name else {}
+        )
 
         # Prepopulate Pebble
         if self.app.pebble_use_emulator and self.pebble_row:
@@ -437,9 +466,7 @@ class SettingsPageUI:
             intervals_key = (
                 (self.icu_key_entry.get_text() or "").strip() if self.icu_key_entry else ""
             )
-            database_dsn = (
-                (self.dsn_entry.get_text() or "").strip() if self.dsn_entry else ""
-            )
+            database_dsn = (self.dsn_entry.get_text() or "").strip() if self.dsn_entry else ""
 
             icu_ok = bool(intervals_athlete_id and intervals_key)
             db_ok = bool(database_dsn)
@@ -465,18 +492,20 @@ class SettingsPageUI:
 
         async def _scan():
             devices = await BleakScanner.discover(
-                timeout=5.0, service_uuids=[HEART_RATE_SERVICE_UUID]
+                timeout=5.0,
+                service_uuids=[HEART_RATE_SERVICE_UUID],
             )
             mapping = {d.name: d.address for d in devices if d.name}
             names = sorted(mapping.keys())
-            GLib.idle_add(self.hr_spinner.stop)
-            GLib.idle_add(self.hr_row.set_subtitle, "" if names else "No HRM found")
-            GLib.idle_add(self.hr_combo.remove_all)
-            for name in names:
-                GLib.idle_add(self.hr_combo.append_text, name)
-            if self.app.hr_name and self.app.hr_name in names:
-                GLib.idle_add(self.hr_combo.set_active, names.index(self.app.hr_name))
-            self.hr_map = mapping
+
+            def _apply():
+                self.hr_spinner.stop()
+                self.hr_row.set_subtitle("" if names else "No HRM found")
+
+                self._combo_set_items_with_none(self.hr_combo, names, self.app.hr_name)
+                self.hr_map = mapping
+
+            GLib.idle_add(_apply)
 
         asyncio.run(_scan())
 
@@ -492,24 +521,14 @@ class SettingsPageUI:
             def _apply():
                 self.speed_spinner.stop()
                 self.speed_row.set_subtitle("" if names else "No speed devices found")
-
-                # Speed
-                self.speed_combo.remove_all()
-                for name in names:
-                    self.speed_combo.append_text(name)
+                self._combo_set_items_with_none(self.speed_combo, names, self.app.speed_name)
                 self.speed_map = mapping
-                if self.app.speed_name and self.app.speed_name in names:
-                    self.speed_combo.set_active(names.index(self.app.speed_name))
 
                 # Cadence
                 self.cadence_spinner.stop()
                 self.cadence_row.set_subtitle("" if names else "No cadence devices found")
-                self.cadence_combo.remove_all()
-                for name in names:
-                    self.cadence_combo.append_text(name)
+                self._combo_set_items_with_none(self.cadence_combo, names, self.app.cadence_name)
                 self.cadence_map = mapping
-                if self.app.cadence_name and self.app.cadence_name in names:
-                    self.cadence_combo.set_active(names.index(self.app.cadence_name))
 
             GLib.idle_add(_apply)
 
@@ -523,14 +542,14 @@ class SettingsPageUI:
             devices = await discover_power_devices(scan_timeout=5.0)
             mapping = {d.name: d.address for d in devices if d.name}
             names = sorted(mapping.keys())
-            GLib.idle_add(self.power_spinner.stop)
-            GLib.idle_add(self.power_row.set_subtitle, "" if names else "No power devices found")
-            GLib.idle_add(self.power_combo.remove_all)
-            for name in names:
-                GLib.idle_add(self.power_combo.append_text, name)
-            if self.app.power_name and self.app.power_name in names:
-                GLib.idle_add(self.power_combo.set_active, names.index(self.app.power_name))
-            self.power_map = mapping
+
+            def _apply():
+                self.power_spinner.stop()
+                self.power_row.set_subtitle("" if names else "No power devices found")
+                self._combo_set_items_with_none(self.power_combo, names, self.app.power_name)
+                self.power_map = mapping
+
+            GLib.idle_add(_apply)
 
         asyncio.run(_scan())
 
@@ -687,24 +706,40 @@ class SettingsPageUI:
         self.app.database_dsn = self.dsn_entry.get_text()
 
         # HR
-        self.app.hr_name = self.hr_combo.get_active_text() or ""
-        if self.app.hr_name in self.hr_map:
-            self.app.hr_address = self.hr_map[self.app.hr_name]
+        selected = self.hr_combo.get_active_text() or ""
+        if selected == NONE_LABEL or not selected:
+            self.app.hr_name = ""
+            self.app.hr_address = ""
+        else:
+            self.app.hr_name = selected
+            self.app.hr_address = self.hr_map.get(selected, "")
 
         # Speed
-        self.app.speed_name = self.speed_combo.get_active_text() or ""
-        if self.app.speed_name in self.speed_map:
-            self.app.speed_address = self.speed_map[self.app.speed_name]
+        selected = self.speed_combo.get_active_text() or ""
+        if selected == NONE_LABEL or not selected:
+            self.app.speed_name = ""
+            self.app.speed_address = ""
+        else:
+            self.app.speed_name = selected
+            self.app.speed_address = self.speed_map.get(selected, "")
 
         # Cadence
-        self.app.cadence_name = self.cadence_combo.get_active_text() or ""
-        if self.app.cadence_name in self.cadence_map:
-            self.app.cadence_address = self.cadence_map[self.app.cadence_name]
+        selected = self.cadence_combo.get_active_text() or ""
+        if selected == NONE_LABEL or not selected:
+            self.app.cadence_name = ""
+            self.app.cadence_address = ""
+        else:
+            self.app.cadence_name = selected
+            self.app.cadence_address = self.cadence_map.get(selected, "")
 
         # Power
-        self.app.power_name = self.power_combo.get_active_text() or ""
-        if self.app.power_name in self.power_map:
-            self.app.power_address = self.power_map[self.app.power_name]
+        selected = self.power_combo.get_active_text() or ""
+        if selected == NONE_LABEL or not selected:
+            self.app.power_name = ""
+            self.app.power_address = ""
+        else:
+            self.app.power_name = selected
+            self.app.power_address = self.power_map.get(selected, "")
 
         # Pebble
         self.app.pebble_enable = (
