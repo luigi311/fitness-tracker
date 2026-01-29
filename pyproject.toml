@@ -28,7 +28,7 @@ dev = [
     "pytest>=8.4.2",
     "requirements-parser>=0.13.0",
     "ruff>=0.11.13",
-    "ty>=0.0.1a10",
+    "ty>=0.0.14",
 ]
 
 # Define a console script entry point
