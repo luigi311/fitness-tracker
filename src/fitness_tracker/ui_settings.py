@@ -52,93 +52,6 @@ class SettingsPageUI:
         scroller.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         scroller.set_vexpand(True)
 
-        # ----- Sensors group -----
-        dev_group = Adw.PreferencesGroup()
-        dev_group.set_title("Sensors")
-        # Heart Rate Monitor
-        self.hr_row = Adw.ActionRow()
-        self.hr_row.set_title("Select HRM")
-        self.hr_spinner = Gtk.Spinner()
-        self.hr_combo = Gtk.ComboBoxText()
-        self.hr_combo.set_hexpand(True)
-        self.hr_row.add_prefix(self.hr_spinner)
-        self.hr_row.add_suffix(self.hr_combo)
-        dev_group.add(self.hr_row)
-
-        hr_scan_row = Adw.ActionRow()
-        self.hr_scan_button = Gtk.Button(label="Scan")
-        self.hr_scan_button.get_style_context().add_class("suggested-action")
-        self.hr_scan_button.connect(
-            "clicked",
-            lambda _: threading.Thread(target=self._fill_devices_hr, daemon=True).start(),
-        )
-        hr_scan_row.add_suffix(self.hr_scan_button)
-        dev_group.add(hr_scan_row)
-
-        # Speed
-        self.speed_row = Adw.ActionRow()
-        self.speed_row.set_title("Select Speed Device")
-        self.speed_spinner = Gtk.Spinner()
-        self.speed_combo = Gtk.ComboBoxText()
-        self.speed_combo.set_hexpand(True)
-        self.speed_row.add_prefix(self.speed_spinner)
-        self.speed_row.add_suffix(self.speed_combo)
-        dev_group.add(self.speed_row)
-
-        speed_scan_row = Adw.ActionRow()
-        self.speed_scan_button = Gtk.Button(label="Scan")
-        self.speed_scan_button.get_style_context().add_class("suggested-action")
-        self.speed_scan_button.connect(
-            "clicked",
-            lambda _: threading.Thread(
-                target=self._fill_devices_speed_cadence, daemon=True
-            ).start(),
-        )
-        speed_scan_row.add_suffix(self.speed_scan_button)
-        dev_group.add(speed_scan_row)
-
-        # Cadence
-        self.cadence_row = Adw.ActionRow()
-        self.cadence_row.set_title("Select Cadence Device")
-        self.cadence_spinner = Gtk.Spinner()
-        self.cadence_combo = Gtk.ComboBoxText()
-        self.cadence_combo.set_hexpand(True)
-        self.cadence_row.add_prefix(self.cadence_spinner)
-        self.cadence_row.add_suffix(self.cadence_combo)
-        dev_group.add(self.cadence_row)
-
-        cadence_scan_row = Adw.ActionRow()
-        self.cadence_scan_button = Gtk.Button(label="Scan")
-        self.cadence_scan_button.get_style_context().add_class("suggested-action")
-        self.cadence_scan_button.connect(
-            "clicked",
-            lambda _: threading.Thread(
-                target=self._fill_devices_speed_cadence, daemon=True
-            ).start(),
-        )
-        cadence_scan_row.add_suffix(self.cadence_scan_button)
-        dev_group.add(cadence_scan_row)
-
-        # Power
-        self.power_row = Adw.ActionRow()
-        self.power_row.set_title("Select Power Device")
-        self.power_spinner = Gtk.Spinner()
-        self.power_combo = Gtk.ComboBoxText()
-        self.power_combo.set_hexpand(True)
-        self.power_row.add_prefix(self.power_spinner)
-        self.power_row.add_suffix(self.power_combo)
-        dev_group.add(self.power_row)
-
-        power_scan_row = Adw.ActionRow()
-        self.power_scan_button = Gtk.Button(label="Scan")
-        self.power_scan_button.get_style_context().add_class("suggested-action")
-        self.power_scan_button.connect(
-            "clicked",
-            lambda _: threading.Thread(target=self._fill_devices_power, daemon=True).start(),
-        )
-        power_scan_row.add_suffix(self.power_scan_button)
-        dev_group.add(power_scan_row)
-
         # ----- Personal settings group -----
         personal_group = Adw.PreferencesGroup()
         personal_group.set_title("Personal Info")
@@ -166,6 +79,93 @@ class SettingsPageUI:
         self.ftp_spin.set_value(self.app.ftp_watts)
         ftp_row.add_suffix(self.ftp_spin)
         personal_group.add(ftp_row)
+
+        # ----- Sensors group -----
+        sensors_running_group = Adw.PreferencesGroup()
+        sensors_running_group.set_title("Sensors")
+        # Heart Rate Monitor
+        self.hr_row = Adw.ActionRow()
+        self.hr_row.set_title("Select HRM")
+        self.hr_spinner = Gtk.Spinner()
+        self.hr_combo = Gtk.ComboBoxText()
+        self.hr_combo.set_hexpand(True)
+        self.hr_row.add_prefix(self.hr_spinner)
+        self.hr_row.add_suffix(self.hr_combo)
+        sensors_running_group.add(self.hr_row)
+
+        hr_scan_row = Adw.ActionRow()
+        self.hr_scan_button = Gtk.Button(label="Scan")
+        self.hr_scan_button.get_style_context().add_class("suggested-action")
+        self.hr_scan_button.connect(
+            "clicked",
+            lambda _: threading.Thread(target=self._fill_devices_hr, daemon=True).start(),
+        )
+        hr_scan_row.add_suffix(self.hr_scan_button)
+        sensors_running_group.add(hr_scan_row)
+
+        # Speed
+        self.speed_row = Adw.ActionRow()
+        self.speed_row.set_title("Select Speed Device")
+        self.speed_spinner = Gtk.Spinner()
+        self.speed_combo = Gtk.ComboBoxText()
+        self.speed_combo.set_hexpand(True)
+        self.speed_row.add_prefix(self.speed_spinner)
+        self.speed_row.add_suffix(self.speed_combo)
+        sensors_running_group.add(self.speed_row)
+
+        speed_scan_row = Adw.ActionRow()
+        self.speed_scan_button = Gtk.Button(label="Scan")
+        self.speed_scan_button.get_style_context().add_class("suggested-action")
+        self.speed_scan_button.connect(
+            "clicked",
+            lambda _: threading.Thread(
+                target=self._fill_devices_speed_cadence, daemon=True
+            ).start(),
+        )
+        speed_scan_row.add_suffix(self.speed_scan_button)
+        sensors_running_group.add(speed_scan_row)
+
+        # Cadence
+        self.cadence_row = Adw.ActionRow()
+        self.cadence_row.set_title("Select Cadence Device")
+        self.cadence_spinner = Gtk.Spinner()
+        self.cadence_combo = Gtk.ComboBoxText()
+        self.cadence_combo.set_hexpand(True)
+        self.cadence_row.add_prefix(self.cadence_spinner)
+        self.cadence_row.add_suffix(self.cadence_combo)
+        sensors_running_group.add(self.cadence_row)
+
+        cadence_scan_row = Adw.ActionRow()
+        self.cadence_scan_button = Gtk.Button(label="Scan")
+        self.cadence_scan_button.get_style_context().add_class("suggested-action")
+        self.cadence_scan_button.connect(
+            "clicked",
+            lambda _: threading.Thread(
+                target=self._fill_devices_speed_cadence, daemon=True
+            ).start(),
+        )
+        cadence_scan_row.add_suffix(self.cadence_scan_button)
+        sensors_running_group.add(cadence_scan_row)
+
+        # Power
+        self.power_row = Adw.ActionRow()
+        self.power_row.set_title("Select Power Device")
+        self.power_spinner = Gtk.Spinner()
+        self.power_combo = Gtk.ComboBoxText()
+        self.power_combo.set_hexpand(True)
+        self.power_row.add_prefix(self.power_spinner)
+        self.power_row.add_suffix(self.power_combo)
+        sensors_running_group.add(self.power_row)
+
+        power_scan_row = Adw.ActionRow()
+        self.power_scan_button = Gtk.Button(label="Scan")
+        self.power_scan_button.get_style_context().add_class("suggested-action")
+        self.power_scan_button.connect(
+            "clicked",
+            lambda _: threading.Thread(target=self._fill_devices_power, daemon=True).start(),
+        )
+        power_scan_row.add_suffix(self.power_scan_button)
+        sensors_running_group.add(power_scan_row)
 
         # Pebble
         pebble_group = Adw.PreferencesGroup()
@@ -307,7 +307,7 @@ class SettingsPageUI:
         container.set_margin_start(12)
         container.set_margin_end(12)
         container.append(personal_group)
-        container.append(dev_group)
+        container.append(sensors_running_group)
         container.append(pebble_group)
         container.append(icu_group)
         container.append(database_group)
