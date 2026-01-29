@@ -16,6 +16,8 @@ from fitness_tracker.hr_provider import HEART_RATE_SERVICE_UUID
 gi.require_versions({"Gtk": "4.0", "Adw": "1"})
 from gi.repository import Adw, GLib, Gtk  # noqa: E402
 
+NONE_LABEL = "None"
+
 
 class SettingsPageUI:
     def __init__(self, app: "FitnessAppUI"):
@@ -46,161 +48,30 @@ class SettingsPageUI:
         self.btn_fetch_icu = None
         self.btn_upload_icu = None
 
+    def _combo_set_items_with_none(
+        self,
+        combo: Gtk.ComboBoxText,
+        names: list[str],
+        active_name: str | None,
+    ):
+        combo.remove_all()
+        combo.append_text(NONE_LABEL)
+        for n in names:
+            combo.append_text(n)
+
+        # Select saved name if present, else select None
+        if active_name and active_name in names:
+            combo.set_active(names.index(active_name) + 1)
+        else:
+            combo.set_active(0)
+
     def build_page(self) -> Gtk.Widget:
         # Outer scroller so the page never overflows vertically
         scroller = Gtk.ScrolledWindow()
         scroller.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         scroller.set_vexpand(True)
 
-        # ----- Sensors group -----
-        dev_group = Adw.PreferencesGroup()
-        dev_group.set_title("Sensors")
-        # Heart Rate Monitor
-        self.hr_row = Adw.ActionRow()
-        self.hr_row.set_title("Select HRM")
-        self.hr_spinner = Gtk.Spinner()
-        self.hr_combo = Gtk.ComboBoxText()
-        self.hr_combo.set_hexpand(True)
-        self.hr_row.add_prefix(self.hr_spinner)
-        self.hr_row.add_suffix(self.hr_combo)
-        dev_group.add(self.hr_row)
-
-        hr_scan_row = Adw.ActionRow()
-        self.hr_scan_button = Gtk.Button(label="Scan")
-        self.hr_scan_button.get_style_context().add_class("suggested-action")
-        self.hr_scan_button.connect(
-            "clicked",
-            lambda _: threading.Thread(target=self._fill_devices_hr, daemon=True).start(),
-        )
-        hr_scan_row.add_suffix(self.hr_scan_button)
-        dev_group.add(hr_scan_row)
-
-        # Speed
-        self.speed_row = Adw.ActionRow()
-        self.speed_row.set_title("Select Speed Device")
-        self.speed_spinner = Gtk.Spinner()
-        self.speed_combo = Gtk.ComboBoxText()
-        self.speed_combo.set_hexpand(True)
-        self.speed_row.add_prefix(self.speed_spinner)
-        self.speed_row.add_suffix(self.speed_combo)
-        dev_group.add(self.speed_row)
-
-        speed_scan_row = Adw.ActionRow()
-        self.speed_scan_button = Gtk.Button(label="Scan")
-        self.speed_scan_button.get_style_context().add_class("suggested-action")
-        self.speed_scan_button.connect(
-            "clicked",
-            lambda _: threading.Thread(
-                target=self._fill_devices_speed_cadence, daemon=True
-            ).start(),
-        )
-        speed_scan_row.add_suffix(self.speed_scan_button)
-        dev_group.add(speed_scan_row)
-
-        # Cadence
-        self.cadence_row = Adw.ActionRow()
-        self.cadence_row.set_title("Select Cadence Device")
-        self.cadence_spinner = Gtk.Spinner()
-        self.cadence_combo = Gtk.ComboBoxText()
-        self.cadence_combo.set_hexpand(True)
-        self.cadence_row.add_prefix(self.cadence_spinner)
-        self.cadence_row.add_suffix(self.cadence_combo)
-        dev_group.add(self.cadence_row)
-
-        cadence_scan_row = Adw.ActionRow()
-        self.cadence_scan_button = Gtk.Button(label="Scan")
-        self.cadence_scan_button.get_style_context().add_class("suggested-action")
-        self.cadence_scan_button.connect(
-            "clicked",
-            lambda _: threading.Thread(
-                target=self._fill_devices_speed_cadence, daemon=True
-            ).start(),
-        )
-        cadence_scan_row.add_suffix(self.cadence_scan_button)
-        dev_group.add(cadence_scan_row)
-
-        # Power
-        self.power_row = Adw.ActionRow()
-        self.power_row.set_title("Select Power Device")
-        self.power_spinner = Gtk.Spinner()
-        self.power_combo = Gtk.ComboBoxText()
-        self.power_combo.set_hexpand(True)
-        self.power_row.add_prefix(self.power_spinner)
-        self.power_row.add_suffix(self.power_combo)
-        dev_group.add(self.power_row)
-
-        power_scan_row = Adw.ActionRow()
-        self.power_scan_button = Gtk.Button(label="Scan")
-        self.power_scan_button.get_style_context().add_class("suggested-action")
-        self.power_scan_button.connect(
-            "clicked",
-            lambda _: threading.Thread(target=self._fill_devices_power, daemon=True).start(),
-        )
-        power_scan_row.add_suffix(self.power_scan_button)
-        dev_group.add(power_scan_row)
-
-        # Pebble
-        pebble_group = Adw.PreferencesGroup()
-        pebble_group.set_title("Pebble Watch")
-
-        # Enable
-        pebble_enable_row = Adw.SwitchRow()
-        pebble_enable_row.set_title("Enable Pebble")
-        pebble_enable_row.set_active(self.app.pebble_enable)
-        pebble_group.add(pebble_enable_row)
-        self.pebble_enable_row = pebble_enable_row
-
-        # Emulator vs Watch
-        pebble_emu_switch = Adw.SwitchRow()
-        pebble_emu_switch.set_title("Use Emulator")
-        pebble_emu_switch.set_active(self.app.pebble_use_emulator)
-        pebble_group.add(pebble_emu_switch)
-        self.pebble_emu_switch = pebble_emu_switch
-
-        pebble_row = Adw.ActionRow()
-        pebble_row.set_title("Pebble")
-        pebble_spinner = Gtk.Spinner()
-        pebble_combo = Gtk.ComboBoxText()
-        pebble_combo.set_hexpand(False)
-        pebble_combo.set_size_request(240, -1)
-        pebble_combo.set_halign(Gtk.Align.END)
-        pebble_combo.connect("changed", self._on_pebble_combo_changed)
-        pebble_row.add_prefix(pebble_spinner)
-        pebble_row.add_suffix(pebble_combo)
-        if hasattr(pebble_row, "set_title_lines"):
-            pebble_row.set_title_lines(1)
-        pebble_group.add(pebble_row)
-        self.pebble_row = pebble_row
-        self.pebble_spinner = pebble_spinner
-        self.pebble_combo = pebble_combo
-
-        # Emulator port (only visible when using emulator)
-        pebble_port_row = Adw.ActionRow()
-        pebble_port_row.set_title("Emulator Port")
-        pebble_port_spin = Gtk.SpinButton.new_with_range(1, 65535, 1)
-        pebble_port_spin.set_value(self.app.pebble_port or 47527)
-        pebble_port_spin.set_hexpand(False)
-        pebble_port_spin.set_width_chars(6)
-        pebble_port_row.add_suffix(pebble_port_spin)
-        pebble_group.add(pebble_port_row)
-        self.pebble_port_row = pebble_port_row
-        self.pebble_port_spin = pebble_port_spin
-
-        # Scan button
-        pebble_scan_row = Adw.ActionRow()
-        pebble_scan_row.set_title("Scan Pebble")
-        pebble_scan_button = Gtk.Button(label="Scan")
-        pebble_scan_button.get_style_context().add_class("suggested-action")
-        pebble_scan_button.connect(
-            "clicked",
-            lambda _b: threading.Thread(target=self._fill_devices_pebble, daemon=True).start(),
-        )
-        pebble_scan_row.add_suffix(pebble_scan_button)
-        pebble_group.add(pebble_scan_row)
-        self.pebble_scan_row = pebble_scan_row
-        self.pebble_scan_button = pebble_scan_button
-
-        # Personal info group (for HR, weight, height, etc.)
+        # ----- Personal settings group -----
         personal_group = Adw.PreferencesGroup()
         personal_group.set_title("Personal Info")
 
@@ -228,9 +99,192 @@ class SettingsPageUI:
         ftp_row.add_suffix(self.ftp_spin)
         personal_group.add(ftp_row)
 
+        # ----- Devices group -----
+        devices_group = Adw.PreferencesGroup()
+        devices_group.set_title("Devices")
+
+        # ----- Sensors group -----
+        sensors_running_group = Adw.PreferencesGroup()
+        sensors_running_group.set_title("")
+
+        sensors_running_expander = Adw.ExpanderRow()
+        sensors_running_expander.set_title("Running Sensors")
+        sensors_running_expander.set_subtitle("Heart rate, speed, cadence, power")
+        sensors_running_expander.set_expanded(False)
+        sensors_running_group.add(sensors_running_expander)
+
+        # Heart Rate Monitor
+        self.hr_row = Adw.ActionRow()
+        self.hr_row.set_title("Select HRM")
+        self.hr_spinner = Gtk.Spinner()
+        self.hr_combo = Gtk.ComboBoxText()
+        self.hr_combo.set_hexpand(True)
+        self.hr_row.add_prefix(self.hr_spinner)
+        self.hr_row.add_suffix(self.hr_combo)
+        sensors_running_expander.add_row(self.hr_row)
+
+        hr_scan_row = Adw.ActionRow()
+        self.hr_scan_button = Gtk.Button(label="Scan HRM")
+        self.hr_scan_button.get_style_context().add_class("suggested-action")
+        self.hr_scan_button.connect(
+            "clicked",
+            lambda _: threading.Thread(target=self._fill_devices_hr, daemon=True).start(),
+        )
+        hr_scan_row.add_suffix(self.hr_scan_button)
+        sensors_running_expander.add_row(hr_scan_row)
+
+        # Speed
+        self.speed_row = Adw.ActionRow()
+        self.speed_row.set_title("Select Speed Device")
+        self.speed_spinner = Gtk.Spinner()
+        self.speed_combo = Gtk.ComboBoxText()
+        self.speed_combo.set_hexpand(True)
+        self.speed_row.add_prefix(self.speed_spinner)
+        self.speed_row.add_suffix(self.speed_combo)
+        sensors_running_expander.add_row(self.speed_row)
+
+        speed_scan_row = Adw.ActionRow()
+        self.speed_scan_button = Gtk.Button(label="Scan Speed")
+        self.speed_scan_button.get_style_context().add_class("suggested-action")
+        self.speed_scan_button.connect(
+            "clicked",
+            lambda _: threading.Thread(
+                target=self._fill_devices_speed_cadence, daemon=True
+            ).start(),
+        )
+        speed_scan_row.add_suffix(self.speed_scan_button)
+        sensors_running_expander.add_row(speed_scan_row)
+
+        # Cadence
+        self.cadence_row = Adw.ActionRow()
+        self.cadence_row.set_title("Select Cadence Device")
+        self.cadence_spinner = Gtk.Spinner()
+        self.cadence_combo = Gtk.ComboBoxText()
+        self.cadence_combo.set_hexpand(True)
+        self.cadence_row.add_prefix(self.cadence_spinner)
+        self.cadence_row.add_suffix(self.cadence_combo)
+        sensors_running_expander.add_row(self.cadence_row)
+
+        cadence_scan_row = Adw.ActionRow()
+        self.cadence_scan_button = Gtk.Button(label="Scan Cadence")
+        self.cadence_scan_button.get_style_context().add_class("suggested-action")
+        self.cadence_scan_button.connect(
+            "clicked",
+            lambda _: threading.Thread(
+                target=self._fill_devices_speed_cadence, daemon=True
+            ).start(),
+        )
+        cadence_scan_row.add_suffix(self.cadence_scan_button)
+        sensors_running_expander.add_row(cadence_scan_row)
+
+        # Power
+        self.power_row = Adw.ActionRow()
+        self.power_row.set_title("Select Power Device")
+        self.power_spinner = Gtk.Spinner()
+        self.power_combo = Gtk.ComboBoxText()
+        self.power_combo.set_hexpand(True)
+        self.power_row.add_prefix(self.power_spinner)
+        self.power_row.add_suffix(self.power_combo)
+        sensors_running_expander.add_row(self.power_row)
+
+        power_scan_row = Adw.ActionRow()
+        self.power_scan_button = Gtk.Button(label="Scan Power")
+        self.power_scan_button.get_style_context().add_class("suggested-action")
+        self.power_scan_button.connect(
+            "clicked",
+            lambda _: threading.Thread(target=self._fill_devices_power, daemon=True).start(),
+        )
+        power_scan_row.add_suffix(self.power_scan_button)
+        sensors_running_expander.add_row(power_scan_row)
+        devices_group.add(sensors_running_group)
+
+        # ----- Pebble group -----
+        pebble_group = Adw.PreferencesGroup()
+        pebble_group.set_title("")
+
+        # Enable
+        pebble_enable_row = Adw.SwitchRow()
+        pebble_enable_row.set_title("Enable Pebble")
+        pebble_enable_row.set_active(self.app.pebble_enable)
+        pebble_group.add(pebble_enable_row)
+        self.pebble_enable_row = pebble_enable_row
+
+        pebble_expander = Adw.ExpanderRow()
+        pebble_expander.set_title("Pebble Settings")
+        pebble_expander.set_expanded(False)
+        pebble_group.add(pebble_expander)
+
+        pebble_emu_switch = Adw.SwitchRow()
+        pebble_emu_switch.set_title("Use Emulator")
+        pebble_emu_switch.set_active(self.app.pebble_use_emulator)
+        pebble_expander.add_row(pebble_emu_switch)
+        self.pebble_emu_switch = pebble_emu_switch
+
+        pebble_row = Adw.ActionRow()
+        pebble_row.set_title("Pebble")
+        pebble_spinner = Gtk.Spinner()
+        pebble_combo = Gtk.ComboBoxText()
+        pebble_combo.set_hexpand(False)
+        pebble_combo.set_size_request(240, -1)
+        pebble_combo.set_halign(Gtk.Align.END)
+        pebble_combo.connect("changed", self._on_pebble_combo_changed)
+        pebble_row.add_prefix(pebble_spinner)
+        pebble_row.add_suffix(pebble_combo)
+        if hasattr(pebble_row, "set_title_lines"):
+            pebble_row.set_title_lines(1)
+        pebble_expander.add_row(pebble_row)
+        self.pebble_row = pebble_row
+        self.pebble_spinner = pebble_spinner
+        self.pebble_combo = pebble_combo
+
+        # Emulator port (only visible when using emulator)
+        pebble_port_row = Adw.ActionRow()
+        pebble_port_row.set_title("Emulator Port")
+        pebble_port_spin = Gtk.SpinButton.new_with_range(1, 65535, 1)
+        pebble_port_spin.set_value(self.app.pebble_port or 47527)
+        pebble_port_spin.set_hexpand(False)
+        pebble_port_spin.set_width_chars(6)
+        pebble_port_row.add_suffix(pebble_port_spin)
+        pebble_expander.add_row(pebble_port_row)
+        self.pebble_port_row = pebble_port_row
+        self.pebble_port_spin = pebble_port_spin
+
+        # Scan button
+        pebble_scan_row = Adw.ActionRow()
+        pebble_scan_button = Gtk.Button(label="Scan Pebble")
+        pebble_scan_button.get_style_context().add_class("suggested-action")
+        pebble_scan_button.connect(
+            "clicked",
+            lambda _b: threading.Thread(target=self._fill_devices_pebble, daemon=True).start(),
+        )
+        pebble_scan_row.add_suffix(pebble_scan_button)
+        pebble_expander.add_row(pebble_scan_row)
+        self.pebble_scan_row = pebble_scan_row
+        self.pebble_scan_button = pebble_scan_button
+
+        def _update_pebble_expander_state(*_args):
+            enabled = bool(self.pebble_enable_row.get_active()) if self.pebble_enable_row else False
+            pebble_expander.set_sensitive(enabled)
+            if not enabled:
+                pebble_expander.set_expanded(False)
+            pebble_expander.set_subtitle("Enabled" if enabled else "Disabled")
+
+        pebble_enable_row.connect("notify::active", _update_pebble_expander_state)
+        _update_pebble_expander_state()
+        devices_group.add(pebble_group)
+
+        # --- Providers group ---
+        providers_group = Adw.PreferencesGroup()
+        providers_group.set_title("Data Providers")
+
         # --- Intervals.icu provider ---
         icu_group = Adw.PreferencesGroup()
-        icu_group.set_title("Intervals.icu")
+        icu_group.set_title("")
+
+        icu_expander = Adw.ExpanderRow()
+        icu_expander.set_title("Intervals.icu")
+        icu_expander.set_expanded(False)
+        icu_group.add(icu_expander)
 
         row_icu_id = Adw.ActionRow()
         row_icu_id.set_title("Athlete ID")
@@ -238,48 +292,58 @@ class SettingsPageUI:
         self.icu_id_entry.set_hexpand(True)
         self.icu_id_entry.set_text(self.app.icu_athlete_id or "")
         row_icu_id.add_suffix(self.icu_id_entry)
-        icu_group.add(row_icu_id)
+        icu_expander.add_row(row_icu_id)
 
         row_icu_key = Adw.ActionRow()
         row_icu_key.set_title("API Key")
         self.icu_key_entry = Gtk.Entry()
-        self.icu_key_entry.set_visibility(False)  # hide text (password-like)
+        self.icu_key_entry.set_visibility(False)
         self.icu_key_entry.set_hexpand(True)
         self.icu_key_entry.set_text(self.app.icu_api_key or "")
         row_icu_key.add_suffix(self.icu_key_entry)
-        icu_group.add(row_icu_key)
+        icu_expander.add_row(row_icu_key)
 
-        row_fetch = Adw.ActionRow()
-        row_fetch.set_title("Fetch Week's Running Workouts")
-        self.btn_fetch_icu = Gtk.Button(label="Fetch")
-        self.btn_fetch_icu.get_style_context().add_class("suggested-action")
-        self.btn_fetch_icu.connect("clicked", self._on_fetch_icu)
-        row_fetch.add_suffix(self.btn_fetch_icu)
-        icu_group.add(row_fetch)
+        def _update_icu_subtitle(*_args):
+            aid = (self.icu_id_entry.get_text() or "").strip() if self.icu_id_entry else ""
+            key = (self.icu_key_entry.get_text() or "").strip() if self.icu_key_entry else ""
+            icu_expander.set_subtitle("Configured" if (aid and key) else "Not configured")
 
-        row_upload = Adw.ActionRow()
-        row_upload.set_title("Upload completed workouts")
-        self.btn_upload_icu = Gtk.Button(label="Upload")
-        self.btn_upload_icu.get_style_context().add_class("suggested-action")
-        self.btn_upload_icu.connect("clicked", self._on_upload_icu)
-        row_upload.add_suffix(self.btn_upload_icu)
-        icu_group.add(row_upload)
+        self.icu_id_entry.connect("changed", _update_icu_subtitle)
+        self.icu_key_entry.connect("changed", _update_icu_subtitle)
+        _update_icu_subtitle()
 
-        # Database settings
+        providers_group.add(icu_group)
+
+        # ----- Database -----
         database_group = Adw.PreferencesGroup()
-        database_group.set_title("Database Settings")
-        # Database DSN row
+        database_group.set_title("")
+
+        database_expander = Adw.ExpanderRow()
+        database_expander.set_title("Database")
+        database_expander.set_expanded(False)
+        database_group.add(database_expander)
+
         dsn_row = Adw.ActionRow()
         dsn_row.set_title("Database DSN")
         self.dsn_entry = Gtk.Entry()
         self.dsn_entry.set_hexpand(True)
         self.dsn_entry.set_text(self.app.database_dsn)
         dsn_row.add_suffix(self.dsn_entry)
-        database_group.add(dsn_row)
+        database_expander.add_row(dsn_row)
 
-        # Save Button
+        def _update_db_subtitle(*_args):
+            dsn = (self.dsn_entry.get_text() or "").strip() if self.dsn_entry else ""
+            database_expander.set_subtitle("Configured" if dsn else "Not configured")
+
+        self.dsn_entry.connect("changed", _update_db_subtitle)
+        _update_db_subtitle()
+
+        providers_group.add(database_group)
+
+        # ----- Actions group -----
         action_group = Adw.PreferencesGroup()
         action_group.set_title("Actions")
+
         save_row = Adw.ActionRow()
         save_row.set_title("Save Settings")
         save_row.set_activatable(True)
@@ -289,10 +353,27 @@ class SettingsPageUI:
         save_row.add_suffix(self.save_button)
         action_group.add(save_row)
 
-        # Sync button
+        row_fetch = Adw.ActionRow()
+        row_fetch.set_title("Fetch Intervals.icu week")
+        row_fetch.set_activatable(bool(self.app.icu_api_key))
+        self.btn_fetch_icu = Gtk.Button(label="Fetch")
+        self.btn_fetch_icu.get_style_context().add_class("suggested-action")
+        self.btn_fetch_icu.connect("clicked", self._on_fetch_icu)
+        row_fetch.add_suffix(self.btn_fetch_icu)
+        action_group.add(row_fetch)
+
+        row_upload = Adw.ActionRow()
+        row_upload.set_title("Upload to Intervals.icu")
+        row_upload.set_activatable(bool(self.app.icu_api_key))
+        self.btn_upload_icu = Gtk.Button(label="Upload")
+        self.btn_upload_icu.get_style_context().add_class("suggested-action")
+        self.btn_upload_icu.connect("clicked", self._on_upload_icu)
+        row_upload.add_suffix(self.btn_upload_icu)
+        action_group.add(row_upload)
+
         sync_row = Adw.ActionRow()
         sync_row.set_title("Sync to Database")
-        sync_row.set_activatable(True)
+        sync_row.set_activatable(bool(self.app.database_dsn))
         self.sync_button = Gtk.Button(label="Sync")
         self.sync_button.get_style_context().add_class("suggested-action")
         self.sync_button.connect("clicked", self._on_sync)
@@ -305,42 +386,52 @@ class SettingsPageUI:
         container.set_margin_bottom(12)
         container.set_margin_start(12)
         container.set_margin_end(12)
-        container.append(dev_group)
-        container.append(pebble_group)
+
         container.append(personal_group)
-        container.append(icu_group)
-        container.append(database_group)
+        container.append(devices_group)
+        container.append(providers_group)
         container.append(action_group)
+
         # Return the scroller so the page scrolls on small windows
         scroller.set_child(container)
 
         # Prepopulate HRM
-        if self.app.hr_name:
-            self.hr_spinner.stop()
-            self.hr_combo.append_text(self.app.hr_name)
-            self.hr_combo.set_active(0)
-            self.hr_map = {self.app.hr_name: self.app.hr_address}
+        self._combo_set_items_with_none(
+            self.hr_combo,
+            ([self.app.hr_name] if self.app.hr_name else []),
+            self.app.hr_name,
+        )
+        self.hr_map = {self.app.hr_name: self.app.hr_address} if self.app.hr_name else {}
 
         # Prepopulate Speed
-        if self.app.speed_name:
-            self.speed_spinner.stop()
-            self.speed_combo.append_text(self.app.speed_name)
-            self.speed_combo.set_active(0)
-            self.speed_map = {self.app.speed_name: self.app.speed_address}
+        self._combo_set_items_with_none(
+            self.speed_combo,
+            ([self.app.speed_name] if self.app.speed_name else []),
+            self.app.speed_name,
+        )
+        self.speed_map = (
+            {self.app.speed_name: self.app.speed_address} if self.app.speed_name else {}
+        )
 
         # Prepopulate Cadence
-        if self.app.cadence_name:
-            self.cadence_spinner.stop()
-            self.cadence_combo.append_text(self.app.cadence_name)
-            self.cadence_combo.set_active(0)
-            self.cadence_map = {self.app.cadence_name: self.app.cadence_address}
+        self._combo_set_items_with_none(
+            self.cadence_combo,
+            ([self.app.cadence_name] if self.app.cadence_name else []),
+            self.app.cadence_name,
+        )
+        self.cadence_map = (
+            {self.app.cadence_name: self.app.cadence_address} if self.app.cadence_name else {}
+        )
 
         # Prepopulate Power
-        if self.app.power_name:
-            self.power_spinner.stop()
-            self.power_combo.append_text(self.app.power_name)
-            self.power_combo.set_active(0)
-            self.power_map = {self.app.power_name: self.app.power_address}
+        self._combo_set_items_with_none(
+            self.power_combo,
+            ([self.app.power_name] if self.app.power_name else []),
+            self.app.power_name,
+        )
+        self.power_map = (
+            {self.app.power_name: self.app.power_address} if self.app.power_name else {}
+        )
 
         # Prepopulate Pebble
         if self.app.pebble_use_emulator and self.pebble_row:
@@ -350,10 +441,47 @@ class SettingsPageUI:
             self.pebble_combo.set_active(0)
             self.pebble_map = {self.app.pebble_name: self.app.pebble_address}
 
-        # Hide/show Pebble BT rows based on emulator switch to reduce vertical size
         if self.pebble_emu_switch:
             self.pebble_emu_switch.connect("notify::active", self._on_pebble_mode_toggled)
             self._on_pebble_mode_toggled(self.pebble_emu_switch)
+
+        def _set_action_enabled(row: Adw.ActionRow, button: Gtk.Button, enabled: bool):
+            # Disable the actual clickable widget
+            button.set_sensitive(enabled)
+
+            # Optional: also grey out the whole row (subtitle, label, etc.)
+            row.set_sensitive(enabled)
+
+            # Optional: suggested-action class makes it look "primary" even when disabled
+            ctx = button.get_style_context()
+            if enabled:
+                ctx.add_class("suggested-action")
+            else:
+                ctx.remove_class("suggested-action")
+
+        def _update_actions_state(*_args):
+            intervals_athlete_id = (
+                (self.icu_id_entry.get_text() or "").strip() if self.icu_id_entry else ""
+            )
+            intervals_key = (
+                (self.icu_key_entry.get_text() or "").strip() if self.icu_key_entry else ""
+            )
+            database_dsn = (self.dsn_entry.get_text() or "").strip() if self.dsn_entry else ""
+
+            icu_ok = bool(intervals_athlete_id and intervals_key)
+            db_ok = bool(database_dsn)
+
+            _set_action_enabled(row_fetch, self.btn_fetch_icu, icu_ok)
+            _set_action_enabled(row_upload, self.btn_upload_icu, icu_ok)
+            _set_action_enabled(sync_row, self.sync_button, db_ok)
+
+        # Call once for initial state
+        _update_actions_state()
+
+        # Recompute whenever the relevant fields change
+        self.icu_id_entry.connect("changed", _update_actions_state)
+        self.icu_key_entry.connect("changed", _update_actions_state)
+        self.dsn_entry.connect("changed", _update_actions_state)
 
         return scroller
 
@@ -364,18 +492,20 @@ class SettingsPageUI:
 
         async def _scan():
             devices = await BleakScanner.discover(
-                timeout=5.0, service_uuids=[HEART_RATE_SERVICE_UUID]
+                timeout=5.0,
+                service_uuids=[HEART_RATE_SERVICE_UUID],
             )
             mapping = {d.name: d.address for d in devices if d.name}
             names = sorted(mapping.keys())
-            GLib.idle_add(self.hr_spinner.stop)
-            GLib.idle_add(self.hr_row.set_subtitle, "" if names else "No HRM found")
-            GLib.idle_add(self.hr_combo.remove_all)
-            for name in names:
-                GLib.idle_add(self.hr_combo.append_text, name)
-            if self.app.hr_name and self.app.hr_name in names:
-                GLib.idle_add(self.hr_combo.set_active, names.index(self.app.hr_name))
-            self.hr_map = mapping
+
+            def _apply():
+                self.hr_spinner.stop()
+                self.hr_row.set_subtitle("" if names else "No HRM found")
+
+                self._combo_set_items_with_none(self.hr_combo, names, self.app.hr_name)
+                self.hr_map = mapping
+
+            GLib.idle_add(_apply)
 
         asyncio.run(_scan())
 
@@ -391,24 +521,14 @@ class SettingsPageUI:
             def _apply():
                 self.speed_spinner.stop()
                 self.speed_row.set_subtitle("" if names else "No speed devices found")
-
-                # Speed
-                self.speed_combo.remove_all()
-                for name in names:
-                    self.speed_combo.append_text(name)
+                self._combo_set_items_with_none(self.speed_combo, names, self.app.speed_name)
                 self.speed_map = mapping
-                if self.app.speed_name and self.app.speed_name in names:
-                    self.speed_combo.set_active(names.index(self.app.speed_name))
 
                 # Cadence
                 self.cadence_spinner.stop()
                 self.cadence_row.set_subtitle("" if names else "No cadence devices found")
-                self.cadence_combo.remove_all()
-                for name in names:
-                    self.cadence_combo.append_text(name)
+                self._combo_set_items_with_none(self.cadence_combo, names, self.app.cadence_name)
                 self.cadence_map = mapping
-                if self.app.cadence_name and self.app.cadence_name in names:
-                    self.cadence_combo.set_active(names.index(self.app.cadence_name))
 
             GLib.idle_add(_apply)
 
@@ -422,14 +542,14 @@ class SettingsPageUI:
             devices = await discover_power_devices(scan_timeout=5.0)
             mapping = {d.name: d.address for d in devices if d.name}
             names = sorted(mapping.keys())
-            GLib.idle_add(self.power_spinner.stop)
-            GLib.idle_add(self.power_row.set_subtitle, "" if names else "No power devices found")
-            GLib.idle_add(self.power_combo.remove_all)
-            for name in names:
-                GLib.idle_add(self.power_combo.append_text, name)
-            if self.app.power_name and self.app.power_name in names:
-                GLib.idle_add(self.power_combo.set_active, names.index(self.app.power_name))
-            self.power_map = mapping
+
+            def _apply():
+                self.power_spinner.stop()
+                self.power_row.set_subtitle("" if names else "No power devices found")
+                self._combo_set_items_with_none(self.power_combo, names, self.app.power_name)
+                self.power_map = mapping
+
+            GLib.idle_add(_apply)
 
         asyncio.run(_scan())
 
@@ -586,24 +706,40 @@ class SettingsPageUI:
         self.app.database_dsn = self.dsn_entry.get_text()
 
         # HR
-        self.app.hr_name = self.hr_combo.get_active_text() or ""
-        if self.app.hr_name in self.hr_map:
-            self.app.hr_address = self.hr_map[self.app.hr_name]
+        selected = self.hr_combo.get_active_text() or ""
+        if selected == NONE_LABEL or not selected:
+            self.app.hr_name = ""
+            self.app.hr_address = ""
+        else:
+            self.app.hr_name = selected
+            self.app.hr_address = self.hr_map.get(selected, "")
 
         # Speed
-        self.app.speed_name = self.speed_combo.get_active_text() or ""
-        if self.app.speed_name in self.speed_map:
-            self.app.speed_address = self.speed_map[self.app.speed_name]
+        selected = self.speed_combo.get_active_text() or ""
+        if selected == NONE_LABEL or not selected:
+            self.app.speed_name = ""
+            self.app.speed_address = ""
+        else:
+            self.app.speed_name = selected
+            self.app.speed_address = self.speed_map.get(selected, "")
 
         # Cadence
-        self.app.cadence_name = self.cadence_combo.get_active_text() or ""
-        if self.app.cadence_name in self.cadence_map:
-            self.app.cadence_address = self.cadence_map[self.app.cadence_name]
+        selected = self.cadence_combo.get_active_text() or ""
+        if selected == NONE_LABEL or not selected:
+            self.app.cadence_name = ""
+            self.app.cadence_address = ""
+        else:
+            self.app.cadence_name = selected
+            self.app.cadence_address = self.cadence_map.get(selected, "")
 
         # Power
-        self.app.power_name = self.power_combo.get_active_text() or ""
-        if self.app.power_name in self.power_map:
-            self.app.power_address = self.power_map[self.app.power_name]
+        selected = self.power_combo.get_active_text() or ""
+        if selected == NONE_LABEL or not selected:
+            self.app.power_name = ""
+            self.app.power_address = ""
+        else:
+            self.app.power_name = selected
+            self.app.power_address = self.power_map.get(selected, "")
 
         # Pebble
         self.app.pebble_enable = (
