@@ -278,11 +278,11 @@ class Recorder:
                 await mux.stop()
             self._running_mux = None
 
-    def _on_running_link(self, _addr: str, connected: bool, rsc_ok: bool, cps_ok: bool) -> None:
+    def _on_running_link(self, _addr: str, connected: bool, roles: dict[str, bool]) -> None:
         # RSCS drives both speed & cadence cards
-        self.speed_connected = connected and rsc_ok
-        self.cadence_connected = connected and rsc_ok
-        self.power_connected = connected and cps_ok
+        self.speed_connected = connected and roles.get("rsc", False)
+        self.cadence_connected = connected and roles.get("rsc", False)
+        self.power_connected = connected and roles.get("cps", False)
 
     def _on_ble_error(self, msg: str) -> None:
         GLib.idle_add(lambda: self.on_error(msg))
