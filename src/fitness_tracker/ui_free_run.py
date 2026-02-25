@@ -84,18 +84,17 @@ class FreeRunView(Gtk.Box):
     Controller should call:
       - set_timer("hh:mm:ss")
       - set_metrics(dist_mi, pace_str, cadence, mph, bpm, watts)
-      - set_statuses(hr_ok, speed_ok, cad_ok, pow_ok)
+      - set_statuses(hr_ok, speed_ok, cad_ok, pow_ok, dist_ok)
       - update_chart(x_seconds, hr_series, pw_series, colors)
       - set_recording(recording_bool)  # toggles Start/Stop buttons.
     """
 
-    def __init__(self, app) -> None:
+    def __init__(self, app, kind: str) -> None:
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=16)
         self.app = app
+        self.kind = kind
         for m in ("top", "bottom", "start", "end"):
             getattr(self, f"set_margin_{m}")(12)
-
-        self.type = "run"
 
         # Start/Stop row
         row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
@@ -162,17 +161,17 @@ class FreeRunView(Gtk.Box):
         self.card_distance.set_value(f"{dist_mi:.2f}")
         self.card_pace.set_value(pace_str)
         # Running is double the cadence
-        self.card_cadence.set_value(f"{int(cadence*2) if self.type == "run" else int(cadence)}")
+        self.card_cadence.set_value(f"{int(cadence*2) if self.kind == 'running' else int(cadence)}")
         self.card_mph.set_value(f"{mph:.1f}")
         self.card_hr.set_value(f"{int(bpm)}")
         self.card_power.set_value(f"{int(watts)}")
 
-    def set_statuses(self, hr_ok: bool, speed_ok: bool, cad_ok: bool, pow_ok: bool) -> None:
+    def set_statuses(self, hr_ok: bool, speed_ok: bool, cad_ok: bool, pow_ok: bool, dist_ok: bool) -> None:
         self.card_hr.set_status(
             hr_ok, "HR sensor connected" if hr_ok else "HR sensor not connected"
         )
         self.card_distance.set_status(
-            speed_ok, "Speed sensor connected" if speed_ok else "Speed sensor not connected"
+            dist_ok, "Distance sensor connected" if dist_ok else "Distance sensor not connected"
         )
         self.card_pace.set_status(
             speed_ok, "Speed sensor connected" if speed_ok else "Speed sensor not connected"

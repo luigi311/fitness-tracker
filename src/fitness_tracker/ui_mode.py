@@ -16,16 +16,18 @@ if TYPE_CHECKING:
 
 class ModeSelectView(Gtk.Box):
     """
-    Simple selector page:
-      - Start Free Run
-      - List available workouts and Start Selected
+    Landing tracker selector:
+      - Run / Cycle switcher
+      - Start Free X (label depends on mode)
+      - Workouts list filtered by mode; each row has a Start button
     Calls the provided callbacks when a selection is made.
     """
 
     def __init__(
         self,
         workouts_running_dir: Path,
-        on_start_free_run,
+        workouts_cycling_dir: Path,
+        on_start_free,
         on_start_workout,
     ) -> None:
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=6)
@@ -33,17 +35,43 @@ class ModeSelectView(Gtk.Box):
             getattr(self, f"set_margin_{m}")(12)
 
         self._workouts_running_dir = workouts_running_dir
-        self._on_start_free_run = on_start_free_run
+        self._workouts_cycling_dir = workouts_cycling_dir
+
+        self._on_start_free = on_start_free
         self._on_start_workout = on_start_workout
 
-        title = Gtk.Label(label="How do you want to train?")
-        title.add_css_class("title-1")
-        title.set_halign(Gtk.Align.CENTER)
-        self.append(title)
+        # Current mode: "running" | "cycling"
+        self.mode: str = "running"
+        # --- Switcher (segmented buttons) ---
+        switch_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
+        switch_row.add_css_class("linked")
+        switch_row.set_halign(Gtk.Align.FILL)
+
+        self._btn_run = Gtk.ToggleButton.new_with_label("Run")
+        self._btn_cycle = Gtk.ToggleButton.new_with_label("Cycle")
+        for b in (self._btn_run, self._btn_cycle):
+            b.add_css_class("flat")
+            b.set_hexpand(True)
+
+        self._btn_run.set_active(True)
+        self._btn_run.connect("toggled", self._on_mode_toggled, "running")
+        self._btn_cycle.connect("toggled", self._on_mode_toggled, "cycling")
+
+        switch_row.append(self._btn_run)
+        switch_row.append(self._btn_cycle)
+        self.append(switch_row)
+
+        # --- Start Free button ---
+        self._btn_free = Gtk.Button()
+        self._btn_free.add_css_class("suggested-action")
+        self._btn_free.set_halign(Gtk.Align.FILL)
+        self._btn_free.set_hexpand(True)
+        self._btn_free.connect("clicked", lambda *_: self._on_start_free(self.mode))
+        self.append(self._btn_free)
 
         # Workout list UI
         self._list = Gtk.ListBox()
-        self._list.set_selection_mode(Gtk.SelectionMode.SINGLE)
+        self._list.set_selection_mode(Gtk.SelectionMode.NONE)
 
         sc = Gtk.ScrolledWindow()
         sc.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
@@ -54,59 +82,80 @@ class ModeSelectView(Gtk.Box):
         frame.set_child(sc)
         self.append(frame)
 
-        btn_free = Gtk.Button.new_with_label("Start Free Run")
-        btn_free.add_css_class("suggested-action")
-        btn_free.set_halign(Gtk.Align.CENTER)
-        btn_free.connect("clicked", lambda *_: self._on_start_free_run())
-
-        self._btn_start_w = Gtk.Button.new_with_label("Start Selected Workout")
-        self._btn_start_w.set_sensitive(False)  # updated in refresh()
-        self._btn_start_w.set_halign(Gtk.Align.CENTER)
-        self._btn_start_w.connect("clicked", self._on_start_selected_clicked)
-
-        # --- FlowBox containing just the two pairs ---
-        controls = Gtk.FlowBox()
-        controls.set_selection_mode(Gtk.SelectionMode.NONE)
-        controls.set_homogeneous(True)  # nav_pair and act_pair get equal cell widths
-        controls.set_column_spacing(8)
-        controls.set_row_spacing(8)
-        controls.set_min_children_per_line(1)  # stacks on very narrow screens
-        controls.set_max_children_per_line(2)  # side-by-side when there’s room
-
-        controls.insert(btn_free, -1)
-        controls.insert(self._btn_start_w, -1)
-
-        self.append(controls)
-
         # initial population
         self.refresh()
 
     def refresh(self) -> None:
         """Re-scan the workouts dir and repopulate the list without duplicating UI."""
-        # discover and sort
-        self._paths = discover_workouts(self._workouts_running_dir)
+        # Update "Start Free" label
+        if self.mode == "running":
+            self._btn_free.set_label("Start Free Run")
+        elif self.mode == "cycling":
+            self._btn_free.set_label("Start Free Ride")
+        else:
+            self._btn_free.set_label("Start Free Session")
+
+        # Build list of (path, kind) depending on mode
+        entries: list[tuple[Path, str]] = []
+        if self.mode == "running":
+            for p in discover_workouts(self._workouts_running_dir):
+                entries.append((p, "run"))
+        if self.mode == "cycling":
+            for p in discover_workouts(self._workouts_cycling_dir):
+                entries.append((p, "cycle"))
+
+        # Sort by display name (stable)
+        entries.sort(key=lambda t: t[0].stem.lower())
+        self._entries = entries
 
         # clear all rows
         for row in list(self._list):  # Gtk.ListBox is iterable over rows
             self._list.remove(row)
 
         # repopulate
-        for p in self._paths:
+        for p, kind in self._entries:
             row = Adw.ActionRow()
+            # Title: workout name, Subtitle: file type + kind
             row.set_title(p.stem)
-            row.set_subtitle(p.suffix.lower().lstrip(".").upper())
+            row.set_subtitle(f"{kind.upper()} • {p.suffix.lower().lstrip('.').upper()}")
+
+            start_btn = Gtk.Button.new_with_label("Free")
+            start_btn.add_css_class("pill")
+            start_btn.connect("clicked", self._on_row_start_clicked, p, self.mode, False)
+            start_btn_trainer = Gtk.Button.new_with_label("Trainer")
+            start_btn_trainer.add_css_class("pill")
+            start_btn_trainer.connect("clicked", self._on_row_start_clicked, p, self.mode, True)
+            row.add_suffix(start_btn)
+            row.add_suffix(start_btn_trainer)
+            row.set_activatable(False)
+
             self._list.append(row)
 
-        self._btn_start_w.set_sensitive(bool(self._paths))
-        self._btn_start_w.add_css_class("suggested-action")
+        # Optional empty state: show a single row if none
+        if not self._entries:
+            empty = Adw.ActionRow()
+            empty.set_title("No workouts found")
+            empty.set_subtitle("Add workouts to your workouts directory.")
+            empty.set_activatable(False)
+            self._list.append(empty)
 
-        # select first row (async so rows are realized)
-        if self._paths:
-            GLib.idle_add(lambda: self._list.select_row(self._list.get_row_at_index(0)))
+    def _on_row_start_clicked(self, _btn: Gtk.Button, path: Path, kind: str, trainer: bool = False) -> None:
+        self._on_start_workout(path, kind=kind, trainer=trainer)
 
-    def _on_start_selected_clicked(self, *_):
-        row = self._list.get_selected_row()
-        if not row:
+    def _on_mode_toggled(self, btn: Gtk.ToggleButton, mode: str) -> None:
+        # We only react to the button that just became active
+        if not btn.get_active():
             return
-        idx = row.get_index()
-        self._on_start_workout(self._paths[idx])
+
+        # Ensure mutual exclusivity (Gtk.ToggleButton doesn't auto-group)
+        if mode == "running":
+            self._btn_cycle.set_active(False)
+        elif mode == "cycling":
+            self._btn_run.set_active(False)
+        else:
+            self._btn_run.set_active(False)
+            self._btn_cycle.set_active(False)
+
+        self.mode = mode
+        # refresh after toggle settles
+        GLib.idle_add(self.refresh)

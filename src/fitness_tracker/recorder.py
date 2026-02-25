@@ -8,13 +8,17 @@ from statistics import median
 
 import gi
 from bleak import BleakError, BleakScanner
+from bleaksport import MachineType
 from bleaksport.running import RunningMux, RunningSample
+from bleaksport.trainer import TrainerMux, TrainerSample
+from loguru import logger
 
 from fitness_tracker.database import DatabaseManager
 from fitness_tracker.hr_provider import HEART_RATE_SERVICE_UUID, connect_and_stream
 
 gi.require_versions({"Gtk": "4.0", "Adw": "1"})
 from gi.repository import Adw, GLib
+
 
 INPROGRESS_RE = re.compile(r"InProgress", re.IGNORECASE)
 
@@ -24,6 +28,7 @@ class Recorder:
         self,
         on_bpm_update: Callable[[float, int], None],
         database_url: str,
+        profile: str,
         hr_name: str | None,
         hr_address: str | None,
         speed_name: str | None,
@@ -32,12 +37,23 @@ class Recorder:
         cadence_address: str | None,
         power_name: str | None,
         power_address: str | None,
+        trainer_name: str | None,
+        trainer_address: str | None,
+        trainer_machine_type: MachineType | None,
         on_error: Callable[[str], None],
         *,
-        on_running_update: Callable[[float, float, int, float | None, float | None], None]
+        on_sample_update: Callable[[float, float, int, float | None, float | None], None]
         | None = None,
         test_mode: bool = False,
     ):
+        logger.debug(f"Initializing Recorder with profile {profile}")
+        logger.debug(f"HR sensor: name={hr_name}, address={hr_address}")
+        logger.debug(f"Speed sensor: name={speed_name}, address={speed_address}")
+        logger.debug(f"Cadence sensor: name={cadence_name}, address={cadence_address}")
+        logger.debug(f"Power sensor: name={power_name}, address={power_address}")
+        logger.debug(f"Trainer sensor: name={trainer_name}, address={trainer_address}, machine_type={trainer_machine_type}")
+
+
         self._ble_lock = asyncio.Lock()  # Lock for BLE operations
         self._thread: threading.Thread | None = None
 
@@ -45,7 +61,7 @@ class Recorder:
         self.test_mode = bool(test_mode)
 
         self.on_bpm = on_bpm_update
-        self.on_running = on_running_update
+        self.on_sample = on_sample_update
         self.on_error = on_error
         self.db = DatabaseManager(database_url=database_url)
         self.loop = asyncio.new_event_loop()
@@ -54,6 +70,9 @@ class Recorder:
         self._recording = False
         self._activity_id = None
         self._start_ms = None
+
+        # Profile metadata (used by UI to avoid rebuilding unnecessarily)
+        self.profile = profile.strip().lower()
 
         # Sensors
         self.hr_name = hr_name
@@ -65,6 +84,11 @@ class Recorder:
         self.power_name = power_name
         self.power_address = power_address
 
+        # Trainer (FTMS) configuration (separated by profile upstream)
+        self.trainer_name = trainer_name
+        self.trainer_address = trainer_address
+        self.trainer_machine_type = trainer_machine_type
+
         # Rolling 3 bpm for smoothinng out hr readings
         self._bpm_history: deque[int] = deque(maxlen=3)
 
@@ -73,10 +97,12 @@ class Recorder:
         self.speed_connected = False
         self.cadence_connected = False
         self.power_connected = False
+        self.distance_connected = False
 
         # Clearing total distance on new recording
         self._running_mux: RunningMux | None = None
-        self._dist0_m = None             # Fallback if sensor doesn't support reset
+        self.trainer_mux: TrainerMux | None = None
+        self._dist0_m = None  # Fallback if sensor doesn't support reset
 
     def start(self):
         self._thread = threading.Thread(target=self._run, daemon=True)
@@ -140,7 +166,7 @@ class Recorder:
 
     # --- Running handling ---
     def _handle_running_sample(self, sample: RunningSample):
-        if not self.on_running:
+        if not self.on_sample:
             return
 
         t_ms = int(sample.timestamp * 1000.0)
@@ -162,7 +188,7 @@ class Recorder:
                 dist_m = max(0.0, float(dist_m) - self._dist0_m)
 
         # Update UI
-        GLib.idle_add(self.on_running, delta_ms, speed_mps, cadence, dist_m, watts)
+        GLib.idle_add(self.on_sample, delta_ms, speed_mps, cadence, dist_m, watts)
 
         # Persist to DB if recording
         if self._recording and self._activity_id:
@@ -178,6 +204,58 @@ class Recorder:
                 power_watts=(float(watts) if watts is not None else None),
             )
 
+    def _handle_trainer_sample(self, sample: TrainerSample):
+        if not self.on_sample:
+            return
+
+        logger.trace(f"Handling trainer sample: {sample}")
+
+        t_ms = int(sample.timestamp * 1000.0)
+        if self._start_ms is None:
+            self._start_ms = t_ms
+        delta_ms = t_ms - self._start_ms
+
+        speed_mps = float(sample.speed_mps or 0.0)
+        cadence = int(sample.cadence_rpm or 0)
+        dist_m = sample.distance_m
+        watts = float(sample.power_watts) if sample.power_watts is not None else None
+
+        # Adjust distance by baseline if needed
+        if self._recording:
+            if self._dist0_m is None and dist_m is not None:
+                self._dist0_m = float(dist_m)
+            if dist_m is not None and self._dist0_m is not None:
+                dist_m = max(0.0, float(dist_m) - self._dist0_m)
+
+        # Update UI
+        GLib.idle_add(self.on_sample, delta_ms, speed_mps, cadence, dist_m, watts)
+
+        # Persist to DB if recording
+        if self._recording and self._activity_id:
+            if sample.machine_type == MachineType.INDOOR_BIKE:
+                logger.trace(f"Inserting cycling metrics into DB: \n\tActivity ID: {self._activity_id} \n\tDelta MS: {delta_ms} \n\tSpeed: {speed_mps} \n\tCadence: {cadence} \n\tDistance: {dist_m} \n\tPower: {watts}")
+                self.db.insert_cycling_metrics(
+                    self._activity_id,
+                    delta_ms,
+                    speed_mps=float(speed_mps),
+                    cadence_rpm=int(cadence),
+                    total_distance_m=(float(dist_m) if dist_m is not None else None),
+                    power_watts=(float(watts) if watts is not None else None),
+                )
+            elif sample.machine_type == MachineType.TREADMILL:
+                logger.trace(f"Inserting running metrics into DB: \n\tActivity ID: {self._activity_id} \n\tDelta MS: {delta_ms} \n\tSpeed: {speed_mps} \n\tCadence: {cadence} \n\tDistance: {dist_m} \n\tPower: {watts}")
+                self.db.insert_running_metrics(
+                    self._activity_id,
+                    delta_ms,
+                    speed_mps=float(speed_mps),
+                    cadence_spm=int(cadence),
+                    stride_length_m=None,
+                    total_distance_m=(float(dist_m) if dist_m is not None else None),
+                    power_watts=(float(watts) if watts is not None else None),
+                )
+            else:
+                logger.error(f"Unknown machine type {sample.machine_type} for trainer sample")
+
     async def _workflow(self):
         # Run both device loops concurrently (if configured)
         if self._stop_event._loop is not self.loop:
@@ -185,11 +263,13 @@ class Recorder:
 
         device_tasks = [asyncio.create_task(self._hr_loop())]
 
-        have_any_running = any(
-            [self.speed_address, self.cadence_address, self.power_address]
-        )
-        if have_any_running and self.on_running:
+        have_any_sensors = any([self.speed_address, self.cadence_address, self.power_address])
+        if have_any_sensors and self.on_sample:
             device_tasks.append(asyncio.create_task(self._running_loop()))
+
+        have_trainer = bool(self.trainer_address)
+        if have_trainer and self.on_sample:
+            device_tasks.append(asyncio.create_task(self._trainer_loop()))
 
         stop_task = asyncio.create_task(self._stop_event.wait())
 
@@ -224,9 +304,7 @@ class Recorder:
                     continue
 
                 async with self._ble_lock:
-                    target = await BleakScanner.find_device_by_address(
-                        self.hr_address, timeout=5.0
-                    )
+                    target = await BleakScanner.find_device_by_address(self.hr_address, timeout=5.0)
                 if not target:
                     if self.hr_connected:
                         self.hr_connected = False
@@ -256,8 +334,14 @@ class Recorder:
                 return
             except Exception as e:
                 self.hr_connected = False
-                # include the type so empty messages aren’t mysterious
-                self._on_ble_error(f"HR loop unexpected error: {type(e).__name__}: {e!s}")
+                # If InProgress,
+                if INPROGRESS_RE.search(str(e)):
+                    # This can happen if the device is in a weird state; just wait and retry
+                    logger.warning("HR loop ble connection in progress, will retry")
+                    await asyncio.sleep(1.5)
+                else:
+                    # include the type so empty messages aren’t mysterious
+                    self._on_ble_error(f"HR loop unexpected error: {type(e).__name__}: {e!s}")
 
             await asyncio.sleep(2.0)
 
@@ -282,7 +366,30 @@ class Recorder:
         # RSCS drives both speed & cadence cards
         self.speed_connected = connected and roles.get("rsc", False)
         self.cadence_connected = connected and roles.get("rsc", False)
+        self.distance_connected = connected and roles.get("rsc", False)
         self.power_connected = connected and roles.get("cps", False)
+
+    def _on_trainer_link(self, _addr: str, connected: bool, _info: dict[str, bool]) -> None:
+        self.speed_connected = connected
+        self.cadence_connected = connected
+        self.power_connected = connected
+        self.distance_connected = connected
+
+    async def _trainer_loop(self) -> None:
+        logger.debug(f"Starting trainer loop with address {self.trainer_address} and machine type {self.trainer_machine_type}")
+        self.trainer_mux = TrainerMux(
+            addr=self.trainer_address,
+            machine_type=self.trainer_machine_type,
+            on_sample=self._handle_trainer_sample,
+            on_status=self._on_ble_error,
+            on_link=self._on_trainer_link,
+        )
+        try:
+            await self.trainer_mux.start()
+        finally:
+            with contextlib.suppress(Exception):
+                await self.trainer_mux.stop()
+            self.trainer_mux = None
 
     def _on_ble_error(self, msg: str) -> None:
         GLib.idle_add(lambda: self.on_error(msg))

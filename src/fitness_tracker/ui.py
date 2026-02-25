@@ -1,10 +1,13 @@
 import contextlib
 import socket
 from configparser import ConfigParser
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import gi
+from bleaksport import MachineType
+from loguru import logger
 from pebble_bridge import PebbleBridge
 from xdg_base_dirs import (
     xdg_config_home,
@@ -41,6 +44,25 @@ Gtk.StyleContext.add_provider_for_display(
     Gdk.Display.get_default(), _PROV, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
 )
 
+
+@dataclass(frozen=True)
+class SensorProfile:
+    # Common HRM (optional)
+    hr_name: str = ""
+    hr_address: str = ""
+
+    # “speed/cadence/power” addresses (meaning depends on profile)
+    speed_name: str = ""
+    speed_address: str = ""
+    cadence_name: str = ""
+    cadence_address: str = ""
+    power_name: str = ""
+    power_address: str = ""
+
+    # Trainer-only (FTMS)
+    trainer_name: str = ""
+    trainer_address: str = ""
+    trainer_machine_type: MachineType | None = None
 
 class FitnessAppUI(Adw.Application):
     def __init__(self, test_mode: bool = False):
@@ -87,12 +109,15 @@ class FitnessAppUI(Adw.Application):
         self.config_file = config_dir / "config.ini"
         self.workouts_running_dir = data_dir / "workouts" / "running"
         self.workouts_running_dir.mkdir(parents=True, exist_ok=True)
+        self.workouts_cycling_dir = data_dir / "workouts" / "cycling"
+        self.workouts_cycling_dir.mkdir(parents=True, exist_ok=True)
 
         # load existing configuration
         self.cfg = ConfigParser()
         self.database_dsn = ""
 
         # Granular sensors (each may point to the same physical device)
+        # Running sensors
         self.hr_name = ""
         self.hr_address = ""
         self.speed_name = ""
@@ -101,6 +126,29 @@ class FitnessAppUI(Adw.Application):
         self.cadence_address = ""
         self.power_name = ""
         self.power_address = ""
+
+        # Cycling sensors
+        self.cycling_hr_name = ""
+        self.cycling_hr_address = ""
+        self.cycling_speed_name = ""
+        self.cycling_speed_address = ""
+        self.cycling_cadence_name = ""
+        self.cycling_cadence_address = ""
+        self.cycling_power_name = ""
+        self.cycling_power_address = ""
+
+        # Trainer (FTMS) configuration (separated)
+        self.trainer_running_hr_address: str = ""
+        self.trainer_running_hr_name: str = ""
+        self.trainer_running_name: str = ""
+        self.trainer_running_address: str = ""
+        self.trainer_running_machine_type: MachineType | None = None
+
+        self.trainer_cycling_hr_name: str = ""
+        self.trainer_cycling_hr_address: str = ""
+        self.trainer_cycling_name: str = ""
+        self.trainer_cycling_address: str = ""
+        self.trainer_cycling_machine_type: MachineType | None = None
 
         self.resting_hr: int = 60
         self.max_hr: int = 180
@@ -123,17 +171,47 @@ class FitnessAppUI(Adw.Application):
             self.cfg.read(self.config_file)
             self.database_dsn = self.cfg.get("server", "database_dsn", fallback="")
 
-            # HR device
+            # # Sensors Running
             self.hr_name = self.cfg.get("sensors_running", "hr_name", fallback="")
             self.hr_address = self.cfg.get("sensors_running", "hr_address", fallback="")
-
-            # Sensors Running
             self.speed_name = self.cfg.get("sensors_running", "speed_name", fallback="")
             self.speed_address = self.cfg.get("sensors_running", "speed_address", fallback="")
             self.cadence_name = self.cfg.get("sensors_running", "cadence_name", fallback="")
             self.cadence_address = self.cfg.get("sensors_running", "cadence_address", fallback="")
             self.power_name = self.cfg.get("sensors_running", "power_name", fallback="")
             self.power_address = self.cfg.get("sensors_running", "power_address", fallback="")
+
+            # Sensors Cycling
+            self.cycling_hr_name = self.cfg.get("sensors_cycling", "hr_name", fallback="")
+            self.cycling_hr_address = self.cfg.get("sensors_cycling", "hr_address", fallback="")
+            self.cycling_speed_name = self.cfg.get("sensors_cycling", "speed_name", fallback="")
+            self.cycling_speed_address = self.cfg.get("sensors_cycling", "speed_address", fallback="")
+            self.cycling_cadence_name = self.cfg.get("sensors_cycling", "cadence_name", fallback="")
+            self.cycling_cadence_address = self.cfg.get("sensors_cycling", "cadence_address", fallback="")
+            self.cycling_power_name = self.cfg.get("sensors_cycling", "power_name", fallback="")
+            self.cycling_power_address = self.cfg.get("sensors_cycling", "power_address", fallback="")
+
+            # Trainer (FTMS)
+            self.trainer_running_hr_name = self.cfg.get("sensors_trainer_running", "hr_name", fallback="")
+            self.trainer_running_hr_address = self.cfg.get("sensors_trainer_running", "hr_address", fallback="")
+            self.trainer_running_name = self.cfg.get("sensors_trainer_running", "trainer_name", fallback="")
+            self.trainer_running_address = self.cfg.get("sensors_trainer_running", "trainer_address", fallback="")
+
+            self.trainer_running_machine_type = None
+            trainer_running_machine_type = self.cfg.get("sensors_trainer_running", "trainer_machine_type", fallback="")
+            if trainer_running_machine_type:
+                self.trainer_running_machine_type = MachineType(int(trainer_running_machine_type))
+
+
+            self.trainer_cycling_hr_name = self.cfg.get("sensors_trainer_cycling", "hr_name", fallback="")
+            self.trainer_cycling_hr_address = self.cfg.get("sensors_trainer_cycling", "hr_address", fallback="")
+            self.trainer_cycling_name = self.cfg.get("sensors_trainer_cycling", "trainer_name", fallback="")
+            self.trainer_cycling_address = self.cfg.get("sensors_trainer_cycling", "trainer_address", fallback="")
+
+            self.trainer_cycling_machine_type = None
+            trainer_cycling_machine_type = self.cfg.get("sensors_trainer_cycling", "trainer_machine_type", fallback="")
+            if trainer_cycling_machine_type:
+                self.trainer_cycling_machine_type = MachineType(int(trainer_cycling_machine_type))
 
             self.resting_hr = self.cfg.getint("personal", "resting_hr", fallback=60)
             self.max_hr = self.cfg.getint("personal", "max_hr", fallback=180)
@@ -211,18 +289,95 @@ class FitnessAppUI(Adw.Application):
             self.pebble_bridge = None
             print(e)
 
-    def apply_sensor_settings(self) -> None:
+    def _profile_from_name(self, profile: str, trainer: bool = False) -> SensorProfile:
+        """
+        Convert a profile name to a SensorProfile object.
+
+        profile:
+            - "running"
+            - "cycling"
+        """
+        p = (profile).strip().lower()
+
+        if trainer:
+            if p == "running":
+                logger.debug("Using trainer running profile")
+                return SensorProfile(
+                    hr_name=self.trainer_running_hr_name,
+                    hr_address=self.trainer_running_hr_address,
+                    speed_name="",  # trainer doesn't use speed/cad/power sensors
+                    speed_address="",
+                    cadence_name="",
+                    cadence_address="",
+                    power_name="",
+                    power_address="",
+                    trainer_name=self.trainer_running_name,
+                    trainer_address=self.trainer_running_address,
+                    trainer_machine_type=self.trainer_running_machine_type,
+                )
+            if p == "cycling":
+                logger.debug("Using trainer cycling profile")
+                return SensorProfile(
+                    hr_name=self.trainer_cycling_hr_name,
+                    hr_address=self.trainer_cycling_hr_address,
+                    speed_name="",  # trainer doesn't use speed/cad/power sensors
+                    speed_address="",
+                    cadence_name="",
+                    cadence_address="",
+                    power_name="",
+                    power_address="",
+                    trainer_name=self.trainer_cycling_name,
+                    trainer_address=self.trainer_cycling_address,
+                    trainer_machine_type=self.trainer_cycling_machine_type,
+                )
+
+            logger.error(f"Unknown profile '{profile}' for trainer. Defaulting to empty profile.")
+            return SensorProfile()
+
+        if p == "cycling":
+            logger.debug("Using cycling profile")
+            return SensorProfile(
+                hr_name=self.cycling_hr_name,
+                hr_address=self.cycling_hr_address,
+                speed_name=self.cycling_speed_name,
+                speed_address=self.cycling_speed_address,
+                cadence_name=self.cycling_cadence_name,
+                cadence_address=self.cycling_cadence_address,
+                power_name=self.cycling_power_name,
+                power_address=self.cycling_power_address,
+            )
+        if p == "running":
+            logger.debug("Using running profile")
+            return SensorProfile(
+                hr_name=self.hr_name,
+                hr_address=self.hr_address,
+                speed_name=self.speed_name,
+                speed_address=self.speed_address,
+                cadence_name=self.cadence_name,
+                cadence_address=self.cadence_address,
+                power_name=self.power_name,
+                power_address=self.power_address,
+            )
+
+        logger.error(f"Unknown profile '{profile}'. Defaulting to empty profile.")
+        return SensorProfile()
+
+
+    def apply_sensor_settings(self, profile: str = "running", trainer: bool = False) -> None:
+        desired = self._profile_from_name(profile, trainer=trainer)
         try:
             if self.recorder:
-                # Check for sensor changes in existing recorder
-                # If none then skip teardown and recreation as unneeded
-                if (
-                    self.hr_address == self.recorder.hr_address
-                    and self.speed_address == self.recorder.speed_address
-                    and self.cadence_address == self.recorder.cadence_address
-                    and self.power_address == self.recorder.power_address
-                ):
-                    return
+                if getattr(self.recorder, "profile", "running") == profile:
+                    same = True
+                    same &= (desired.hr_address or "") == (getattr(self.recorder, "hr_address", "") or "")
+                    same &= (desired.speed_address or "") == (getattr(self.recorder, "speed_address", "") or "")
+                    same &= (desired.cadence_address or "") == (getattr(self.recorder, "cadence_address", "") or "")
+                    same &= (desired.power_address or "") == (getattr(self.recorder, "power_address", "") or "")
+                    same &= (desired.trainer_address or "") == (getattr(self.recorder, "trainer_address", "") or "")
+                    same &= (desired.trainer_machine_type or "") == (getattr(self.recorder, "trainer_machine_type", "") or "")
+                    if same:
+                        logger.debug("Recorder already matches desired profile. Skipping rebuild.")
+                        return
 
                 with contextlib.suppress(Exception):
                     self.recorder.shutdown()
@@ -230,18 +385,23 @@ class FitnessAppUI(Adw.Application):
             print(e)
 
         # Build recorder with sensors
+        logger.debug(f"Applying sensor settings for profile '{profile}': {desired}")
         self.recorder = Recorder(
             on_bpm_update=self.tracker.on_bpm,
-            on_running_update=self.tracker.on_running,
+            on_sample_update=self.tracker.on_sample,
             database_url=f"sqlite:///{self.database}",
-            hr_name=self.hr_name,
-            hr_address=self.hr_address,
-            speed_name=self.speed_name,
-            speed_address=self.speed_address,
-            cadence_name=self.cadence_name,
-            cadence_address=self.cadence_address,
-            power_name=self.power_name,
-            power_address=self.power_address,
+            profile=profile,
+            hr_name=desired.hr_name,
+            hr_address=desired.hr_address,
+            speed_name=desired.speed_name,
+            speed_address=desired.speed_address,
+            cadence_name=desired.cadence_name,
+            cadence_address=desired.cadence_address,
+            power_name=desired.power_name,
+            power_address=desired.power_address,
+            trainer_name=desired.trainer_name,
+            trainer_address=desired.trainer_address,
+            trainer_machine_type=desired.trainer_machine_type,
             on_error=self.show_toast,
             test_mode=self.test_mode,
         )
@@ -259,7 +419,7 @@ class FitnessAppUI(Adw.Application):
             self.apply_pebble_settings()
 
             # Start/stop recorder with sensors
-            self.apply_sensor_settings()
+            self.apply_sensor_settings(profile="running")
 
         self.window.present()
 
