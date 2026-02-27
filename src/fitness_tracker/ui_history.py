@@ -3,17 +3,18 @@ import math
 import statistics
 from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Optional
+from typing import Literal, Optional
 from zoneinfo import ZoneInfo
 
 import gi
 import numpy as np
+from loguru import logger
 from matplotlib.backends.backend_gtk4agg import FigureCanvasGTK4Agg as FigureCanvas
 from matplotlib.figure import Figure
 from matplotlib.ticker import FuncFormatter
 
-from fitness_tracker.database import Activity, HeartRate, RunningMetrics
-from fitness_tracker.exporters import activity_to_tcx
+from fitness_tracker.database import Activity, CyclingMetrics, HeartRate, RunningMetrics
+from fitness_tracker.exporters import activity_to_tcx, infer_sport
 
 gi.require_versions({"Gtk": "4.0", "Adw": "1"})
 from gi.repository import GLib, Gtk, Adw, Gio  # noqa: E402
@@ -25,6 +26,7 @@ from gi.repository import GLib, Gtk, Adw, Gio  # noqa: E402
 @dataclass
 class ActivitySummary:
     id: int
+    sport: Literal["Running", "Biking"]
     start_local: datetime.datetime
     end_local: datetime.datetime
     duration_s: int
@@ -207,7 +209,7 @@ class HistoryPageUI:
         self.cmp_metric_combo.append("pace", "Pace (min/mi)")
         self.cmp_metric_combo.append("speed", "Speed (mph)")
         self.cmp_metric_combo.append("power", "Power (W)")
-        self.cmp_metric_combo.append("cadence", "Cadence (spm)")
+        self.cmp_metric_combo.append("cadence", "Cadence (spm/rpm)")
         self.cmp_metric_combo.set_active_id(self._cmp_metric_id)
         self.cmp_metric_combo.connect("changed", self._on_cmp_metric_changed)
         ctrl_cmp.append(lbl_metric)
@@ -351,16 +353,39 @@ class HistoryPageUI:
                     max_bpm = None
                     total_kj = 0.0
 
-                # Running stats (distance, cadence, power)
                 runs = list(act.running_metrics)
-                if runs:
-                    # distance: prefer last non-None total_distance_m
-                    dists = [r.total_distance_m for r in runs if r.total_distance_m is not None]
+                cycles = list(act.cycling_metrics)
+
+                sport = infer_sport(runs, cycles, hrs, act.id)
+                if sport == "Unknown":
+                    continue
+
+                if sport == "Running":
+                    primary = runs
+                    cadence_vals = [float(r.cadence_spm) for r in runs if r.cadence_spm is not None]
+                    power_vals = [float(r.power_watts) for r in runs if r.power_watts is not None]
+                elif sport == "Biking":
+                    primary = cycles
+                    cadence_vals = [
+                        float(c.cadence_rpm) for c in cycles if c.cadence_rpm is not None
+                    ]
+                    power_vals = [float(c.power_watts) for c in cycles if c.power_watts is not None]
+                    primary = cycles
+                    cadence_vals = [
+                        float(c.cadence_rpm) for c in cycles if c.cadence_rpm is not None
+                    ]
+                    power_vals = [float(c.power_watts) for c in cycles if c.power_watts is not None]
+
+                # Distance: prefer last non-None total_distance_m
+                if primary:
+                    dists = [
+                        s.total_distance_m
+                        for s in primary
+                        if getattr(s, "total_distance_m", None) is not None
+                    ]
                     distance_m = dists[-1] if dists else None
-                    avg_cad = _safe_avg([float(r.cadence_spm) for r in runs])
-                    avg_pow = _safe_avg(
-                        [float(r.power_watts) for r in runs if r.power_watts is not None]
-                    )
+                    avg_cad = _safe_avg(cadence_vals)
+                    avg_pow = _safe_avg(power_vals)
                 else:
                     distance_m = None
                     avg_cad = None
@@ -369,6 +394,7 @@ class HistoryPageUI:
                 out.append(
                     ActivitySummary(
                         id=int(act.id),
+                        sport=sport,
                         start_local=st,
                         end_local=et,
                         duration_s=dur_s,
@@ -383,11 +409,11 @@ class HistoryPageUI:
 
         # Sorting
         key_funcs = {
-            "date_desc": lambda a: (-a.start_local.timestamp()),
-            "date_asc": lambda a: (a.start_local.timestamp()),
-            "dur_desc": lambda a: (-a.duration_s),
-            "dist_desc": lambda a: (-(a.distance_m or -1)),
-            "avghr_desc": lambda a: (-(a.avg_bpm or -1)),
+            "date_desc": lambda a: -a.start_local.timestamp(),
+            "date_asc": lambda a: a.start_local.timestamp(),
+            "dur_desc": lambda a: -a.duration_s,
+            "dist_desc": lambda a: -(a.distance_m or -1),
+            "avghr_desc": lambda a: -(a.avg_bpm or -1),
         }
         keyf = key_funcs.get(self.sort_id, key_funcs["date_desc"])
         out.sort(key=keyf)
@@ -483,23 +509,29 @@ class HistoryPageUI:
         flow.insert(chip(f"{_format_hms(a.duration_s)}"), -1)
         flow.insert(chip(f"{_format_distance_m(a.distance_m)}"), -1)
 
-        # Show pace if running distance exists
-        pace_chip = None
-        if a.distance_m and a.duration_s > 0:
+        # Show pace for runs, speed for bikes (if we have distance + duration)
+        if a.sport == "Running" and a.distance_m and a.duration_s > 0:
             mps = (a.distance_m or 0.0) / max(a.duration_s, 1)
-            pace_chip = chip(_format_pace_from_mps(mps))
-            flow.insert(pace_chip, -1)
+            flow.insert(chip(_format_pace_from_mps(mps)), -1)
+        elif a.sport == "Biking" and a.distance_m and a.duration_s > 0:
+            # avg speed for bikes is usually nicer than "pace"
+            mps = (a.distance_m or 0.0) / max(a.duration_s, 1)
+            mph = mps * 2.23693629
+            flow.insert(chip(f"{mph:.1f} mph"), -1)
 
         flow.insert(chip(f"Avg {_format_float(a.avg_bpm, 'bpm', 0)}"), -1)
         if a.max_bpm is not None:
             flow.insert(chip(f"Max {a.max_bpm} bpm"), -1)
         if a.avg_cadence is not None:
-            flow.insert(chip(f"{int(round(a.avg_cadence))} spm"), -1)
+            unit = "spm" if a.sport == "Running" else ("rpm" if a.sport == "Biking" else "")
+            suffix = f" {unit}" if unit else ""
+            flow.insert(chip(f"{int(round(a.avg_cadence))}{suffix}"), -1)
         if a.avg_power is not None:
             flow.insert(chip(f"{int(round(a.avg_power))} W"), -1)
         if a.total_energy_kj > 0:
             flow.insert(chip(f"{a.total_energy_kj:.1f} kJ"), -1)
 
+        flow.insert(chip(a.sport), -1)
         box.append(flow)
 
         # Tiny sparkline (HR)
@@ -553,6 +585,10 @@ class HistoryPageUI:
 
     # ---- Compare chart ----
     def _redraw_compare_chart(self):
+        def mmss(x, _pos):
+            m, s = divmod(int(max(0, x)), 60)
+            return f"{m:d}:{s:02d}"
+
         if not self._cmp_ax:
             return
         ax = self._cmp_ax
@@ -593,47 +629,57 @@ class HistoryPageUI:
                         .order_by(RunningMetrics.timestamp_ms)
                         .all()
                     )
-                    if not runs:
+                    cycles = (
+                        session.query(CyclingMetrics)
+                        .filter_by(activity_id=aid)
+                        .order_by(CyclingMetrics.timestamp_ms)
+                        .all()
+                    )
+
+                    if runs:
+                        primary_kind = "running"
+                        primary = runs
+                    elif cycles:
+                        primary_kind = "cycling"
+                        primary = cycles
+                    else:
                         continue
-                    t0 = runs[0].timestamp_ms
-                    xs = [(r.timestamp_ms - t0) / 1000.0 for r in runs]
+
+                    t0 = primary[0].timestamp_ms
+                    xs = [(p.timestamp_ms - t0) / 1000.0 for p in primary]
+
                     if self._cmp_metric_id == "pace":
-                        # minutes per mile; use None when stopped (drops from plot)
-                        vals = [
-                            (
-                                _pace_min_per_mile_from_mps(float(r.speed_mps))
-                                if r.speed_mps is not None
-                                else math.inf
-                            )
-                            for r in runs
-                        ]
-                        ys = [None if (v is None or math.isinf(v)) else v for v in vals]
+                        # Only meaningful for running
+                        if primary_kind != "running":
+                            continue
+                        vals = [_pace_min_per_mile_from_mps(float(p.speed_mps)) for p in primary]
+                        ys = [None if math.isinf(v) else v for v in vals]
+
                     elif self._cmp_metric_id == "speed":
                         ys = [
-                            ((float(r.speed_mps) * 2.23693629) if r.speed_mps is not None else None)
-                            for r in runs
+                            (float(p.speed_mps) * 2.23693629) if p.speed_mps is not None else None
+                            for p in primary
                         ]
+
                     elif self._cmp_metric_id == "power":
                         ys = [
-                            (float(r.power_watts) if r.power_watts is not None else None)
-                            for r in runs
+                            float(p.power_watts) if p.power_watts is not None else None
+                            for p in primary
                         ]
+
                     elif self._cmp_metric_id == "cadence":
-                        ys = [
-                            float(r.cadence_spm) if r.cadence_spm is not None else None
-                            for r in runs
-                        ]
+                        if primary_kind == "running":
+                            ys = [
+                                float(p.cadence_spm) if p.cadence_spm is not None else None
+                                for p in primary
+                            ]
+                        else:
+                            ys = [
+                                float(p.cadence_rpm) if p.cadence_rpm is not None else None
+                                for p in primary
+                            ]
                     else:
                         ys = []
-
-                    # Drop None values to avoid gaps/NaNs; keep aligned xs
-                    xs, ys = (
-                        zip(*[(x, y) for x, y in zip(xs, ys) if y is not None]) if ys else ([], [])
-                    )
-                    xs, ys = list(xs), list(ys)
-
-                    if not xs:
-                        continue
 
                 any_series = True
                 if xs:
@@ -646,10 +692,6 @@ class HistoryPageUI:
 
         if max_t > 0:
             ax.set_xlim(0, max_t)
-
-            def mmss(x, _pos):
-                m, s = divmod(int(max(0, x)), 60)
-                return f"{m:d}:{s:02d}"
 
             ax.xaxis.set_major_formatter(FuncFormatter(mmss))
             leg = ax.legend(
@@ -668,7 +710,7 @@ class HistoryPageUI:
             "pace": "Pace (min/mi)",
             "speed": "Speed (mph)",
             "power": "Watts",
-            "cadence": "Cadence (spm)",
+            "cadence": "Cadence (spm/rpm)",
         }
         ax.set_ylabel(ylabels.get(self._cmp_metric_id, ""), color=self.app.DARK_FG)
 
@@ -680,6 +722,10 @@ class HistoryPageUI:
 
     # ---- Details dialog ----
     def _open_details_dialog(self, act_id: int):
+        def mmss(x, _pos):
+            m, s = divmod(int(max(0, x)), 60)
+            return f"{m:d}:{s:02d}"
+
         if not self.app.recorder:
             return
 
@@ -711,6 +757,12 @@ class HistoryPageUI:
                 session.query(RunningMetrics)
                 .filter_by(activity_id=act_id)
                 .order_by(RunningMetrics.timestamp_ms)
+                .all()
+            )
+            cycles = (
+                session.query(CyclingMetrics)
+                .filter_by(activity_id=act_id)
+                .order_by(CyclingMetrics.timestamp_ms)
                 .all()
             )
 
@@ -746,24 +798,33 @@ class HistoryPageUI:
         if runs:
             dists = [r.total_distance_m for r in runs if r.total_distance_m is not None]
             distance_m = dists[-1] if dists else None
-            avg_cad = _safe_avg([float(r.cadence_spm) for r in runs])
+            avg_cad = _safe_avg([float(r.cadence_spm) for r in runs if r.cadence_spm is not None])
             avg_pow = _safe_avg([float(r.power_watts) for r in runs if r.power_watts is not None])
-            avg_speed = _safe_avg([float(r.speed_mps) for r in runs])
+        elif cycles:
+            dists = [c.total_distance_m for c in cycles if c.total_distance_m is not None]
+            distance_m = dists[-1] if dists else None
+            avg_cad = _safe_avg([float(c.cadence_rpm) for c in cycles if c.cadence_rpm is not None])
+            avg_pow = _safe_avg([float(c.power_watts) for c in cycles if c.power_watts is not None])
         else:
             distance_m = None
             avg_cad = None
             avg_pow = None
-            avg_speed = None
 
         chips.insert(chip(_format_hms(dur_s)), -1)
         chips.insert(chip(_format_distance_m(distance_m)), -1)
         if distance_m and dur_s:
-            chips.insert(chip(_format_pace_from_mps((distance_m or 0) / max(1, dur_s))), -1)
+            mps = (distance_m or 0) / max(1, dur_s)
+            if runs:
+                chips.insert(chip(_format_pace_from_mps(mps)), -1)
+            elif cycles:
+                mph = mps * 2.23693629
+                chips.insert(chip(f"{mph:.1f} mph"), -1)
         chips.insert(chip(f"Avg {_format_float(avg_bpm, 'bpm', 0)}"), -1)
         if max_bpm is not None:
             chips.insert(chip(f"Max {max_bpm} bpm"), -1)
         if avg_cad is not None:
-            chips.insert(chip(f"{int(round(avg_cad))} spm"), -1)
+            unit = "spm" if runs else "rpm"
+            chips.insert(chip(f"{int(round(avg_cad))} {unit}"), -1)
         if avg_pow is not None:
             chips.insert(chip(f"{int(round(avg_pow))} W"), -1)
         if total_kj > 0:
@@ -791,10 +852,6 @@ class HistoryPageUI:
             ax.plot(xs, ys, lw=2)
             ax.set_xlabel("Time (s)", color=self.app.DARK_FG)
             ax.set_ylabel("BPM", color=self.app.DARK_FG)
-
-            def mmss(x, _pos):
-                m, s = divmod(int(max(0, x)), 60)
-                return f"{m:d}:{s:02d}"
 
             ax.xaxis.set_major_formatter(FuncFormatter(mmss))
 
@@ -828,10 +885,6 @@ class HistoryPageUI:
             paces = np.array([pace_from_speed(s) for s in speed])
             ax2.plot(xs, paces, lw=2)
             ax2.set_ylabel("Pace (min/mi)", color=self.app.DARK_FG)
-
-            def mmss(x, _pos):
-                m, s = divmod(int(max(0, x)), 60)
-                return f"{m:d}:{s:02d}"
 
             ax2.xaxis.set_major_formatter(FuncFormatter(mmss))
             canvas2 = FigureCanvas(fig2)
@@ -904,6 +957,53 @@ class HistoryPageUI:
                     splits_frame.set_child(splits_box)
                     charts_box.append(splits_frame)
 
+        if cycles:
+            t0 = cycles[0].timestamp_ms
+            xs = np.array([(c.timestamp_ms - t0) / 1000.0 for c in cycles])
+            mph = np.array([float(c.speed_mps) * 2.23693629 for c in cycles])
+
+            fig2 = Figure(figsize=(6, 2.6), dpi=96)
+            ax2 = fig2.add_subplot(111)
+            self._apply_chart_style(ax2, draw_hr_zones=False)
+            ax2.plot(xs, mph, lw=2)
+            ax2.set_ylabel("Speed (mph)", color=self.app.DARK_FG)
+            ax2.xaxis.set_major_formatter(FuncFormatter(mmss))
+
+            canvas2 = FigureCanvas(fig2)
+            frm2 = Gtk.Frame(label="Speed")
+            frm2.set_child(canvas2)
+            charts_box.append(frm2)
+
+            # cadence rpm chart
+            cad_vals = [c.cadence_rpm for c in cycles if c.cadence_rpm is not None]
+            if cad_vals:
+                cad = np.array([float(c.cadence_rpm or 0.0) for c in cycles])
+                fig4 = Figure(figsize=(6, 2.2), dpi=96)
+                ax4 = fig4.add_subplot(111)
+                self._apply_chart_style(ax4, draw_hr_zones=False)
+                ax4.plot(xs, cad, lw=2)
+                ax4.set_ylabel("Cadence (rpm)", color=self.app.DARK_FG)
+                ax4.xaxis.set_major_formatter(FuncFormatter(mmss))
+                canvas4 = FigureCanvas(fig4)
+                frm4 = Gtk.Frame(label="Cadence")
+                frm4.set_child(canvas4)
+                charts_box.append(frm4)
+
+            # Power chart (if present)
+            pw = [c.power_watts for c in cycles if c.power_watts is not None]
+            if pw:
+                pw_full = np.array([float(c.power_watts or 0.0) for c in cycles])
+                fig3 = Figure(figsize=(6, 2.4), dpi=96)
+                ax3 = fig3.add_subplot(111)
+                self._apply_chart_style(ax3, draw_hr_zones=False)
+                ax3.plot(xs, pw_full, lw=2)
+                ax3.set_ylabel("Watts", color=self.app.DARK_FG)
+                ax3.xaxis.set_major_formatter(FuncFormatter(mmss))
+                canvas3 = FigureCanvas(fig3)
+                frm3 = Gtk.Frame(label="Power")
+                frm3.set_child(canvas3)
+                charts_box.append(frm3)
+
         # Put charts into dialog
         content.append(sc)
 
@@ -931,9 +1031,7 @@ class HistoryPageUI:
         ax.grid(color=self.app.DARK_GRID)
 
     def _on_export_clicked(self, act_id: int):
-        """
-        Generate a TCX and prompt the user to save it.
-        """
+        """Generate a TCX and prompt the user to save it."""
         if not self.app.recorder:
             return
 
@@ -944,7 +1042,6 @@ class HistoryPageUI:
                 self.app.show_toast("Activity not found")
                 return
             local_start = _tz_aware_localize(act.start_time)
-            default_name = local_start.strftime("Run_%Y-%m-%d_%H-%M.tcx")
 
             # Gather samples
             hrs = (
@@ -959,9 +1056,30 @@ class HistoryPageUI:
                 .order_by(RunningMetrics.timestamp_ms)
                 .all()
             )
+            cycles = (
+                session.query(CyclingMetrics)
+                .filter_by(activity_id=act_id)
+                .order_by(CyclingMetrics.timestamp_ms)
+                .all()
+            )
+
+        sport = infer_sport(hrs, runs, cycles, act_id)
+        if sport == "Unknown":
+            msg = f"Cannot export: Unknown sport for activity {act_id}"
+            logger.warning(msg)
+            self.app.show_toast(msg)
+            return
+
+        default_name = f"{local_start.strftime('%Y-%m-%d_%H-%M-%S')}_{sport}.tcx"
 
         try:
-            tcx_bytes = activity_to_tcx(act=act, heart_rates=hrs, running=runs, sport="Running")
+            tcx_bytes = activity_to_tcx(
+                act=act,
+                heart_rates=hrs,
+                running=runs,
+                cycling=cycles,
+                sport=sport,
+            )
         except Exception as e:
             self.app.show_toast(f"Export failed: {e}")
             return
