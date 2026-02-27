@@ -1,9 +1,9 @@
 import asyncio
 import contextlib
-import datetime
 import subprocess
 import threading
 from configparser import ConfigParser
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 
 import gi
@@ -1053,8 +1053,10 @@ class SettingsPageUI:
                     ext="fit",
                 )
 
-                today = datetime.datetime.now(tz=datetime.UTC).date()
-                start, end = (today, today + datetime.timedelta(days=6))
+                # Beginning of the day
+                start = datetime.today().replace(hour=0, minute=0, second=0, microsecond=0)
+                end = start + timedelta(days=6)
+                end = end.replace(hour=23, minute=59, second=59)
 
                 provider.fetch_between("running", start, end, out_dir_running)
                 provider.fetch_between("cycling", start, end, out_dir_cycling)
