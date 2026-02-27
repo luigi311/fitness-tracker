@@ -5,16 +5,18 @@ from hashlib import sha256
 from typing import TYPE_CHECKING
 
 import requests
+from loguru import logger
 from requests.auth import HTTPBasicAuth
 
-from fitness_tracker.database import HeartRate, RunningMetrics
-from fitness_tracker.exporters import activity_to_tcx
+from fitness_tracker.database import CyclingMetrics, HeartRate, RunningMetrics
+from fitness_tracker.exporters import activity_to_tcx, infer_sport
 
 if TYPE_CHECKING:
     from fitness_tracker.ui import FitnessAppUI
 
 API_BASE = "https://intervals.icu/api/v1"
 PROVIDER_NAME = "intervals_icu"
+
 
 @dataclass
 class IntervalsICUUploader:
@@ -35,7 +37,6 @@ class IntervalsICUUploader:
         resp = requests.post(url, auth=self._auth(), files=files, timeout=60)
         resp.raise_for_status()
         return resp
-
 
     def upload_not_uploaded(self, app: FitnessAppUI) -> list[tuple[int, bool, str | None]]:
         """Upload all activities that don't have an OK upload row for Intervals.icu."""
@@ -65,11 +66,28 @@ class IntervalsICUUploader:
                     .order_by(RunningMetrics.timestamp_ms)
                     .all()
                 )
+                cycles = (
+                    session.query(CyclingMetrics)
+                    .filter_by(activity_id=a.id)
+                    .order_by(CyclingMetrics.timestamp_ms)
+                    .all()
+                )
                 try:
-                    tcx = activity_to_tcx(act=a, heart_rates=hrs, running=runs, sport="Running")
+                    sport = infer_sport(runs, cycles, hrs, a.id)
+                    if sport == "Unknown":
+                        continue
+
+                    tcx = activity_to_tcx(
+                        act=a,
+                        heart_rates=hrs,
+                        running=runs,
+                        cycling=cycles,
+                        sport=sport,
+                    )
                     # Simple content hash (helps our own dedupe/debug)
                     phash = sha256(tcx).hexdigest()
-                    name = a.start_time.astimezone().strftime("Run_%Y-%m-%d_%H-%M")
+                    prefix = "Run" if sport == "Running" else "Ride"
+                    name = a.start_time.astimezone().strftime(f"{prefix}_%Y-%m-%d_%H-%M")
                     resp = self._upload_tcx_bytes(name, tcx)
 
                     # If the API returns an id in JSON, store it
@@ -80,10 +98,12 @@ class IntervalsICUUploader:
                     except Exception:
                         provider_id = None
 
-                    db.mark_upload_ok(activity_id=int(a.id),
-                                    provider=PROVIDER_NAME,
-                                    provider_activity_id=provider_id,
-                                    payload_hash=phash)
+                    db.mark_upload_ok(
+                        activity_id=int(a.id),
+                        provider=PROVIDER_NAME,
+                        provider_activity_id=provider_id,
+                        payload_hash=phash,
+                    )
                     out.append((int(a.id), True, None))
                 except requests.HTTPError as e:
                     msg = f"{e.response.status_code} {e.response.reason}"

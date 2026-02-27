@@ -256,7 +256,7 @@ class TrackerPageUI:
         self._erg_last_set_watts = None
         self._erg_last_set_ts = 0.0
         if self.app.recorder:
-            self.app.recorder.clear_target_power()
+            self.app.recorder.set_target_power(0)
 
         GLib.idle_add(self.app.history.refresh)
         self._pop_to_mode()

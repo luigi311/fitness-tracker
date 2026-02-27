@@ -466,6 +466,7 @@ class Recorder:
                     if self._pending_erg_watts == target:
                         self._pending_erg_watts = None
                         self._erg_applied_watts = target
+
                         return
 
                 except Exception as e:
@@ -473,9 +474,6 @@ class Recorder:
 
             await asyncio.sleep(2.0)  # retry interval
 
-    def clear_target_power(self) -> None:
-        """Clear any pending target power (e.g. when stopping a workout)."""
-        self._pending_erg_watts = None
 
     async def _reset_distance_workflow(self, *, wait_s: float = 6.0) -> None:
         """
