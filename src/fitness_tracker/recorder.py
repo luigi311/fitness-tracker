@@ -4,6 +4,7 @@ import re
 import threading
 from collections import deque
 from collections.abc import Callable
+from concurrent.futures import Future
 from statistics import median
 
 import gi
@@ -51,8 +52,9 @@ class Recorder:
         logger.debug(f"Speed sensor: name={speed_name}, address={speed_address}")
         logger.debug(f"Cadence sensor: name={cadence_name}, address={cadence_address}")
         logger.debug(f"Power sensor: name={power_name}, address={power_address}")
-        logger.debug(f"Trainer sensor: name={trainer_name}, address={trainer_address}, machine_type={trainer_machine_type}")
-
+        logger.debug(
+            f"Trainer sensor: name={trainer_name}, address={trainer_address}, machine_type={trainer_machine_type}"
+        )
 
         self._ble_lock = asyncio.Lock()  # Lock for BLE operations
         self._thread: threading.Thread | None = None
@@ -70,6 +72,9 @@ class Recorder:
         self._recording = False
         self._activity_id = None
         self._start_ms = None
+        self._pending_erg_watts: int | None = None
+        self._erg_retry_task: Future | None = None
+        self._erg_applied_watts: int | None = None
 
         # Profile metadata (used by UI to avoid rebuilding unnecessarily)
         self.profile = profile.strip().lower()
@@ -233,7 +238,9 @@ class Recorder:
         # Persist to DB if recording
         if self._recording and self._activity_id:
             if sample.machine_type == MachineType.INDOOR_BIKE:
-                logger.trace(f"Inserting cycling metrics into DB: \n\tActivity ID: {self._activity_id} \n\tDelta MS: {delta_ms} \n\tSpeed: {speed_mps} \n\tCadence: {cadence} \n\tDistance: {dist_m} \n\tPower: {watts}")
+                logger.trace(
+                    f"Inserting cycling metrics into DB: \n\tActivity ID: {self._activity_id} \n\tDelta MS: {delta_ms} \n\tSpeed: {speed_mps} \n\tCadence: {cadence} \n\tDistance: {dist_m} \n\tPower: {watts}"
+                )
                 self.db.insert_cycling_metrics(
                     self._activity_id,
                     delta_ms,
@@ -243,7 +250,9 @@ class Recorder:
                     power_watts=(float(watts) if watts is not None else None),
                 )
             elif sample.machine_type == MachineType.TREADMILL:
-                logger.trace(f"Inserting running metrics into DB: \n\tActivity ID: {self._activity_id} \n\tDelta MS: {delta_ms} \n\tSpeed: {speed_mps} \n\tCadence: {cadence} \n\tDistance: {dist_m} \n\tPower: {watts}")
+                logger.trace(
+                    f"Inserting running metrics into DB: \n\tActivity ID: {self._activity_id} \n\tDelta MS: {delta_ms} \n\tSpeed: {speed_mps} \n\tCadence: {cadence} \n\tDistance: {dist_m} \n\tPower: {watts}"
+                )
                 self.db.insert_running_metrics(
                     self._activity_id,
                     delta_ms,
@@ -257,17 +266,22 @@ class Recorder:
                 logger.error(f"Unknown machine type {sample.machine_type} for trainer sample")
 
     async def _workflow(self):
+        logger.debug("Starting Recorder workflow")
         # Run both device loops concurrently (if configured)
         if self._stop_event._loop is not self.loop:
             self._stop_event = asyncio.Event()
 
         device_tasks = [asyncio.create_task(self._hr_loop())]
 
+        logger.debug(f"on_sample callback provided: {self.on_sample is not None}")
+
         have_any_sensors = any([self.speed_address, self.cadence_address, self.power_address])
+        logger.debug(f"Sensors configured: {have_any_sensors}")
         if have_any_sensors and self.on_sample:
             device_tasks.append(asyncio.create_task(self._running_loop()))
 
         have_trainer = bool(self.trainer_address)
+        logger.debug(f"Trainer configured: {have_trainer}")
         if have_trainer and self.on_sample:
             device_tasks.append(asyncio.create_task(self._trainer_loop()))
 
@@ -375,14 +389,21 @@ class Recorder:
         self.power_connected = connected
         self.distance_connected = connected
 
+        if not connected:
+            # reset erg watts on disconnect so it applies immediately on reconnect
+            self._erg_applied_watts = None
+
     async def _trainer_loop(self) -> None:
-        logger.debug(f"Starting trainer loop with address {self.trainer_address} and machine type {self.trainer_machine_type}")
+        logger.debug(
+            f"Starting trainer loop with address {self.trainer_address} and machine type {self.trainer_machine_type}"
+        )
         self.trainer_mux = TrainerMux(
             addr=self.trainer_address,
             machine_type=self.trainer_machine_type,
             on_sample=self._handle_trainer_sample,
             on_status=self._on_ble_error,
             on_link=self._on_trainer_link,
+            sticky_ttl_s=3.0,
         )
         try:
             await self.trainer_mux.start()
@@ -402,6 +423,59 @@ class Recorder:
             asyncio.run_coroutine_threadsafe(self._reset_distance_workflow(), self.loop)
         except Exception as e:
             self._on_ble_error(f"Failed to schedule distance reset: {e}")
+
+    def set_target_power(self, watts: int) -> None:
+        """Set target power on the trainer if supported."""
+        logger.debug(f"Trying to set target power to {watts} watts")
+
+        watts = int(watts)
+        # Store intent
+        self._pending_erg_watts = watts
+
+        # Reset applied marker so retry loop knows this needs applying
+        if self._erg_applied_watts != watts:
+            self._erg_applied_watts = None
+
+        if not self.test_mode:
+            self._ensure_erg_retry_loop()
+
+    def _ensure_erg_retry_loop(self) -> None:
+        if self._erg_retry_task and not self._erg_retry_task.done():
+            return  # already running
+
+        self._erg_retry_task = asyncio.run_coroutine_threadsafe(
+            self._erg_retry_loop(),
+            self.loop,
+        )
+
+    async def _erg_retry_loop(self) -> None:
+        while True:
+            # Read the current pending target at the start of each iteration.
+            target = self._pending_erg_watts
+            if target is None:
+                # Nothing pending anymore.
+                return
+
+            mux = self.trainer_mux
+
+            if mux and mux.is_connected:
+                try:
+                    await mux.set_target_power(target)
+                    # Only clear the pending value if it wasn't updated
+                    # while the await was in-flight.
+                    if self._pending_erg_watts == target:
+                        self._pending_erg_watts = None
+                        self._erg_applied_watts = target
+                        return
+
+                except Exception as e:
+                    self._on_ble_error(f"ERG set failed, retrying: {e}")
+
+            await asyncio.sleep(2.0)  # retry interval
+
+    def clear_target_power(self) -> None:
+        """Clear any pending target power (e.g. when stopping a workout)."""
+        self._pending_erg_watts = None
 
     async def _reset_distance_workflow(self, *, wait_s: float = 6.0) -> None:
         """

@@ -35,6 +35,8 @@ class TrackerPageUI:
         self._bpms = deque()
         self._powers = deque()
         self._last_ms = None
+        self._erg_last_set_watts: int | None = None
+        self._erg_last_set_ts: float = 0.0
 
         # lifecycle flags
         self._running = False  # true ONLY after Start is pressed
@@ -216,6 +218,9 @@ class TrackerPageUI:
         self._start_monotonic = time.monotonic()
         self._elapsed_display_s = 0
         self._last_ms = 0
+        self._erg_last_set_watts = None
+        self._erg_last_set_ts = 0.0
+
         if self.app.recorder:
             self.app.recorder.start_recording()
 
@@ -247,6 +252,12 @@ class TrackerPageUI:
         # release page refs and go home
         self.free_view = None
         self.workout_view = None
+
+        self._erg_last_set_watts = None
+        self._erg_last_set_ts = 0.0
+        if self.app.recorder:
+            self.app.recorder.clear_target_power()
+
         GLib.idle_add(self.app.history.refresh)
         self._pop_to_mode()
 
@@ -426,6 +437,23 @@ class TrackerPageUI:
                     tgt_lo=w_lo,
                     tgt_hi=w_hi,
                 )
+
+            # ERG Mode controls
+            if self.app.recorder and self.app.recorder.trainer_mux:
+                now = time.monotonic()
+                # Limit erg commands to 1 every 2 seconds to avoid overwhelming the trainer or BLE connection
+                # Require a change of at least 3 watts to avoid sending redundant commands
+                watt_diff = 3
+                time_diff = 2.0
+                if (
+                    self._erg_last_set_watts is None
+                    or (abs(self._erg_last_set_watts - int(w_mid)) >= watt_diff
+                    and now - self._erg_last_set_ts > time_diff)
+                ):
+                    self.app.recorder.set_target_power(int(w_mid))
+                    self._erg_last_set_watts = int(w_mid)
+                    self._erg_last_set_ts = now
+
         elif v_mid is not None:
             mph = self._rt_mph if not self.app.test_mode else getattr(self, "_last_mph", 0.0)
             cur_mps = float(mph) * 0.44704
@@ -509,6 +537,10 @@ class TrackerPageUI:
 
         # Immediate jump (preview and running both supported)
         self._manual_offset_s += (target_start - t_s) + 0.001
+
+        # Reset erg values so it sets immediately on step change if in an erg step
+        self._erg_last_set_watts = None
+        self._erg_last_set_ts = 0.0
 
         # refresh guidance with either running time or preview time 0
         self._update_workout_guidance(int(current_elapsed if self._running else 0))
