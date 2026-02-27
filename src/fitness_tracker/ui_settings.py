@@ -4,17 +4,26 @@ import datetime
 import subprocess
 import threading
 from configparser import ConfigParser
+from typing import TYPE_CHECKING
 
 import gi
 import requests
 from bleak import BleakScanner
-from bleaksport.discover import discover_power_devices, discover_speed_cadence_devices
+from bleaksport.discover import (
+    discover_ftms_devices,
+    discover_power_devices,
+    discover_speed_cadence_devices,
+)
+from loguru import logger
 
 from fitness_tracker import upload_providers, workout_providers
 from fitness_tracker.hr_provider import HEART_RATE_SERVICE_UUID
 
 gi.require_versions({"Gtk": "4.0", "Adw": "1"})
 from gi.repository import Adw, GLib, Gtk  # noqa: E402
+
+if TYPE_CHECKING:
+    from bleaksport import MachineType
 
 NONE_LABEL = "None"
 
@@ -38,6 +47,11 @@ class SettingsPageUI:
         self.speed_map: dict[str, str] = {}
         self.cadence_map: dict[str, str] = {}
         self.power_map: dict[str, str] = {}
+
+        # Trainer (FTMS): display -> {"address": str, "machine_type": MachineType}
+        self.trainer_map: dict[str, dict[str, MachineType]] = {}
+        self.trainer_cycling_hr_map: dict[str, str] = {}
+        self.trainer_running_hr_map: dict[str, str] = {}
 
         # pebble
         self.pebble_map: dict[str, str] = {}
@@ -104,6 +118,7 @@ class SettingsPageUI:
         devices_group.set_title("Devices")
 
         # ----- Sensors group -----
+        # ----- Running Sensors -----
         sensors_running_group = Adw.PreferencesGroup()
         sensors_running_group.set_title("")
 
@@ -196,7 +211,195 @@ class SettingsPageUI:
         )
         power_scan_row.add_suffix(self.power_scan_button)
         sensors_running_expander.add_row(power_scan_row)
+
         devices_group.add(sensors_running_group)
+
+        # ----- Cycling Sensors -----
+        sensors_cycling_group = Adw.PreferencesGroup()
+        sensors_cycling_group.set_title("")
+
+        sensors_cycling_expander = Adw.ExpanderRow()
+        sensors_cycling_expander.set_title("Cycling Sensors")
+        sensors_cycling_expander.set_subtitle("Heart rate, speed, cadence, power")
+        sensors_cycling_expander.set_expanded(False)
+        sensors_cycling_group.add(sensors_cycling_expander)
+
+        # Heart Rate Monitor
+        self.cycling_hr_row = Adw.ActionRow()
+        self.cycling_hr_row.set_title("Select HRM")
+        self.cycling_hr_spinner = Gtk.Spinner()
+        self.cycling_hr_combo = Gtk.ComboBoxText()
+        self.cycling_hr_combo.set_hexpand(True)
+        self.cycling_hr_row.add_prefix(self.cycling_hr_spinner)
+        self.cycling_hr_row.add_suffix(self.cycling_hr_combo)
+        sensors_cycling_expander.add_row(self.cycling_hr_row)
+
+        cycling_hr_scan_row = Adw.ActionRow()
+        self.cycling_hr_scan_button = Gtk.Button(label="Scan HRM")
+        self.cycling_hr_scan_button.get_style_context().add_class("suggested-action")
+        self.cycling_hr_scan_button.connect(
+            "clicked",
+            lambda _: threading.Thread(target=self._fill_devices_hr, daemon=True).start(),
+        )
+        cycling_hr_scan_row.add_suffix(self.cycling_hr_scan_button)
+        sensors_cycling_expander.add_row(cycling_hr_scan_row)
+
+        # Speed
+        self.cycling_speed_row = Adw.ActionRow()
+        self.cycling_speed_row.set_title("Select Speed Device")
+        self.cycling_speed_spinner = Gtk.Spinner()
+        self.cycling_speed_combo = Gtk.ComboBoxText()
+        self.cycling_speed_combo.set_hexpand(True)
+        self.cycling_speed_row.add_prefix(self.cycling_speed_spinner)
+        self.cycling_speed_row.add_suffix(self.cycling_speed_combo)
+        sensors_cycling_expander.add_row(self.cycling_speed_row)
+
+        cycling_speed_scan_row = Adw.ActionRow()
+        self.cycling_speed_scan_button = Gtk.Button(label="Scan Speed")
+        self.cycling_speed_scan_button.get_style_context().add_class("suggested-action")
+        self.cycling_speed_scan_button.connect(
+            "clicked",
+            lambda _: threading.Thread(
+                target=self._fill_devices_speed_cadence, daemon=True
+            ).start(),
+        )
+        cycling_speed_scan_row.add_suffix(self.cycling_speed_scan_button)
+        sensors_cycling_expander.add_row(cycling_speed_scan_row)
+
+        # Cadence
+        self.cycling_cadence_row = Adw.ActionRow()
+        self.cycling_cadence_row.set_title("Select Cadence Device")
+        self.cycling_cadence_spinner = Gtk.Spinner()
+        self.cycling_cadence_combo = Gtk.ComboBoxText()
+        self.cycling_cadence_combo.set_hexpand(True)
+        self.cycling_cadence_row.add_prefix(self.cycling_cadence_spinner)
+        self.cycling_cadence_row.add_suffix(self.cycling_cadence_combo)
+        sensors_cycling_expander.add_row(self.cycling_cadence_row)
+        cycling_cadence_scan_row = Adw.ActionRow()
+        self.cycling_cadence_scan_button = Gtk.Button(label="Scan Cadence")
+        self.cycling_cadence_scan_button.get_style_context().add_class("suggested-action")
+        self.cycling_cadence_scan_button.connect(
+            "clicked",
+            lambda _: threading.Thread(
+                target=self._fill_devices_speed_cadence, daemon=True
+            ).start(),
+        )
+        cycling_cadence_scan_row.add_suffix(self.cycling_cadence_scan_button)
+        sensors_cycling_expander.add_row(cycling_cadence_scan_row)
+
+        # Power
+        self.cycling_power_row = Adw.ActionRow()
+        self.cycling_power_row.set_title("Select Power Device")
+        self.cycling_power_spinner = Gtk.Spinner()
+        self.cycling_power_combo = Gtk.ComboBoxText()
+        self.cycling_power_combo.set_hexpand(True)
+        self.cycling_power_row.add_prefix(self.cycling_power_spinner)
+        self.cycling_power_row.add_suffix(self.cycling_power_combo)
+        sensors_cycling_expander.add_row(self.cycling_power_row)
+
+        cycling_power_scan_row = Adw.ActionRow()
+        self.cycling_power_scan_button = Gtk.Button(label="Scan Power")
+        self.cycling_power_scan_button.get_style_context().add_class("suggested-action")
+        self.cycling_power_scan_button.connect(
+            "clicked",
+            lambda _: threading.Thread(target=self._fill_devices_power, daemon=True).start(),
+        )
+        cycling_power_scan_row.add_suffix(self.cycling_power_scan_button)
+        sensors_cycling_expander.add_row(cycling_power_scan_row)
+
+        devices_group.add(sensors_cycling_group)
+
+        # ----- Trainer (FTMS) -----
+        trainer_group = Adw.PreferencesGroup()
+        trainer_group.set_title("")
+
+        trainer_expander = Adw.ExpanderRow()
+        trainer_expander.set_title("Trainer (FTMS)")
+        trainer_expander.set_subtitle("Smart trainer / indoor bike / treadmill")
+        trainer_expander.set_expanded(False)
+        trainer_group.add(trainer_expander)
+
+        # Trainer running selector
+        self.trainer_running_row = Adw.ActionRow()
+        self.trainer_running_row.set_title("Trainer (Running)")
+        self.trainer_running_spinner = Gtk.Spinner()
+        self.trainer_running_combo = Gtk.ComboBoxText()
+        self.trainer_running_combo.set_hexpand(True)
+        self.trainer_running_row.add_prefix(self.trainer_running_spinner)
+        self.trainer_running_row.add_suffix(self.trainer_running_combo)
+        trainer_expander.add_row(self.trainer_running_row)
+
+        trainer_running_scan_row = Adw.ActionRow()
+        trainer_running_scan_btn = Gtk.Button(label="Scan Trainer")
+        trainer_running_scan_btn.get_style_context().add_class("suggested-action")
+        trainer_running_scan_btn.connect(
+            "clicked",
+            lambda _: threading.Thread(target=self._fill_devices_trainer, daemon=True).start(),
+        )
+        trainer_running_scan_row.add_suffix(trainer_running_scan_btn)
+        trainer_expander.add_row(trainer_running_scan_row)
+
+        # Trainer-running HRM (separate)
+        self.trainer_running_hr_row = Adw.ActionRow()
+        self.trainer_running_hr_row.set_title("Trainer HRM (Running)")
+        self.trainer_running_hr_spinner = Gtk.Spinner()
+        self.trainer_running_hr_combo = Gtk.ComboBoxText()
+        self.trainer_running_hr_combo.set_hexpand(True)
+        self.trainer_running_hr_row.add_prefix(self.trainer_running_hr_spinner)
+        self.trainer_running_hr_row.add_suffix(self.trainer_running_hr_combo)
+        trainer_expander.add_row(self.trainer_running_hr_row)
+
+        trainer_running_hr_scan_row = Adw.ActionRow()
+        trainer_running_hr_scan_btn = Gtk.Button(label="Scan HRM")
+        trainer_running_hr_scan_btn.get_style_context().add_class("suggested-action")
+        trainer_running_hr_scan_btn.connect(
+            "clicked",
+            lambda _: threading.Thread(target=self._fill_devices_trainer_hr, daemon=True).start(),
+        )
+        trainer_running_hr_scan_row.add_suffix(trainer_running_hr_scan_btn)
+        trainer_expander.add_row(trainer_running_hr_scan_row)
+
+        # Trainer cycling selector
+        self.trainer_cycling_row = Adw.ActionRow()
+        self.trainer_cycling_row.set_title("Trainer (Cycling)")
+        self.trainer_cycling_spinner = Gtk.Spinner()
+        self.trainer_cycling_combo = Gtk.ComboBoxText()
+        self.trainer_cycling_combo.set_hexpand(True)
+        self.trainer_cycling_row.add_prefix(self.trainer_cycling_spinner)
+        self.trainer_cycling_row.add_suffix(self.trainer_cycling_combo)
+        trainer_expander.add_row(self.trainer_cycling_row)
+
+        trainer_cycling_scan_row = Adw.ActionRow()
+        trainer_cycling_scan_btn = Gtk.Button(label="Scan Trainer")
+        trainer_cycling_scan_btn.get_style_context().add_class("suggested-action")
+        trainer_cycling_scan_btn.connect(
+            "clicked",
+            lambda _: threading.Thread(target=self._fill_devices_trainer, daemon=True).start(),
+        )
+        trainer_cycling_scan_row.add_suffix(trainer_cycling_scan_btn)
+        trainer_expander.add_row(trainer_cycling_scan_row)
+
+        # Trainer Cycling HRM (separate)
+        self.trainer_cycling_hr_row = Adw.ActionRow()
+        self.trainer_cycling_hr_row.set_title("Trainer HRM (Cycling)")
+        self.trainer_cycling_hr_spinner = Gtk.Spinner()
+        self.trainer_cycling_hr_combo = Gtk.ComboBoxText()
+        self.trainer_cycling_hr_combo.set_hexpand(True)
+        self.trainer_cycling_hr_row.add_prefix(self.trainer_cycling_hr_spinner)
+        self.trainer_cycling_hr_row.add_suffix(self.trainer_cycling_hr_combo)
+        trainer_expander.add_row(self.trainer_cycling_hr_row)
+
+        trainer_cycling_hr_scan_row = Adw.ActionRow()
+        trainer_cycling_hr_scan_btn = Gtk.Button(label="Scan HRM")
+        trainer_cycling_hr_scan_btn.get_style_context().add_class("suggested-action")
+        trainer_cycling_hr_scan_btn.connect(
+            "clicked",
+            lambda _: threading.Thread(target=self._fill_devices_trainer_hr, daemon=True).start(),
+        )
+        trainer_cycling_hr_scan_row.add_suffix(trainer_cycling_hr_scan_btn)
+        trainer_expander.add_row(trainer_cycling_hr_scan_row)
+
+        devices_group.add(trainer_group)
 
         # ----- Pebble group -----
         pebble_group = Adw.PreferencesGroup()
@@ -401,6 +604,11 @@ class SettingsPageUI:
             ([self.app.hr_name] if self.app.hr_name else []),
             self.app.hr_name,
         )
+        self._combo_set_items_with_none(
+            self.cycling_hr_combo,
+            ([self.app.cycling_hr_name] if self.app.cycling_hr_name else []),
+            self.app.cycling_hr_name,
+        )
         self.hr_map = {self.app.hr_name: self.app.hr_address} if self.app.hr_name else {}
 
         # Prepopulate Speed
@@ -408,6 +616,11 @@ class SettingsPageUI:
             self.speed_combo,
             ([self.app.speed_name] if self.app.speed_name else []),
             self.app.speed_name,
+        )
+        self._combo_set_items_with_none(
+            self.cycling_speed_combo,
+            ([self.app.cycling_speed_name] if self.app.cycling_speed_name else []),
+            self.app.cycling_speed_name,
         )
         self.speed_map = (
             {self.app.speed_name: self.app.speed_address} if self.app.speed_name else {}
@@ -419,6 +632,11 @@ class SettingsPageUI:
             ([self.app.cadence_name] if self.app.cadence_name else []),
             self.app.cadence_name,
         )
+        self._combo_set_items_with_none(
+            self.cycling_cadence_combo,
+            ([self.app.cycling_cadence_name] if self.app.cycling_cadence_name else []),
+            self.app.cycling_cadence_name,
+        )
         self.cadence_map = (
             {self.app.cadence_name: self.app.cadence_address} if self.app.cadence_name else {}
         )
@@ -429,8 +647,35 @@ class SettingsPageUI:
             ([self.app.power_name] if self.app.power_name else []),
             self.app.power_name,
         )
+        self._combo_set_items_with_none(
+            self.cycling_power_combo,
+            ([self.app.cycling_power_name] if self.app.cycling_power_name else []),
+            self.app.cycling_power_name,
+        )
         self.power_map = (
             {self.app.power_name: self.app.power_address} if self.app.power_name else {}
+        )
+
+        # Prepopulate Trainers plus their HRMs
+        self._combo_set_items_with_none(
+            self.trainer_running_combo,
+            [self.app.trainer_running_name] if self.app.trainer_running_name else [],
+            self.app.trainer_running_name,
+        )
+        self._combo_set_items_with_none(
+            self.trainer_cycling_combo,
+            [self.app.trainer_cycling_name] if self.app.trainer_cycling_name else [],
+            self.app.trainer_cycling_name,
+        )
+        self._combo_set_items_with_none(
+            self.trainer_running_hr_combo,
+            [self.app.trainer_running_hr_name] if self.app.trainer_running_hr_name else [],
+            self.app.trainer_running_hr_name,
+        )
+        self._combo_set_items_with_none(
+            self.trainer_cycling_hr_combo,
+            [self.app.trainer_cycling_hr_name] if self.app.trainer_cycling_hr_name else [],
+            self.app.trainer_cycling_hr_name,
         )
 
         # Prepopulate Pebble
@@ -490,6 +735,9 @@ class SettingsPageUI:
         GLib.idle_add(self.hr_spinner.start)
         self.hr_row.set_subtitle("Scanning for HRM…")
 
+        GLib.idle_add(self.cycling_hr_spinner.start)
+        self.cycling_hr_row.set_subtitle("Scanning for HRM…")
+
         async def _scan():
             devices = await BleakScanner.discover(
                 timeout=5.0,
@@ -502,7 +750,13 @@ class SettingsPageUI:
                 self.hr_spinner.stop()
                 self.hr_row.set_subtitle("" if names else "No HRM found")
 
+                self.cycling_hr_spinner.stop()
+                self.cycling_hr_row.set_subtitle("" if names else "No HRM found")
+
                 self._combo_set_items_with_none(self.hr_combo, names, self.app.hr_name)
+                self._combo_set_items_with_none(
+                    self.cycling_hr_combo, names, self.app.cycling_hr_name
+                )
                 self.hr_map = mapping
 
             GLib.idle_add(_apply)
@@ -513,6 +767,15 @@ class SettingsPageUI:
         GLib.idle_add(self.speed_spinner.start)
         self.speed_row.set_subtitle("Scanning for speed/cadence devices…")
 
+        GLib.idle_add(self.cadence_spinner.start)
+        self.cadence_row.set_subtitle("Scanning for speed/cadence devices…")
+
+        GLib.idle_add(self.cycling_speed_spinner.start)
+        self.cycling_speed_row.set_subtitle("Scanning for speed/cadence devices…")
+
+        GLib.idle_add(self.cycling_cadence_spinner.start)
+        self.cycling_cadence_row.set_subtitle("Scanning for speed/cadence devices…")
+
         async def _scan():
             devices = await discover_speed_cadence_devices(scan_timeout=5.0)
             mapping = {d.name: d.address for d in devices if d.name}
@@ -521,13 +784,27 @@ class SettingsPageUI:
             def _apply():
                 self.speed_spinner.stop()
                 self.speed_row.set_subtitle("" if names else "No speed devices found")
+
+                self.cycling_speed_spinner.stop()
+                self.cycling_speed_row.set_subtitle("" if names else "No speed devices found")
+
                 self._combo_set_items_with_none(self.speed_combo, names, self.app.speed_name)
+                self._combo_set_items_with_none(
+                    self.cycling_speed_combo, names, self.app.cycling_speed_name
+                )
                 self.speed_map = mapping
 
                 # Cadence
                 self.cadence_spinner.stop()
                 self.cadence_row.set_subtitle("" if names else "No cadence devices found")
+
+                self.cycling_cadence_spinner.stop()
+                self.cycling_cadence_row.set_subtitle("" if names else "No cadence devices found")
+
                 self._combo_set_items_with_none(self.cadence_combo, names, self.app.cadence_name)
+                self._combo_set_items_with_none(
+                    self.cycling_cadence_combo, names, self.app.cycling_cadence_name
+                )
                 self.cadence_map = mapping
 
             GLib.idle_add(_apply)
@@ -538,6 +815,9 @@ class SettingsPageUI:
         GLib.idle_add(self.power_spinner.start)
         self.power_row.set_subtitle("Scanning for power devices…")
 
+        GLib.idle_add(self.cycling_power_spinner.start)
+        self.cycling_power_row.set_subtitle("Scanning for power devices…")
+
         async def _scan():
             devices = await discover_power_devices(scan_timeout=5.0)
             mapping = {d.name: d.address for d in devices if d.name}
@@ -546,8 +826,93 @@ class SettingsPageUI:
             def _apply():
                 self.power_spinner.stop()
                 self.power_row.set_subtitle("" if names else "No power devices found")
+
+                self.cycling_power_spinner.stop()
+                self.cycling_power_row.set_subtitle("" if names else "No power devices found")
+
                 self._combo_set_items_with_none(self.power_combo, names, self.app.power_name)
+                self._combo_set_items_with_none(
+                    self.cycling_power_combo, names, self.app.cycling_power_name
+                )
                 self.power_map = mapping
+
+            GLib.idle_add(_apply)
+
+        asyncio.run(_scan())
+
+    def _fill_devices_trainer_hr(self):
+        GLib.idle_add(self.trainer_cycling_hr_spinner.start)
+        GLib.idle_add(self.trainer_cycling_hr_row.set_subtitle, "Scanning for HRM…")
+        GLib.idle_add(self.trainer_running_hr_spinner.start)
+        GLib.idle_add(self.trainer_running_hr_row.set_subtitle, "Scanning for HRM…")
+
+        async def _scan():
+            devices = await BleakScanner.discover(
+                timeout=5.0,
+                service_uuids=[HEART_RATE_SERVICE_UUID],
+            )
+            mapping = {d.name: d.address for d in devices if d.name}
+            names = sorted(mapping.keys())
+
+            def _apply():
+                # Cycling HRM
+                self.trainer_cycling_hr_spinner.stop()
+                self.trainer_cycling_hr_row.set_subtitle("" if names else "No HRM found")
+                self._combo_set_items_with_none(
+                    self.trainer_cycling_hr_combo,
+                    names,
+                    self.app.trainer_cycling_hr_name,
+                )
+                self.trainer_cycling_hr_map = mapping
+
+                # Running HRM
+                self.trainer_running_hr_spinner.stop()
+                self.trainer_running_hr_row.set_subtitle("" if names else "No HRM found")
+                self._combo_set_items_with_none(
+                    self.trainer_running_hr_combo,
+                    names,
+                    self.app.trainer_running_hr_name,
+                )
+                self.trainer_running_hr_map = mapping
+
+            GLib.idle_add(_apply)
+
+        asyncio.run(_scan())
+
+    def _fill_devices_trainer(self):
+        GLib.idle_add(self.trainer_running_spinner.start)
+        GLib.idle_add(self.trainer_cycling_spinner.start)
+        GLib.idle_add(self.trainer_running_row.set_subtitle, "Scanning for FTMS trainers…")
+        GLib.idle_add(self.trainer_cycling_row.set_subtitle, "Scanning for FTMS trainers…")
+
+        async def _scan():
+            found = await discover_ftms_devices(scan_timeout=5.0)
+            logger.debug(f"Found FTMS devices: {found}")
+
+            mapping = {}
+            for dev, mtype in found:
+                name = getattr(dev, "name", None) or "(unnamed)"
+                addr = getattr(dev, "address", None) or ""
+                mt = mtype if mtype is not None else ""
+                disp = f"{name} [{addr}]"
+                logger.debug(f"Mapping trainer: {disp} -> {addr} ({mt})")
+                mapping[disp] = {"address": addr, "machine_type": mt}
+
+            names = sorted(mapping.keys())
+
+            def _apply():
+                self.trainer_running_spinner.stop()
+                self.trainer_running_row.set_subtitle("" if names else "No FTMS trainers found")
+                self.trainer_cycling_spinner.stop()
+                self.trainer_cycling_row.set_subtitle("" if names else "No FTMS trainers found")
+
+                self._combo_set_items_with_none(
+                    self.trainer_running_combo, names, self.app.trainer_running_name
+                )
+                self._combo_set_items_with_none(
+                    self.trainer_cycling_combo, names, self.app.trainer_cycling_name
+                )
+                self.trainer_map = mapping
 
             GLib.idle_add(_apply)
 
@@ -666,8 +1031,11 @@ class SettingsPageUI:
         if not self.icu_id_entry or not self.icu_key_entry or not self.btn_fetch_icu:
             return
 
-        out_dir = self.app.workouts_running_dir / "intervals_icu"
-        out_dir.mkdir(parents=True, exist_ok=True)
+        out_dir_running = self.app.workouts_running_dir / "intervals_icu"
+        out_dir_running.mkdir(parents=True, exist_ok=True)
+
+        out_dir_cycling = self.app.workouts_cycling_dir / "intervals_icu"
+        out_dir_cycling.mkdir(parents=True, exist_ok=True)
 
         aid = (self.icu_id_entry.get_text() or "").strip()
         key = (self.icu_key_entry.get_text() or "").strip()
@@ -688,7 +1056,8 @@ class SettingsPageUI:
                 today = datetime.datetime.now(tz=datetime.UTC).date()
                 start, end = (today, today + datetime.timedelta(days=6))
 
-                provider.fetch_between("running", start, end, out_dir)
+                provider.fetch_between("running", start, end, out_dir_running)
+                provider.fetch_between("cycling", start, end, out_dir_cycling)
 
                 # simply refresh the existing list
                 GLib.idle_add(self.app.tracker.mode_view.refresh)
@@ -705,6 +1074,7 @@ class SettingsPageUI:
     def _on_save_settings(self, _button):
         self.app.database_dsn = self.dsn_entry.get_text()
 
+        # Running sensors
         # HR
         selected = self.hr_combo.get_active_text() or ""
         if selected == NONE_LABEL or not selected:
@@ -741,6 +1111,44 @@ class SettingsPageUI:
             self.app.power_name = selected
             self.app.power_address = self.power_map.get(selected, "")
 
+        # Cycling sensors
+        # HR
+        selected = self.cycling_hr_combo.get_active_text() or ""
+        if selected == NONE_LABEL or not selected:
+            self.app.cycling_hr_name = ""
+            self.app.cycling_hr_address = ""
+        else:
+            self.app.cycling_hr_name = selected
+            self.app.cycling_hr_address = self.hr_map.get(selected, "")
+
+        # Speed
+        selected = self.cycling_speed_combo.get_active_text() or ""
+        if selected == NONE_LABEL or not selected:
+            self.app.cycling_speed_name = ""
+            self.app.cycling_speed_address = ""
+        else:
+            self.app.cycling_speed_name = selected
+            self.app.cycling_speed_address = self.speed_map.get(selected, "")
+
+        # Cadence
+        selected = self.cycling_cadence_combo.get_active_text() or ""
+        if selected == NONE_LABEL or not selected:
+            self.app.cycling_cadence_name = ""
+            self.app.cycling_cadence_address = ""
+        else:
+            self.app.cycling_cadence_name = selected
+            self.app.cycling_cadence_address = self.cadence_map.get(selected, "")
+
+        # Power
+        selected = self.cycling_power_combo.get_active_text() or ""
+        if selected == NONE_LABEL or not selected:
+            self.app.cycling_power_name = ""
+            self.app.cycling_power_address = ""
+        else:
+            self.app.cycling_power_name = selected
+            self.app.cycling_power_address = self.power_map.get(selected, "")
+
+
         # Pebble
         self.app.pebble_enable = (
             self.pebble_enable_row.get_active() if self.pebble_enable_row else False
@@ -765,6 +1173,52 @@ class SettingsPageUI:
         self.app.icu_athlete_id = self.icu_id_entry.get_text().strip() if self.icu_id_entry else ""
         self.app.icu_api_key = self.icu_key_entry.get_text().strip() if self.icu_key_entry else ""
 
+        # Trainer running
+        if self.trainer_running_combo:
+            selected = self.trainer_running_combo.get_active_text() or ""
+            if selected == NONE_LABEL or not selected:
+                self.app.trainer_running_name = ""
+                self.app.trainer_running_address = ""
+                self.app.trainer_running_machine_type = None
+            else:
+                self.app.trainer_running_name = selected
+                trainer_info = self.trainer_map.get(selected, {})
+                self.app.trainer_running_address = trainer_info.get("address", "")
+                self.app.trainer_running_machine_type = trainer_info.get("machine_type", None)
+
+        # Trainer Running HRM
+        if self.trainer_running_hr_combo:
+            sel = self.trainer_running_hr_combo.get_active_text() or ""
+            if sel == NONE_LABEL or not sel:
+                self.app.trainer_running_hr_name = ""
+                self.app.trainer_running_hr_address = ""
+            else:
+                self.app.trainer_running_hr_name = sel
+                self.app.trainer_running_hr_address = self.trainer_running_hr_map.get(sel, "")
+
+        # Trainer cycling
+        if self.trainer_cycling_combo:
+            selected = self.trainer_cycling_combo.get_active_text() or ""
+            if selected == NONE_LABEL or not selected:
+                self.app.trainer_cycling_name = ""
+                self.app.trainer_cycling_address = ""
+                self.app.trainer_cycling_machine_type = None
+            else:
+                self.app.trainer_cycling_name = selected
+                trainer_info = self.trainer_map.get(selected, {})
+                self.app.trainer_cycling_address = trainer_info.get("address", "")
+                self.app.trainer_cycling_machine_type = trainer_info.get("machine_type", None)
+
+        # Trainer Cycling HRM
+        if self.trainer_cycling_hr_combo:
+            sel = self.trainer_cycling_hr_combo.get_active_text() or ""
+            if sel == NONE_LABEL or not sel:
+                self.app.trainer_cycling_hr_name = ""
+                self.app.trainer_cycling_hr_address = ""
+            else:
+                self.app.trainer_cycling_hr_name = sel
+                self.app.trainer_cycling_hr_address = self.trainer_cycling_hr_map.get(sel, "")
+
         cfg = ConfigParser()
         cfg["server"] = {"database_dsn": self.app.database_dsn}
         cfg["sensors_running"] = {
@@ -776,6 +1230,40 @@ class SettingsPageUI:
             "cadence_address": self.app.cadence_address,
             "power_name": self.app.power_name,
             "power_address": self.app.power_address,
+        }
+        cfg["sensors_cycling"] = {
+            "hr_name": self.app.cycling_hr_name,
+            "hr_address": self.app.cycling_hr_address,
+            "speed_name": self.app.cycling_speed_name,
+            "speed_address": self.app.cycling_speed_address,
+            "cadence_name": self.app.cycling_cadence_name,
+            "cadence_address": self.app.cycling_cadence_address,
+            "power_name": self.app.cycling_power_name,
+            "power_address": self.app.cycling_power_address,
+        }
+
+        # Keep the HR fields here separate as most trainer dont have built in HR proxy support
+        cfg_trainer_running_machine_type: str = (
+            str(self.app.trainer_running_machine_type.value) if self.app.trainer_running_machine_type
+            else ""
+        )
+        cfg["sensors_trainer_running"] = {
+            "hr_name": str(self.app.trainer_running_hr_name or ""),
+            "hr_address": str(self.app.trainer_running_hr_address or ""),
+            "trainer_name": str(self.app.trainer_running_name or ""),
+            "trainer_address": str(self.app.trainer_running_address or ""),
+            "trainer_machine_type": cfg_trainer_running_machine_type,
+        }
+        cfg_trainer_cycling_machine_type: str = (
+            str(self.app.trainer_cycling_machine_type.value) if self.app.trainer_cycling_machine_type
+            else ""
+        )
+        cfg["sensors_trainer_cycling"] = {
+            "hr_name": str(self.app.trainer_cycling_hr_name or ""),
+            "hr_address": str(self.app.trainer_cycling_hr_address or ""),
+            "trainer_name": str(self.app.trainer_cycling_name or ""),
+            "trainer_address": str(self.app.trainer_cycling_address or ""),
+            "trainer_machine_type": cfg_trainer_cycling_machine_type,
         }
 
         cfg["pebble"] = {

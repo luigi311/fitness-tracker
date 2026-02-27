@@ -85,7 +85,8 @@ class TrackerPageUI:
 
         self.mode_view = ModeSelectView(
             workouts_running_dir=self.app.workouts_running_dir,
-            on_start_free_run=self._show_free_run_page,
+            workouts_cycling_dir=self.app.workouts_cycling_dir,
+            on_start_free=self._show_free_from_mode,
             on_start_workout=self._start_workout_from_path,
         )
         self.mode_page = Adw.NavigationPage.new(self.mode_view, "Choose Activity")
@@ -98,12 +99,15 @@ class TrackerPageUI:
         return self.nav
 
     # ---- mode callbacks
-    def _start_workout_from_path(self, path: Path) -> None:
+    def _start_workout_from_path(self, path: Path, kind: str, trainer: bool = False) -> None:
         w = load_workout(path)
         self._workout = w if w.steps else None
         self._workout_path = path
         self._manual_offset_s = 0.0
-        self._show_workout_page()
+        self._show_workout_page(kind=kind, trainer=trainer)
+
+    def _show_free_from_mode(self, mode: str, trainer: bool = False) -> None:
+        self._show_free_run_page(kind=mode, trainer=trainer)
 
     def _tick_timer(self) -> bool:
         """
@@ -137,7 +141,10 @@ class TrackerPageUI:
     # -------------------------
     #  Page show / run control
     # -------------------------
-    def _show_free_run_page(self) -> None:
+    def _show_free_run_page(self, kind: str = "running", trainer: bool = False) -> None:
+        # Reconfigure recorder for this activity *before* preview/status updates.
+        self.app.apply_sensor_settings(profile=kind, trainer=trainer)
+
         if self.app.pebble_bridge:
             self.app.pebble_bridge.update(tgt_kind=TGT_NONE)
 
@@ -146,7 +153,7 @@ class TrackerPageUI:
         self._running = False
         self._reset_buffers()
 
-        self.free_view = FreeRunView(self.app)
+        self.free_view = FreeRunView(self.app, kind=kind)
         # Stop always works
         self.free_view.btn_stop.connect("clicked", lambda *_: self._stop_run_and_back())
         # Start may or may not exist depending on your FreeRunView version
@@ -154,7 +161,8 @@ class TrackerPageUI:
         if btn_start:
             btn_start.connect("clicked", lambda *_: self._begin_run_now())
 
-        self._push(self.free_view, "Free Run")
+        title = "Free Ride" if kind == "cycle" else "Free Run"
+        self._push(self.free_view, title)
         # initial statuses & preview values
         self.update_metric_statuses()
         self._update_free_preview_timer_and_cards()
@@ -167,7 +175,10 @@ class TrackerPageUI:
             self._hrsim_bpm = float(self.app.resting_hr or 60)
             self._test_source = GLib.timeout_add(1000, self._tick_test)
 
-    def _show_workout_page(self) -> None:
+    def _show_workout_page(self, kind: str = "running", trainer: bool = False) -> None:
+        # Reconfigure recorder for this activity *before* preview/status updates.
+        self.app.apply_sensor_settings(profile=kind, trainer=trainer)
+
         self._armed = True
         self._running = False
         self._reset_buffers()
@@ -175,6 +186,7 @@ class TrackerPageUI:
         raw = self._workout_path.stem if self._workout_path else "Workout"
         nice = pretty_workout_name(raw)
         self.workout_view = WorkoutView(
+            kind=kind,
             title=nice,
             on_prev=lambda: self._skip_step(-1),
             on_next=lambda: self._skip_step(+1),
@@ -272,7 +284,7 @@ class TrackerPageUI:
         watts = self._current_power_for_time(delta_ms)
         self._push_sample(delta_ms, bpm, watts)
 
-    def on_running(self, delta_ms, speed_mps, cadence_spm, distance_m, power_watts):
+    def on_sample(self, delta_ms, speed_mps, cadence_spm, distance_m, power_watts):
         mph = speed_mps * 2.23693629
         dist_mi = (distance_m or 0.0) * 0.00062137119
         pace_str = self._pace_from_mph(mph) if mph > 0.01 else "0:00"
@@ -464,7 +476,8 @@ class TrackerPageUI:
             self._active_step_index = -1
             self._manual_offset_s = 0.0
             # Swap UI to free-run (keep recording, timer, charts alive)
-            self.free_view = FreeRunView(self.app)
+            kind = self.workout_view.kind if self.workout_view else "running"
+            self.free_view = FreeRunView(self.app, kind=kind)
             self.free_view.btn_stop.connect("clicked", lambda *_: self._stop_run_and_back())
             # Replace the top page: pop workout, push free-run
             if self.nav:
@@ -694,18 +707,23 @@ class TrackerPageUI:
     def update_metric_statuses(self) -> None:
         rec = self.app.recorder if self.app.recorder else None
         if self.app.test_mode or not rec:
-            hr_ok = speed_ok = cad_ok = pow_ok = True
+            hr_ok = speed_ok = cad_ok = pow_ok = dist_ok = True
         else:
             hr_ok = bool(rec.hr_connected)
             speed_ok = bool(rec.speed_connected)
             cad_ok = bool(rec.cadence_connected)
             pow_ok = bool(rec.power_connected)
+            dist_ok = bool(rec.distance_connected)
 
         if self.free_view and hasattr(self.free_view, "set_statuses"):
-            self.free_view.set_statuses(hr_ok, speed_ok, cad_ok, pow_ok)
+            self.free_view.set_statuses(hr_ok, speed_ok, cad_ok, pow_ok, dist_ok)
         if self.workout_view:
             self.workout_view.set_statuses(
-                hr_ok=hr_ok, cad_ok=cad_ok, spd_ok=speed_ok, pow_ok=pow_ok
+                hr_ok=hr_ok,
+                cad_ok=cad_ok,
+                spd_ok=speed_ok,
+                pow_ok=pow_ok,
+                dist_ok=dist_ok,
             )
 
     def _tick_status(self) -> bool:

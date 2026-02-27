@@ -335,12 +335,12 @@ class WorkoutView(Gtk.Box):
       - Prev / Next / Start / Stop with large touch targets.
     """
 
-    def __init__(self, *, title: str, on_prev, on_next, on_stop, on_start_record) -> None:
+    def __init__(self, *, kind: str, title: str, on_prev, on_next, on_stop, on_start_record) -> None:
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        self.kind = kind
+
         for m in ("top", "bottom", "start", "end"):
             getattr(self, f"set_margin_{m}")(12)
-
-        self.type = "run"
 
         clamp = Adw.Clamp(maximum_size=820, tightening_threshold=680)
         self.append(clamp)
@@ -531,7 +531,7 @@ class WorkoutView(Gtk.Box):
             self.card_pace.set_value(pace)
         if cadence_spm is not None:
             # Running is double the cadence
-            out = int(cadence_spm * 2) if self.type == "run" else int(cadence_spm)
+            out = int(cadence_spm * 2) if self.kind == "running" else int(cadence_spm)
             self.card_cad.set_value(str(out))
         if speed_mph is not None:
             self.card_spd.set_value(f"{float(speed_mph):.1f}")
@@ -540,7 +540,7 @@ class WorkoutView(Gtk.Box):
         if power_watts is not None:
             self.card_pwr.set_value(str(int(power_watts)))
 
-    def set_statuses(self, *, hr_ok: bool, cad_ok: bool, spd_ok: bool, pow_ok: bool) -> None:
+    def set_statuses(self, *, hr_ok: bool, cad_ok: bool, spd_ok: bool, pow_ok: bool, dist_ok: bool) -> None:
         self.card_hr.set_connected(hr_ok)
         # pace/power card dot represents the active target domain:
         # if power is the workout driver, use pow_ok; else use spd_ok
@@ -548,7 +548,7 @@ class WorkoutView(Gtk.Box):
         self.card_pace.set_connected(spd_ok)
         self.card_cad.set_connected(cad_ok)
         self.card_spd.set_connected(spd_ok)
-        self.card_dst.set_connected(True)
+        self.card_dst.set_connected(dist_ok)
         self.card_pwr.set_connected(pow_ok)
 
     # -------- Gauge helpers (power) --------

@@ -202,7 +202,8 @@ static GFont pick_font_value(int h, bool is_hero, bool in_focus) {
 // Convert [0..1] to trig angle between [start..end]
 // Pebble angles: 0=12 o'clock, 90=3 o'clock, 180=6 o'clock, 270=9 o'clock (clockwise positive)
 static int32_t angle_of_frac(int32_t start, int32_t end, float t) {
-  if (t < 0) t = 0; if (t > 1) t = 1;
+  if (t < 0) t = 0;
+  if (t > 1) t = 1;
   return start + (int32_t)((end - start) * t);
 }
 
@@ -299,8 +300,10 @@ static void gauge_update_proc(Layer *layer, GContext *ctx) {
   // Target band arc (green)
   float t0 = (lo - dmin) / (dmax - dmin);
   float t1 = (hi - dmin) / (dmax - dmin);
-  if (t0 < 0) t0 = 0; if (t0 > 1) t0 = 1;
-  if (t1 < 0) t1 = 0; if (t1 > 1) t1 = 1;
+  if (t0 < 0) t0 = 0;
+  if (t0 > 1) t0 = 1;
+  if (t1 < 0) t1 = 0;
+  if (t1 > 1) t1 = 1;
   int32_t ang0 = angle_of_frac(A0, A1, t0);
   int32_t ang1 = angle_of_frac(A0, A1, t1);
   graphics_context_set_fill_color(ctx, GColorIslamicGreen);
@@ -323,7 +326,8 @@ static void gauge_update_proc(Layer *layer, GContext *ctx) {
   // Needle
   float cur = current_value_for_kind();
   float tv = (cur - dmin) / (dmax - dmin);
-  if (tv < 0) tv = 0; if (tv > 1) tv = 1;
+  if (tv < 0) tv = 0;
+  if (tv > 1) tv = 1;
   int32_t ang = trig_from_clock(angle_of_frac(A0, A1, tv));
 
   // Needle color
@@ -788,7 +792,8 @@ static void underbar_update_proc(Layer *layer, GContext *ctx) {
 
   float cur = current_value_for_kind();
   float t = (cur - dmin) / (dmax - dmin);
-  if (t < 0) t = 0; if (t > 1) t = 1;
+  if (t < 0) t = 0;
+  if (t > 1) t = 1;
 
 #ifdef PBL_COLOR
   graphics_context_set_fill_color(ctx, zone_color());

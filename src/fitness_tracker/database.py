@@ -33,6 +33,7 @@ class Activity(Base):
 
     heart_rates = relationship("HeartRate", back_populates="activity")
     running_metrics = relationship("RunningMetrics", backref="activity")
+    cycling_metrics = relationship("CyclingMetrics", backref="activity")
 
 
 class HeartRate(Base):
@@ -72,6 +73,24 @@ class RunningMetrics(Base):
     __table_args__ = (
         Index("ix_run_activity_id", "activity_id"),
         Index("ix_run_activity_time", "activity_id", "timestamp_ms"),
+    )
+
+
+class CyclingMetrics(Base):
+    __tablename__ = "cycling_metrics"
+
+    id = Column(Integer, primary_key=True)
+    activity_id = Column(Integer, ForeignKey("activities.id"), nullable=False)
+    timestamp_ms = Column(BigInteger, nullable=False)
+
+    speed_mps = Column(Float, nullable=False)
+    cadence_rpm = Column(Integer)
+    total_distance_m = Column(Float)
+    power_watts = Column(Float)
+
+    __table_args__ = (
+        Index("ix_cyc_activity_id", "activity_id"),
+        Index("ix_cyc_activity_time", "activity_id", "timestamp_ms"),
     )
 
 
@@ -128,6 +147,7 @@ class DatabaseManager:
         # staging area for batching
         self._pending_hr: list[HeartRate] = []
         self._pending_run: list[RunningMetrics] = []
+        self._pending_cyc: list[CyclingMetrics] = []
 
     def start_activity(self) -> int:
         with self.Session() as session:
@@ -264,17 +284,40 @@ class DatabaseManager:
         if len(self._pending_run) >= self.BATCH_SIZE:
             self._flush_pending()
 
+    def insert_cycling_metrics(
+        self,
+        activity_id: int,
+        timestamp_ms: int,
+        speed_mps: float,
+        cadence_rpm: int | None,
+        total_distance_m: float | None,
+        power_watts: float | None,
+    ) -> None:
+        cm = CyclingMetrics(
+            activity_id=activity_id,
+            timestamp_ms=timestamp_ms,
+            speed_mps=speed_mps,
+            cadence_rpm=cadence_rpm,
+            total_distance_m=total_distance_m,
+            power_watts=power_watts,
+        )
+        self._pending_cyc.append(cm)
+        if len(self._pending_cyc) >= self.BATCH_SIZE:
+            self._flush_pending()
+
     def _flush_pending(self):
-        if not self._pending_hr and not self._pending_run:
-            return
         with self.Session() as session:
             if self._pending_hr:
                 session.add_all(self._pending_hr)
             if self._pending_run:
                 session.add_all(self._pending_run)
+            if self._pending_cyc:
+                session.add_all(self._pending_cyc)
             session.commit()
+
         self._pending_hr.clear()
         self._pending_run.clear()
+        self._pending_cyc.clear()
 
     def sync_to_database(self, database_dsn: str):
         self._flush_pending()
@@ -357,6 +400,29 @@ class DatabaseManager:
                             ],
                         )
 
+                    # Cycling rows
+                    cycls = (
+                        local.query(CyclingMetrics)
+                        .filter_by(activity_id=act.id)
+                        .order_by(CyclingMetrics.timestamp_ms)
+                        .all()
+                    )
+                    if cycls:
+                        remote.bulk_insert_mappings(
+                            CyclingMetrics,
+                            [
+                                {
+                                    "activity_id": new_act.id,
+                                    "timestamp_ms": c.timestamp_ms,
+                                    "speed_mps": c.speed_mps,
+                                    "cadence_rpm": c.cadence_rpm,
+                                    "total_distance_m": c.total_distance_m,
+                                    "power_watts": c.power_watts,
+                                }
+                                for c in cycls
+                            ],
+                        )
+
             batch = []
             for act in (
                 local.query(Activity).order_by(Activity.start_time).yield_per(SYNC_BATCH_SIZE)
@@ -426,6 +492,28 @@ class DatabaseManager:
                                     "power_watts": r.power_watts,
                                 }
                                 for r in runs
+                            ],
+                        )
+
+                    cycls = (
+                        remote.query(CyclingMetrics)
+                        .filter_by(activity_id=act.id)
+                        .order_by(CyclingMetrics.timestamp_ms)
+                        .all()
+                    )
+                    if cycls:
+                        local.bulk_insert_mappings(
+                            CyclingMetrics,
+                            [
+                                {
+                                    "activity_id": new_act.id,
+                                    "timestamp_ms": c.timestamp_ms,
+                                    "speed_mps": c.speed_mps,
+                                    "cadence_rpm": c.cadence_rpm,
+                                    "total_distance_m": c.total_distance_m,
+                                    "power_watts": c.power_watts,
+                                }
+                                for c in cycls
                             ],
                         )
 
