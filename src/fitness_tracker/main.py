@@ -1,11 +1,52 @@
 import argparse
+import json
 import signal
 import sys
+from dataclasses import asdict, is_dataclass
+from enum import Enum
 
 from gi.repository import GLib
 from loguru import logger
+from loguru._defaults import LOGURU_FORMAT
 
 from fitness_tracker.ui import FitnessAppUI
+
+
+def _json_default(o):
+    # dataclasses
+    if is_dataclass(o):
+        return asdict(o)
+    # enums
+    if isinstance(o, Enum):
+        return o.value  # or o.name
+    # anything else: fallback to string
+    return str(o)
+
+def formatter(record) -> str:
+    def_format = (
+        "{time:YYYY-MM-DD HH:mm:ss.SSS} | "
+        "{level: <8} | "
+        "{name}:{function}:{line} - "
+        "{message}"
+    )
+
+    base = def_format.format_map(record)
+    data = record["extra"].get("data", "")
+
+    if isinstance(data, dict) or hasattr(data, "__dataclass_fields__"):
+        data_str = json.dumps(data, indent=4, default=_json_default)
+        lines = [line.rstrip() for line in data_str.splitlines()]
+        lines.insert(0, "")
+    elif isinstance(data, list):
+        lines = [f"{item}" for item in data]
+        lines.insert(0, "")
+    else:
+        lines = [str(data)]
+
+    indent = "\n  " + (" " * (len(base.replace(record["message"], "").strip()) + 1))
+
+    record["extra"]["formatted_data"] = indent.join(lines)
+    return LOGURU_FORMAT + "{extra[formatted_data]}\n{exception}"
 
 
 def configure_logger(debug_level: str = "INFO") -> None:
@@ -14,6 +55,7 @@ def configure_logger(debug_level: str = "INFO") -> None:
 
     # Choose log level based on environment
     # If in debug mode with a "debug" level, use DEBUG; otherwise, default to INFO.
+    debug_level = debug_level.upper()
 
     if debug_level not in ["INFO", "DEBUG", "TRACE"]:
         logger.add(sys.stdout)
@@ -21,7 +63,7 @@ def configure_logger(debug_level: str = "INFO") -> None:
         raise ValueError(msg)
 
     # Add a sink for file logging and the console.
-    logger.add(sys.stdout, level=debug_level)
+    logger.add(sys.stdout, level=debug_level, format=formatter)
 
 
 def main():

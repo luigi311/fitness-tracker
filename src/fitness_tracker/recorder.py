@@ -175,6 +175,8 @@ class Recorder:
         if not self.on_sample:
             return
 
+        logger.bind(data=sample).trace("Handling running sample")
+
         t_ms = int(sample.timestamp * 1000.0)
         if self._start_ms is None:
             self._start_ms = t_ms
@@ -214,17 +216,29 @@ class Recorder:
         if not self.on_sample:
             return
 
-        logger.trace(f"Handling trainer sample: {sample}")
+        logger.bind(data=sample).trace("Handling trainer sample")
 
         t_ms = int(sample.timestamp * 1000.0)
         if self._start_ms is None:
             self._start_ms = t_ms
         delta_ms = t_ms - self._start_ms
 
-        speed_mps = float(sample.speed_mps or 0.0)
+        speed_mps = float(sample.speed_kmh or 0.0) / 3.6  # Convert km/h to m/s
         cadence = int(sample.cadence_rpm or 0)
         dist_m = sample.distance_m
         watts = float(sample.power_watts) if sample.power_watts is not None else None
+
+        if (
+            sample.target_power is not None
+            and self._pending_erg_watts is None
+            and self._erg_applied_watts != sample.target_power
+        ):
+            logger.debug(
+                f"Trainer target power {sample.target_power} watts differs from applied {self._erg_applied_watts} watts, scheduling update"
+            )
+            self._pending_erg_watts = sample.target_power
+            if not self.test_mode:
+                self._ensure_erg_retry_loop()
 
         # Adjust distance by baseline if needed
         if self._recording:
@@ -461,12 +475,12 @@ class Recorder:
 
             if mux and mux.is_connected:
                 try:
-                    await mux.set_target_power(target)
+                    result = await mux.set_target_power(target)
                     # Only clear the pending value if it wasn't updated
                     # while the await was in-flight.
-                    if self._pending_erg_watts == target:
+                    if self._pending_erg_watts == result:
                         self._pending_erg_watts = None
-                        self._erg_applied_watts = target
+                        self._erg_applied_watts = result
 
                         return
 

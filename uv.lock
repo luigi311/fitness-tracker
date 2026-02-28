@@ -73,7 +73,7 @@ wheels = [
 [[package]]
 name = "bleaksport"
 version = "0.3.0"
-source = { git = "https://github.com/luigi311/bleaksport?branch=main#6f1aff4d237b1e3818e3552ac46f85b3ba30ad34" }
+source = { git = "https://github.com/luigi311/bleaksport?branch=main#4274c428ae9b8c176c665592225d0acf782404fd" }
 dependencies = [
     { name = "bleak" },
     { name = "loguru" },
