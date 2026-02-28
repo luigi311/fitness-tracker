@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+from enum import Enum
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import (
@@ -21,6 +22,15 @@ from sqlalchemy.orm import declarative_base, relationship, sessionmaker
 Base = declarative_base()
 
 
+class SportTypesEnum(Enum):
+    """Sport type IDs."""
+
+    running = 1
+    biking = 2
+
+    unknown = 99
+
+
 class Activity(Base):
     __tablename__ = "activities"
     id = Column(Integer, primary_key=True)
@@ -34,6 +44,18 @@ class Activity(Base):
     heart_rates = relationship("HeartRate", back_populates="activity")
     running_metrics = relationship("RunningMetrics", backref="activity")
     cycling_metrics = relationship("CyclingMetrics", backref="activity")
+
+
+class ActivitySport(Base):
+    """Table to link activities to sport types, so we can easily query/filter by sport."""
+
+    __tablename__ = "activity_sport"
+    id = Column(Integer, primary_key=True)
+    activity_id = Column(Integer, ForeignKey("activities.id", ondelete="CASCADE"), nullable=False)
+    sport_type_id = Column(Integer, nullable=False)
+
+    # ensure one row per activity (enforce 1:1 relationship)
+    __table_args__ = (UniqueConstraint("activity_id", name="uq_activity_sport_activity_id"),)
 
 
 class HeartRate(Base):
@@ -149,12 +171,18 @@ class DatabaseManager:
         self._pending_run: list[RunningMetrics] = []
         self._pending_cyc: list[CyclingMetrics] = []
 
-    def start_activity(self) -> int:
+    def start_activity(self, sport_type: SportTypesEnum) -> int:
         with self.Session() as session:
             # store UTC with tzinfo
             act = Activity(start_time=datetime.now(tz=ZoneInfo("UTC")))
             session.add(act)
+            session.flush()  # get act.id populated
+
+            # link activity to sport type
+            sport_activity = ActivitySport(activity_id=act.id, sport_type_id=sport_type.value)
+            session.add(sport_activity)
             session.commit()
+
             return int(act.id)
 
     def stop_activity(self, activity_id: int) -> None:

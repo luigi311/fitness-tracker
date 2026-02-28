@@ -8,7 +8,13 @@ import requests
 from loguru import logger
 from requests.auth import HTTPBasicAuth
 
-from fitness_tracker.database import CyclingMetrics, HeartRate, RunningMetrics
+from fitness_tracker.database import (
+    ActivitySport,
+    CyclingMetrics,
+    HeartRate,
+    RunningMetrics,
+    SportTypesEnum,
+)
 from fitness_tracker.exporters import activity_to_tcx, infer_sport
 
 if TYPE_CHECKING:
@@ -72,9 +78,14 @@ class IntervalsICUUploader:
                     .order_by(CyclingMetrics.timestamp_ms)
                     .all()
                 )
+                sport_type = session.query(ActivitySport).filter_by(activity_id=a.id).first()
                 try:
-                    sport = infer_sport(runs, cycles, hrs, a.id)
-                    if sport == "Unknown":
+                    sport_type = (
+                        SportTypesEnum(sport_type.sport_type_id)
+                        if sport_type
+                        else infer_sport(hrs, runs, cycles, a.id)
+                    )
+                    if sport_type == SportTypesEnum.unknown:
                         continue
 
                     tcx = activity_to_tcx(
@@ -82,11 +93,11 @@ class IntervalsICUUploader:
                         heart_rates=hrs,
                         running=runs,
                         cycling=cycles,
-                        sport=sport,
+                        sport_type=sport_type,
                     )
                     # Simple content hash (helps our own dedupe/debug)
                     phash = sha256(tcx).hexdigest()
-                    prefix = "Run" if sport == "Running" else "Ride"
+                    prefix = "Run" if sport_type == SportTypesEnum.running else "Ride"
                     name = a.start_time.astimezone().strftime(f"{prefix}_%Y-%m-%d_%H-%M")
                     resp = self._upload_tcx_bytes(name, tcx)
 

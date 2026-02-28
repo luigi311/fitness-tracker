@@ -4,8 +4,10 @@ import math
 
 import gi
 
+from fitness_tracker.database import SportTypesEnum
+
 gi.require_versions({"Gtk": "4.0", "Adw": "1"})
-from gi.repository import Gtk, Adw, Gdk, Pango, PangoCairo
+from gi.repository import Adw, Gdk, Gtk, Pango, PangoCairo
 
 
 # --------- TargetGauge: semi-circle with target band + needle --------- #
@@ -335,9 +337,9 @@ class WorkoutView(Gtk.Box):
       - Prev / Next / Start / Stop with large touch targets.
     """
 
-    def __init__(self, *, kind: str, title: str, on_prev, on_next, on_stop, on_start_record) -> None:
+    def __init__(self, *, sport_type: SportTypesEnum, title: str, on_prev, on_next, on_stop, on_start_record) -> None:
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=6)
-        self.kind = kind
+        self.sport_type = sport_type
 
         for m in ("top", "bottom", "start", "end"):
             getattr(self, f"set_margin_{m}")(12)
@@ -531,7 +533,7 @@ class WorkoutView(Gtk.Box):
             self.card_pace.set_value(pace)
         if cadence_spm is not None:
             # Running is double the cadence
-            out = int(cadence_spm * 2) if self.kind == "running" else int(cadence_spm)
+            out = int(cadence_spm * 2) if self.sport_type == SportTypesEnum.running else int(cadence_spm)
             self.card_cad.set_value(str(out))
         if speed_mph is not None:
             self.card_spd.set_value(f"{float(speed_mph):.1f}")

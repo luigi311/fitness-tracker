@@ -13,12 +13,18 @@ from matplotlib.backends.backend_gtk4agg import FigureCanvasGTK4Agg as FigureCan
 from matplotlib.figure import Figure
 from matplotlib.ticker import FuncFormatter
 
-from fitness_tracker.database import Activity, CyclingMetrics, HeartRate, RunningMetrics
+from fitness_tracker.database import (
+    Activity,
+    ActivitySport,
+    CyclingMetrics,
+    HeartRate,
+    RunningMetrics,
+    SportTypesEnum,
+)
 from fitness_tracker.exporters import activity_to_tcx, infer_sport
 
 gi.require_versions({"Gtk": "4.0", "Adw": "1"})
-from gi.repository import GLib, Gtk, Adw, Gio  # noqa: E402
-
+from gi.repository import Adw, Gio, GLib, Gtk  # noqa: E402
 
 # ---------- Helpers / small data structures ----------
 
@@ -26,7 +32,7 @@ from gi.repository import GLib, Gtk, Adw, Gio  # noqa: E402
 @dataclass
 class ActivitySummary:
     id: int
-    sport: Literal["Running", "Biking"]
+    sport_type: SportTypesEnum
     start_local: datetime.datetime
     end_local: datetime.datetime
     duration_s: int
@@ -356,15 +362,20 @@ class HistoryPageUI:
                 runs = list(act.running_metrics)
                 cycles = list(act.cycling_metrics)
 
-                sport = infer_sport(runs, cycles, hrs, act.id)
-                if sport == "Unknown":
+                sport_type = session.query(ActivitySport).filter_by(activity_id=act.id).first()
+                sport_type = (
+                    SportTypesEnum(sport_type.sport_type_id)
+                    if sport_type
+                    else infer_sport(hrs, runs, cycles, act.id)
+                )
+                if sport_type == SportTypesEnum.unknown:
                     continue
 
-                if sport == "Running":
+                if sport_type == SportTypesEnum.running:
                     primary = runs
                     cadence_vals = [float(r.cadence_spm) for r in runs if r.cadence_spm is not None]
                     power_vals = [float(r.power_watts) for r in runs if r.power_watts is not None]
-                elif sport == "Biking":
+                elif sport_type == SportTypesEnum.biking:
                     primary = cycles
                     cadence_vals = [
                         float(c.cadence_rpm) for c in cycles if c.cadence_rpm is not None
@@ -394,7 +405,7 @@ class HistoryPageUI:
                 out.append(
                     ActivitySummary(
                         id=int(act.id),
-                        sport=sport,
+                        sport_type=sport_type,
                         start_local=st,
                         end_local=et,
                         duration_s=dur_s,
@@ -510,10 +521,10 @@ class HistoryPageUI:
         flow.insert(chip(f"{_format_distance_m(a.distance_m)}"), -1)
 
         # Show pace for runs, speed for bikes (if we have distance + duration)
-        if a.sport == "Running" and a.distance_m and a.duration_s > 0:
+        if a.sport_type == SportTypesEnum.running and a.distance_m and a.duration_s > 0:
             mps = (a.distance_m or 0.0) / max(a.duration_s, 1)
             flow.insert(chip(_format_pace_from_mps(mps)), -1)
-        elif a.sport == "Biking" and a.distance_m and a.duration_s > 0:
+        elif a.sport_type == SportTypesEnum.biking and a.distance_m and a.duration_s > 0:
             # avg speed for bikes is usually nicer than "pace"
             mps = (a.distance_m or 0.0) / max(a.duration_s, 1)
             mph = mps * 2.23693629
@@ -523,15 +534,19 @@ class HistoryPageUI:
         if a.max_bpm is not None:
             flow.insert(chip(f"Max {a.max_bpm} bpm"), -1)
         if a.avg_cadence is not None:
-            unit = "spm" if a.sport == "Running" else ("rpm" if a.sport == "Biking" else "")
+            unit = (
+                "spm"
+                if a.sport_type == SportTypesEnum.running
+                else ("rpm" if a.sport_type == SportTypesEnum.biking else "")
+            )
             suffix = f" {unit}" if unit else ""
-            flow.insert(chip(f"{int(round(a.avg_cadence))}{suffix}"), -1)
+            flow.insert(chip(f"{round(a.avg_cadence)}{suffix}"), -1)
         if a.avg_power is not None:
-            flow.insert(chip(f"{int(round(a.avg_power))} W"), -1)
+            flow.insert(chip(f"{round(a.avg_power)} W"), -1)
         if a.total_energy_kj > 0:
             flow.insert(chip(f"{a.total_energy_kj:.1f} kJ"), -1)
 
-        flow.insert(chip(a.sport), -1)
+        flow.insert(chip(a.sport_type.name), -1)
         box.append(flow)
 
         # Tiny sparkline (HR)
@@ -635,12 +650,17 @@ class HistoryPageUI:
                         .order_by(CyclingMetrics.timestamp_ms)
                         .all()
                     )
+                    sport_type = session.query(ActivitySport).filter_by(activity_id=aid).first()
 
-                    if runs:
-                        primary_kind = "running"
+                    sport_type = (
+                        SportTypesEnum(sport_type.sport_type_id)
+                        if sport_type
+                        else infer_sport([], runs, cycles, aid)
+                    )
+
+                    if sport_type == SportTypesEnum.running:
                         primary = runs
-                    elif cycles:
-                        primary_kind = "cycling"
+                    elif sport_type == SportTypesEnum.biking:
                         primary = cycles
                     else:
                         continue
@@ -650,7 +670,7 @@ class HistoryPageUI:
 
                     if self._cmp_metric_id == "pace":
                         # Only meaningful for running
-                        if primary_kind != "running":
+                        if sport_type != SportTypesEnum.running:
                             continue
                         vals = [_pace_min_per_mile_from_mps(float(p.speed_mps)) for p in primary]
                         ys = [None if math.isinf(v) else v for v in vals]
@@ -668,7 +688,7 @@ class HistoryPageUI:
                         ]
 
                     elif self._cmp_metric_id == "cadence":
-                        if primary_kind == "running":
+                        if sport_type == SportTypesEnum.running:
                             ys = [
                                 float(p.cadence_spm) if p.cadence_spm is not None else None
                                 for p in primary
@@ -1062,15 +1082,21 @@ class HistoryPageUI:
                 .order_by(CyclingMetrics.timestamp_ms)
                 .all()
             )
+            sport_type = session.query(ActivitySport).filter_by(activity_id=act_id).first()
 
-        sport = infer_sport(hrs, runs, cycles, act_id)
-        if sport == "Unknown":
+        sport_type = (
+            SportTypesEnum(sport_type.sport_type_id)
+            if sport_type
+            else infer_sport(hrs, runs, cycles, act_id)
+        )
+
+        if sport_type == SportTypesEnum.unknown:
             msg = f"Cannot export: Unknown sport for activity {act_id}"
             logger.warning(msg)
             self.app.show_toast(msg)
             return
 
-        default_name = f"{local_start.strftime('%Y-%m-%d_%H-%M-%S')}_{sport}.tcx"
+        default_name = f"{local_start.strftime('%Y-%m-%d_%H-%M-%S')}_{sport_type.name}.tcx"
 
         try:
             tcx_bytes = activity_to_tcx(
@@ -1078,7 +1104,7 @@ class HistoryPageUI:
                 heart_rates=hrs,
                 running=runs,
                 cycling=cycles,
-                sport=sport,
+                sport_type=sport_type,
             )
         except Exception as e:
             self.app.show_toast(f"Export failed: {e}")

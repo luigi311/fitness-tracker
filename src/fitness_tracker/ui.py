@@ -1,3 +1,4 @@
+from matplotlib.artist import get
 import contextlib
 import socket
 from configparser import ConfigParser
@@ -14,6 +15,7 @@ from xdg_base_dirs import (
     xdg_data_home,
 )
 
+from fitness_tracker.database import SportTypesEnum
 from fitness_tracker.recorder import Recorder
 from fitness_tracker.ui_history import HistoryPageUI
 from fitness_tracker.ui_settings import SettingsPageUI
@@ -289,18 +291,10 @@ class FitnessAppUI(Adw.Application):
             self.pebble_bridge = None
             print(e)
 
-    def _profile_from_name(self, profile: str, trainer: bool = False) -> SensorProfile:
-        """
-        Convert a profile name to a SensorProfile object.
-
-        profile:
-            - "running"
-            - "cycling"
-        """
-        p = (profile).strip().lower()
-
+    def _profile_from_sport_type(self, sport_type: SportTypesEnum, trainer: bool = False) -> SensorProfile:
+        """Convert a SportTypesEnum to a SensorProfile object."""
         if trainer:
-            if p == "running":
+            if sport_type == SportTypesEnum.running:
                 logger.debug("Using trainer running profile")
                 return SensorProfile(
                     hr_name=self.trainer_running_hr_name,
@@ -315,8 +309,8 @@ class FitnessAppUI(Adw.Application):
                     trainer_address=self.trainer_running_address,
                     trainer_machine_type=self.trainer_running_machine_type,
                 )
-            if p == "cycling":
-                logger.debug("Using trainer cycling profile")
+            if sport_type == SportTypesEnum.biking:
+                logger.debug("Using trainer biking profile")
                 return SensorProfile(
                     hr_name=self.trainer_cycling_hr_name,
                     hr_address=self.trainer_cycling_hr_address,
@@ -331,11 +325,11 @@ class FitnessAppUI(Adw.Application):
                     trainer_machine_type=self.trainer_cycling_machine_type,
                 )
 
-            logger.error(f"Unknown profile '{profile}' for trainer. Defaulting to empty profile.")
+            logger.error(f"Unknown profile '{sport_type}' for trainer. Defaulting to empty profile.")
             return SensorProfile()
 
-        if p == "cycling":
-            logger.debug("Using cycling profile")
+        if sport_type == SportTypesEnum.biking:
+            logger.debug("Using biking profile")
             return SensorProfile(
                 hr_name=self.cycling_hr_name,
                 hr_address=self.cycling_hr_address,
@@ -346,7 +340,7 @@ class FitnessAppUI(Adw.Application):
                 power_name=self.cycling_power_name,
                 power_address=self.cycling_power_address,
             )
-        if p == "running":
+        if sport_type == SportTypesEnum.running:
             logger.debug("Using running profile")
             return SensorProfile(
                 hr_name=self.hr_name,
@@ -359,15 +353,15 @@ class FitnessAppUI(Adw.Application):
                 power_address=self.power_address,
             )
 
-        logger.error(f"Unknown profile '{profile}'. Defaulting to empty profile.")
+        logger.error(f"Unknown profile '{sport_type}'. Defaulting to empty profile.")
         return SensorProfile()
 
 
-    def apply_sensor_settings(self, profile: str = "running", trainer: bool = False) -> None:
-        desired = self._profile_from_name(profile, trainer=trainer)
+    def apply_sensor_settings(self, sport_type: SportTypesEnum = SportTypesEnum.running, trainer: bool = False) -> None:
+        desired = self._profile_from_sport_type(sport_type, trainer=trainer)
         try:
             if self.recorder:
-                if getattr(self.recorder, "profile", "running") == profile:
+                if getattr(self.recorder, "sport_type", None) == sport_type:
                     same = True
                     same &= (desired.hr_address or "") == (getattr(self.recorder, "hr_address", "") or "")
                     same &= (desired.speed_address or "") == (getattr(self.recorder, "speed_address", "") or "")
@@ -385,12 +379,12 @@ class FitnessAppUI(Adw.Application):
             print(e)
 
         # Build recorder with sensors
-        logger.debug(f"Applying sensor settings for profile '{profile}': {desired}")
+        logger.debug(f"Applying sensor settings for profile '{sport_type}': {desired}")
         self.recorder = Recorder(
+            sport_type=sport_type,
             on_bpm_update=self.tracker.on_bpm,
             on_sample_update=self.tracker.on_sample,
             database_url=f"sqlite:///{self.database}",
-            profile=profile,
             hr_name=desired.hr_name,
             hr_address=desired.hr_address,
             speed_name=desired.speed_name,
@@ -419,7 +413,7 @@ class FitnessAppUI(Adw.Application):
             self.apply_pebble_settings()
 
             # Start/stop recorder with sensors
-            self.apply_sensor_settings(profile="running")
+            self.apply_sensor_settings(sport_type=SportTypesEnum.running, trainer=False)
 
         self.window.present()
 
