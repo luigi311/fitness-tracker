@@ -1,12 +1,18 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import gi
-import numpy as np
 from matplotlib.backends.backend_gtk4agg import FigureCanvasGTK4Agg as FigureCanvas
 from matplotlib.figure import Figure
 
+from fitness_tracker.database import SportTypesEnum
+
 gi.require_versions({"Gtk": "4.0", "Adw": "1"})
 from gi.repository import Gtk
+
+if TYPE_CHECKING:
+    import numpy as np
 
 
 class _MetricCard(Gtk.Frame):
@@ -89,10 +95,10 @@ class FreeRunView(Gtk.Box):
       - set_recording(recording_bool)  # toggles Start/Stop buttons.
     """
 
-    def __init__(self, app, kind: str) -> None:
+    def __init__(self, app, sport_type: SportTypesEnum) -> None:
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=16)
         self.app = app
-        self.kind = kind
+        self.sport_type = sport_type
         for m in ("top", "bottom", "start", "end"):
             getattr(self, f"set_margin_{m}")(12)
 
@@ -161,12 +167,16 @@ class FreeRunView(Gtk.Box):
         self.card_distance.set_value(f"{dist_mi:.2f}")
         self.card_pace.set_value(pace_str)
         # Running is double the cadence
-        self.card_cadence.set_value(f"{int(cadence*2) if self.kind == 'running' else int(cadence)}")
+        self.card_cadence.set_value(
+            f"{int(cadence * 2) if self.sport_type == SportTypesEnum.running else int(cadence)}",
+        )
         self.card_mph.set_value(f"{mph:.1f}")
         self.card_hr.set_value(f"{int(bpm)}")
         self.card_power.set_value(f"{int(watts)}")
 
-    def set_statuses(self, hr_ok: bool, speed_ok: bool, cad_ok: bool, pow_ok: bool, dist_ok: bool) -> None:
+    def set_statuses(
+        self, hr_ok: bool, speed_ok: bool, cad_ok: bool, pow_ok: bool, dist_ok: bool
+    ) -> None:
         self.card_hr.set_status(
             hr_ok, "HR sensor connected" if hr_ok else "HR sensor not connected"
         )

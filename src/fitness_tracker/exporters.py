@@ -6,6 +6,8 @@ from xml.etree.ElementTree import Element, SubElement, tostring
 
 from loguru import logger
 
+from fitness_tracker.database import SportTypesEnum
+
 if TYPE_CHECKING:
     from typing import Literal
 
@@ -79,7 +81,7 @@ def activity_to_tcx(
     heart_rates: list[HeartRate],
     running: list[RunningMetrics] | None = None,
     cycling: list[CyclingMetrics] | None = None,
-    sport: str = "Running",
+    sport_type: SportTypesEnum,
 ) -> bytes:
     """
     Build a TCX (Garmin Training Center XML) for an activity.
@@ -104,10 +106,10 @@ def activity_to_tcx(
 
     # Choose timeline
     timeline_kind: str
-    if running:
+    if sport_type == SportTypesEnum.running and running:
         timeline_kind = "running"
         primary = running
-    elif cycling:
+    elif sport_type == SportTypesEnum.biking and cycling:
         timeline_kind = "cycling"
         primary = cycling
     else:
@@ -130,7 +132,7 @@ def activity_to_tcx(
         },
     )
     activities = SubElement(tcx, "Activities")
-    act_node = SubElement(activities, "Activity", {"Sport": sport})
+    act_node = SubElement(activities, "Activity", {"Sport": sport_type.name})
     SubElement(act_node, "Id").text = _iso_with_local_offset(act.start_time)
 
     lap = SubElement(act_node, "Lap", {"StartTime": _iso_with_local_offset(act.start_time)})
@@ -233,10 +235,13 @@ def activity_to_tcx(
 
 
 def infer_sport(
-    hrs: list[HeartRate], runs: list[RunningMetrics], cycles: list[CyclingMetrics], activity_id: int
-) -> Literal["Running", "Biking", "Unknown"]:
+    hrs: list[HeartRate],
+    runs: list[RunningMetrics],
+    cycles: list[CyclingMetrics],
+    activity_id: int,
+) -> SportTypesEnum:
     """
-    Infer sport type from available metrics (DB currently has no explicit sport field).
+    Infer sport type from available metrics.
 
     Priority:
         1) Running if any running metrics and no cycling metrics
@@ -245,15 +250,15 @@ def infer_sport(
         4) Unknown if conflicting or no data (logs a warning; caller can decide how to handle)
     """
     if runs and not cycles:
-        return "Running"
+        return SportTypesEnum.running
 
     if cycles and not runs:
-        return "Biking"
+        return SportTypesEnum.biking
 
     if hrs and not runs and not cycles:
-        return "Running"  # HR-only, default to running (most common case for HR-only)
+        return SportTypesEnum.running  # HR-only, default to running (most common case for HR-only)
 
     logger.warning(
-        f"Unable to infer sport for activity {activity_id}. runs={len(runs)} cycles={len(cycles)}"
+        f"Unable to infer sport for activity {activity_id}. runs={len(runs)} cycles={len(cycles)}",
     )
-    return "Unknown"
+    return SportTypesEnum.unknown

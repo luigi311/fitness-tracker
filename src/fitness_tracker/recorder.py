@@ -4,8 +4,8 @@ import re
 import threading
 from collections import deque
 from collections.abc import Callable
-from concurrent.futures import Future
 from statistics import median
+from typing import TYPE_CHECKING
 
 import gi
 from bleak import BleakError, BleakScanner
@@ -14,12 +14,15 @@ from bleaksport.running import RunningMux, RunningSample
 from bleaksport.trainer import TrainerMux, TrainerSample
 from loguru import logger
 
-from fitness_tracker.database import DatabaseManager
+from fitness_tracker.database import DatabaseManager, SportTypesEnum
 from fitness_tracker.hr_provider import HEART_RATE_SERVICE_UUID, connect_and_stream
 
 gi.require_versions({"Gtk": "4.0", "Adw": "1"})
+
 from gi.repository import Adw, GLib
 
+if TYPE_CHECKING:
+    from concurrent.futures import Future
 
 INPROGRESS_RE = re.compile(r"InProgress", re.IGNORECASE)
 
@@ -27,9 +30,9 @@ INPROGRESS_RE = re.compile(r"InProgress", re.IGNORECASE)
 class Recorder:
     def __init__(
         self,
+        sport_type: SportTypesEnum,
         on_bpm_update: Callable[[float, int], None],
         database_url: str,
-        profile: str,
         hr_name: str | None,
         hr_address: str | None,
         speed_name: str | None,
@@ -47,7 +50,7 @@ class Recorder:
         | None = None,
         test_mode: bool = False,
     ):
-        logger.debug(f"Initializing Recorder with profile {profile}")
+        logger.debug(f"Initializing Recorder with sport_type {sport_type}")
         logger.debug(f"HR sensor: name={hr_name}, address={hr_address}")
         logger.debug(f"Speed sensor: name={speed_name}, address={speed_address}")
         logger.debug(f"Cadence sensor: name={cadence_name}, address={cadence_address}")
@@ -62,6 +65,7 @@ class Recorder:
         # Disable write when in test mode
         self.test_mode = bool(test_mode)
 
+        self.sport_type = sport_type
         self.on_bpm = on_bpm_update
         self.on_sample = on_sample_update
         self.on_error = on_error
@@ -76,9 +80,6 @@ class Recorder:
         self._erg_retry_task: Future | None = None
         self._erg_applied_watts: int | None = None
 
-        # Profile metadata (used by UI to avoid rebuilding unnecessarily)
-        self.profile = profile.strip().lower()
-
         # Sensors
         self.hr_name = hr_name
         self.hr_address = hr_address
@@ -89,7 +90,7 @@ class Recorder:
         self.power_name = power_name
         self.power_address = power_address
 
-        # Trainer (FTMS) configuration (separated by profile upstream)
+        # Trainer (FTMS) configuration (separated by sport type upstream)
         self.trainer_name = trainer_name
         self.trainer_address = trainer_address
         self.trainer_machine_type = trainer_machine_type
@@ -131,7 +132,7 @@ class Recorder:
         if not self._recording:
             # Only create an activity when not in test mode
             if not self.test_mode:
-                self._activity_id = self.db.start_activity()
+                self._activity_id = self.db.start_activity(sport_type=self.sport_type)
             else:
                 self._activity_id = None
             self._recording = True
@@ -237,7 +238,7 @@ class Recorder:
 
         # Persist to DB if recording
         if self._recording and self._activity_id:
-            if sample.machine_type == MachineType.INDOOR_BIKE:
+            if self.sport_type == SportTypesEnum.biking:
                 logger.trace(
                     f"Inserting cycling metrics into DB: \n\tActivity ID: {self._activity_id} \n\tDelta MS: {delta_ms} \n\tSpeed: {speed_mps} \n\tCadence: {cadence} \n\tDistance: {dist_m} \n\tPower: {watts}"
                 )
@@ -249,7 +250,7 @@ class Recorder:
                     total_distance_m=(float(dist_m) if dist_m is not None else None),
                     power_watts=(float(watts) if watts is not None else None),
                 )
-            elif sample.machine_type == MachineType.TREADMILL:
+            elif self.sport_type == SportTypesEnum.running:
                 logger.trace(
                     f"Inserting running metrics into DB: \n\tActivity ID: {self._activity_id} \n\tDelta MS: {delta_ms} \n\tSpeed: {speed_mps} \n\tCadence: {cadence} \n\tDistance: {dist_m} \n\tPower: {watts}"
                 )
@@ -263,7 +264,7 @@ class Recorder:
                     power_watts=(float(watts) if watts is not None else None),
                 )
             else:
-                logger.error(f"Unknown machine type {sample.machine_type} for trainer sample")
+                logger.error(f"Unknown sport type {self.sport_type} for trainer sample insertion")
 
     async def _workflow(self):
         logger.debug("Starting Recorder workflow")
@@ -473,7 +474,6 @@ class Recorder:
                     self._on_ble_error(f"ERG set failed, retrying: {e}")
 
             await asyncio.sleep(2.0)  # retry interval
-
 
     async def _reset_distance_workflow(self, *, wait_s: float = 6.0) -> None:
         """

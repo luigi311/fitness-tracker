@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 import gi
 import numpy as np
 
+from fitness_tracker.database import SportTypesEnum
 from fitness_tracker.ui_free_run import FreeRunView
 from fitness_tracker.ui_mode import ModeSelectView
 from fitness_tracker.ui_workout import WorkoutView
@@ -101,15 +102,20 @@ class TrackerPageUI:
         return self.nav
 
     # ---- mode callbacks
-    def _start_workout_from_path(self, path: Path, kind: str, trainer: bool = False) -> None:
+    def _start_workout_from_path(
+        self,
+        path: Path,
+        sport_type: SportTypesEnum,
+        trainer: bool = False,
+    ) -> None:
         w = load_workout(path)
         self._workout = w if w.steps else None
         self._workout_path = path
         self._manual_offset_s = 0.0
-        self._show_workout_page(kind=kind, trainer=trainer)
+        self._show_workout_page(sport_type=sport_type, trainer=trainer)
 
-    def _show_free_from_mode(self, mode: str, trainer: bool = False) -> None:
-        self._show_free_run_page(kind=mode, trainer=trainer)
+    def _show_free_from_mode(self, sport_type: SportTypesEnum, trainer: bool = False) -> None:
+        self._show_free_run_page(sport_type=sport_type, trainer=trainer)
 
     def _tick_timer(self) -> bool:
         """
@@ -143,10 +149,13 @@ class TrackerPageUI:
     # -------------------------
     #  Page show / run control
     # -------------------------
-    def _show_free_run_page(self, kind: str = "running", trainer: bool = False) -> None:
+    def _show_free_run_page(
+        self,
+        sport_type: SportTypesEnum = SportTypesEnum.running,
+        trainer: bool = False,
+    ) -> None:
         # Reconfigure recorder for this activity *before* preview/status updates.
-        self.app.apply_sensor_settings(profile=kind, trainer=trainer)
-
+        self.app.apply_sensor_settings(sport_type=sport_type, trainer=trainer)
         if self.app.pebble_bridge:
             self.app.pebble_bridge.update(tgt_kind=TGT_NONE)
 
@@ -155,7 +164,7 @@ class TrackerPageUI:
         self._running = False
         self._reset_buffers()
 
-        self.free_view = FreeRunView(self.app, kind=kind)
+        self.free_view = FreeRunView(self.app, sport_type=sport_type)
         # Stop always works
         self.free_view.btn_stop.connect("clicked", lambda *_: self._stop_run_and_back())
         # Start may or may not exist depending on your FreeRunView version
@@ -163,7 +172,7 @@ class TrackerPageUI:
         if btn_start:
             btn_start.connect("clicked", lambda *_: self._begin_run_now())
 
-        title = "Free Ride" if kind == "cycle" else "Free Run"
+        title = "Free Ride" if sport_type == SportTypesEnum.biking else "Free Run"
         self._push(self.free_view, title)
         # initial statuses & preview values
         self.update_metric_statuses()
@@ -177,9 +186,13 @@ class TrackerPageUI:
             self._hrsim_bpm = float(self.app.resting_hr or 60)
             self._test_source = GLib.timeout_add(1000, self._tick_test)
 
-    def _show_workout_page(self, kind: str = "running", trainer: bool = False) -> None:
+    def _show_workout_page(
+        self,
+        sport_type: SportTypesEnum = SportTypesEnum.running,
+        trainer: bool = False,
+    ) -> None:
         # Reconfigure recorder for this activity *before* preview/status updates.
-        self.app.apply_sensor_settings(profile=kind, trainer=trainer)
+        self.app.apply_sensor_settings(sport_type=sport_type, trainer=trainer)
 
         self._armed = True
         self._running = False
@@ -188,7 +201,7 @@ class TrackerPageUI:
         raw = self._workout_path.stem if self._workout_path else "Workout"
         nice = pretty_workout_name(raw)
         self.workout_view = WorkoutView(
-            kind=kind,
+            sport_type=sport_type,
             title=nice,
             on_prev=lambda: self._skip_step(-1),
             on_next=lambda: self._skip_step(+1),
@@ -255,7 +268,7 @@ class TrackerPageUI:
 
         self._erg_last_set_watts = None
         self._erg_last_set_ts = 0.0
-        if self.app.recorder:
+        if self.app.recorder and self.app.recorder.trainer_mux:
             self.app.recorder.set_target_power(0)
 
         GLib.idle_add(self.app.history.refresh)
@@ -445,10 +458,9 @@ class TrackerPageUI:
                 # Require a change of at least 3 watts to avoid sending redundant commands
                 watt_diff = 3
                 time_diff = 2.0
-                if (
-                    self._erg_last_set_watts is None
-                    or (abs(self._erg_last_set_watts - int(w_mid)) >= watt_diff
-                    and now - self._erg_last_set_ts > time_diff)
+                if self._erg_last_set_watts is None or (
+                    abs(self._erg_last_set_watts - int(w_mid)) >= watt_diff
+                    and now - self._erg_last_set_ts > time_diff
                 ):
                     self.app.recorder.set_target_power(int(w_mid))
                     self._erg_last_set_watts = int(w_mid)
@@ -504,8 +516,10 @@ class TrackerPageUI:
             self._active_step_index = -1
             self._manual_offset_s = 0.0
             # Swap UI to free-run (keep recording, timer, charts alive)
-            kind = self.workout_view.kind if self.workout_view else "running"
-            self.free_view = FreeRunView(self.app, kind=kind)
+            sport_type = (
+                self.workout_view.sport_type if self.workout_view else SportTypesEnum.running
+            )
+            self.free_view = FreeRunView(self.app, sport_type=sport_type)
             self.free_view.btn_stop.connect("clicked", lambda *_: self._stop_run_and_back())
             # Replace the top page: pop workout, push free-run
             if self.nav:
