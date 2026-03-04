@@ -7,6 +7,7 @@ from matplotlib.backends.backend_gtk4agg import FigureCanvasGTK4Agg as FigureCan
 from matplotlib.figure import Figure
 
 from fitness_tracker.database import SportTypesEnum
+from fitness_tracker.ui_workout import InclineControl
 
 gi.require_versions({"Gtk": "4.0", "Adw": "1"})
 from gi.repository import Gtk
@@ -136,6 +137,18 @@ class FreeRunView(Gtk.Box):
         grid.attach(self.card_hr, 0, 3, 1, 1)
         grid.attach(self.card_power, 1, 3, 1, 1)
 
+        # Incline control — spans full width below metric cards
+        initial_incline = (
+            self.app.recorder.incline_percent
+            if self.app.recorder and self.app.recorder.incline_percent is not None
+            else 0.0
+        )
+        self.incline_control = InclineControl(
+            on_change=self._on_incline_change,
+            initial_value=initial_incline,
+        )
+        grid.attach(self.incline_control, 0, 4, 2, 1)
+
         self.append(grid)
 
         # Chart
@@ -216,6 +229,18 @@ class FreeRunView(Gtk.Box):
             self.ax_pw.set_ylim(0, 500)
 
         self.fig.canvas.draw_idle()
+
+    def _on_incline_change(self, percent: float) -> None:
+        """Propagated up to the app via on_incline if set."""
+        if callable(getattr(self, "_incline_cb", None)):
+            self._incline_cb(percent)
+
+    def set_incline_callback(self, cb) -> None:
+        """Register a callable(percent: float) to fire on every incline change."""
+        self._incline_cb = cb
+
+    def get_incline(self) -> float:
+        return self.incline_control.get_value()
 
     # ---- style helpers
     def _style_hr_axis(self) -> None:

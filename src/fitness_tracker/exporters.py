@@ -177,6 +177,11 @@ def activity_to_tcx(
             SubElement(tp, "DistanceMeters").text = f"{dist_m:.3f}"
             last_dist_m = dist_m
 
+            # AltitudeMeters
+            alt_m = getattr(s, "altitude_m", None)
+            if alt_m is not None:
+                SubElement(tp, "AltitudeMeters").text = f"{float(alt_m):.3f}"
+
             # Heart rate (nearest <= r.timestamp_ms)
             cur_ms = int(getattr(s, "timestamp_ms"))
             while hr_idx + 1 < len(heart_rates) and heart_rates[hr_idx + 1].timestamp_ms <= cur_ms:

@@ -16,6 +16,8 @@ from sqlalchemy import (
     create_engine,
     event,
     exc,
+    inspect,
+    text,
 )
 from sqlalchemy.orm import declarative_base, relationship, sessionmaker
 
@@ -85,11 +87,13 @@ class RunningMetrics(Base):
     timestamp_ms = Column(BigInteger, nullable=False)
 
     # core metrics
-    speed_mps = Column(Float, nullable=False)  # RSCS speed (m/s)
-    cadence_spm = Column(Integer, nullable=False)  # steps per minute
-    stride_length_m = Column(Float)  # optional
-    total_distance_m = Column(Float)  # optional
-    power_watts = Column(Float)  # optional (Stryd CPS if present)
+    speed_mps = Column(Float, nullable=False) # speed (m/s)
+    cadence_spm = Column(Integer, nullable=False) # steps per minute
+    stride_length_m = Column(Float)
+    total_distance_m = Column(Float)
+    power_watts = Column(Float)
+    incline_percent = Column(Float)
+    altitude_m = Column(Float)
 
     # indexes to query by activity and time
     __table_args__ = (
@@ -105,10 +109,12 @@ class CyclingMetrics(Base):
     activity_id = Column(Integer, ForeignKey("activities.id"), nullable=False)
     timestamp_ms = Column(BigInteger, nullable=False)
 
-    speed_mps = Column(Float, nullable=False)
-    cadence_rpm = Column(Integer)
+    speed_mps = Column(Float, nullable=False) # speed (m/s)
+    cadence_rpm = Column(Integer) # cadence revolutions per minute
     total_distance_m = Column(Float)
     power_watts = Column(Float)
+    incline_percent = Column(Float)
+    altitude_m = Column(Float)
 
     __table_args__ = (
         Index("ix_cyc_activity_id", "activity_id"),
@@ -164,6 +170,7 @@ class DatabaseManager:
             event.listen(self.engine, "connect", _sqlite_pragmas)
 
         Base.metadata.create_all(self.engine)
+        self._migrate(self.engine)
         self.Session = sessionmaker(bind=self.engine, future=True, expire_on_commit=False)
 
         # staging area for batching
@@ -298,6 +305,8 @@ class DatabaseManager:
         stride_length_m: float | None,
         total_distance_m: float | None,
         power_watts: float | None,
+        incline_percent: float | None,
+        altitude_m: float | None,
     ) -> None:
         rm = RunningMetrics(
             activity_id=activity_id,
@@ -307,6 +316,8 @@ class DatabaseManager:
             stride_length_m=stride_length_m,
             total_distance_m=total_distance_m,
             power_watts=power_watts,
+            incline_percent=incline_percent,
+            altitude_m=altitude_m,
         )
         self._pending_run.append(rm)
         if len(self._pending_run) >= self.BATCH_SIZE:
@@ -320,6 +331,8 @@ class DatabaseManager:
         cadence_rpm: int | None,
         total_distance_m: float | None,
         power_watts: float | None,
+        incline_percent: float | None,
+        altitude_m: float | None,
     ) -> None:
         cm = CyclingMetrics(
             activity_id=activity_id,
@@ -328,6 +341,8 @@ class DatabaseManager:
             cadence_rpm=cadence_rpm,
             total_distance_m=total_distance_m,
             power_watts=power_watts,
+            incline_percent=incline_percent,
+            altitude_m=altitude_m,
         )
         self._pending_cyc.append(cm)
         if len(self._pending_cyc) >= self.BATCH_SIZE:
@@ -346,6 +361,21 @@ class DatabaseManager:
         self._pending_hr.clear()
         self._pending_run.clear()
         self._pending_cyc.clear()
+
+    def _migrate(self, engine) -> None:
+        """Add any missing columns to existing tables using schema inspection."""
+        inspector = inspect(engine)
+        migrations = [
+            ("running_metrics", "incline_percent", "REAL"),
+            ("cycling_metrics", "incline_percent", "REAL"),
+            ("running_metrics", "altitude_m", "REAL"),
+            ("cycling_metrics", "altitude_m", "REAL"),
+        ]
+        with engine.begin() as conn:
+            for table, column, col_type in migrations:
+                existing = {col["name"] for col in inspector.get_columns(table)}
+                if column not in existing:
+                    conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}"))
 
     def sync_to_database(self, database_dsn: str):
         self._flush_pending()
@@ -423,6 +453,8 @@ class DatabaseManager:
                                     "stride_length_m": r.stride_length_m,
                                     "total_distance_m": r.total_distance_m,
                                     "power_watts": r.power_watts,
+                                    "incline_percent": r.incline_percent,
+                                    "altitude_m": r.altitude_m,
                                 }
                                 for r in runs
                             ],
@@ -446,6 +478,8 @@ class DatabaseManager:
                                     "cadence_rpm": c.cadence_rpm,
                                     "total_distance_m": c.total_distance_m,
                                     "power_watts": c.power_watts,
+                                    "incline_percent": c.incline_percent,
+                                    "altitude_m": c.altitude_m,
                                 }
                                 for c in cycls
                             ],
@@ -518,6 +552,8 @@ class DatabaseManager:
                                     "stride_length_m": r.stride_length_m,
                                     "total_distance_m": r.total_distance_m,
                                     "power_watts": r.power_watts,
+                                    "incline_percent": r.incline_percent,
+                                    "altitude_m": r.altitude_m,
                                 }
                                 for r in runs
                             ],
@@ -540,6 +576,8 @@ class DatabaseManager:
                                     "cadence_rpm": c.cadence_rpm,
                                     "total_distance_m": c.total_distance_m,
                                     "power_watts": c.power_watts,
+                                    "incline_percent": c.incline_percent,
+                                    "altitude_m": c.altitude_m,
                                 }
                                 for c in cycls
                             ],
