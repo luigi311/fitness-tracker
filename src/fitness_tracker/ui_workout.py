@@ -10,6 +10,90 @@ gi.require_versions({"Gtk": "4.0", "Adw": "1"})
 from gi.repository import Adw, Gdk, Gtk, Pango, PangoCairo
 
 
+class InclineControl(Gtk.Frame):
+    """
+    Large-touch incline control.
+    Single tap - / + buttons, 1% step each tap.
+    Range: -20% to +20%.
+    """
+
+    MIN_PCT = -20.0
+    MAX_PCT = 20.0
+    STEP = 1.0
+
+    def __init__(self, on_change, initial_value: float = 0.0) -> None:
+        super().__init__()
+        self._value: float = initial_value
+        self._on_change = on_change
+
+        outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        for m in ("top", "bottom", "start", "end"):
+            getattr(outer, f"set_margin_{m}")(8)
+
+        lbl_title = Gtk.Label(label="⛰  Incline")
+        lbl_title.add_css_class("caption")
+        lbl_title.set_xalign(0.5)
+        outer.append(lbl_title)
+
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+
+        self._btn_down = Gtk.Button(label="-")
+        self._btn_down.add_css_class("destructive-action")
+        self._btn_down.set_hexpand(True)
+        self._btn_down.set_size_request(-1, 72)
+        self._btn_down.get_child().add_css_class("title-1")
+        self._btn_down.connect("clicked", lambda *_: self._change(-self.STEP))
+
+        val_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        val_box.set_hexpand(True)
+        val_box.set_valign(Gtk.Align.CENTER)
+
+        self._lbl_value = Gtk.Label()
+        self._lbl_value.add_css_class("title-1")
+        self._lbl_value.add_css_class("numeric")
+        self._lbl_value.set_xalign(0.5)
+        self._lbl_value.set_width_chars(6)
+
+        self._lbl_unit = Gtk.Label(label="% grade")
+        self._lbl_unit.add_css_class("dim-label")
+        self._lbl_unit.set_xalign(0.5)
+
+        val_box.append(self._lbl_value)
+        val_box.append(self._lbl_unit)
+
+        self._btn_up = Gtk.Button(label="+")
+        self._btn_up.add_css_class("suggested-action")
+        self._btn_up.set_hexpand(True)
+        self._btn_up.set_size_request(-1, 72)
+        self._btn_up.get_child().add_css_class("title-1")
+        self._btn_up.connect("clicked", lambda *_: self._change(+self.STEP))
+
+        row.append(self._btn_down)
+        row.append(val_box)
+        row.append(self._btn_up)
+        outer.append(row)
+        self.set_child(outer)
+        self._refresh()
+
+    def _change(self, delta: float) -> None:
+        self._value = max(self.MIN_PCT, min(self.MAX_PCT, round(self._value + delta, 1)))
+        self._refresh()
+        self._on_change(self._value)
+
+    def _refresh(self) -> None:
+        sign = "+" if self._value > 0 else ""
+        self._lbl_value.set_text(f"{sign}{self._value:.1f}")
+        self._btn_down.set_sensitive(self._value > self.MIN_PCT)
+        self._btn_up.set_sensitive(self._value < self.MAX_PCT)
+
+    def get_value(self) -> float:
+        return self._value
+
+    def set_value(self, v: float) -> None:
+        self._value = max(self.MIN_PCT, min(self.MAX_PCT, float(v)))
+        self._refresh()
+
+
 # --------- TargetGauge: semi-circle with target band + needle --------- #
 class TargetGauge(Gtk.DrawingArea):
     """
@@ -337,7 +421,9 @@ class WorkoutView(Gtk.Box):
       - Prev / Next / Start / Stop with large touch targets.
     """
 
-    def __init__(self, *, sport_type: SportTypesEnum, title: str, on_prev, on_next, on_stop, on_start_record) -> None:
+    def __init__(
+        self, *, sport_type: SportTypesEnum, title: str, on_prev, on_next, on_stop, on_start_record
+    ) -> None:
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         self.sport_type = sport_type
 
@@ -359,7 +445,7 @@ class WorkoutView(Gtk.Box):
         #  - limit natural width so the window won’t expand
         self.title_label.set_single_line_mode(True)
         self.title_label.set_ellipsize(Pango.EllipsizeMode.END)
-        self.title_label.set_max_width_chars(36)   # tune as you like
+        self.title_label.set_max_width_chars(36)  # tune as you like
         self.title_label.set_hexpand(True)
         self.title_label.set_halign(Gtk.Align.FILL)
         self.title_label.set_text(title)
@@ -435,6 +521,14 @@ class WorkoutView(Gtk.Box):
 
         content.append(flow)
 
+        # Incline control
+        self.incline_control = InclineControl(
+            on_change=self._on_incline_change,
+            initial_value=0.0,
+        )
+        self.incline_control.set_hexpand(True)
+        content.append(self.incline_control)
+
         # Buttons
         self.btn_prev = Gtk.Button.new_with_label("◀︎ Prev")
         self.btn_prev.add_css_class("pill")
@@ -507,6 +601,16 @@ class WorkoutView(Gtk.Box):
         self.btn_start.set_sensitive(not recording)
         self.btn_stop.set_sensitive(True)
 
+    def _on_incline_change(self, percent: float) -> None:
+        if callable(getattr(self, "_incline_cb", None)):
+            self._incline_cb(percent)
+
+    def set_incline_callback(self, cb) -> None:
+        self._incline_cb = cb
+
+    def get_incline(self) -> float:
+        return self.incline_control.get_value()
+
     # Timers (optional helpers)
     def set_elapsed_text(self, text: str) -> None:
         self.timer_elapsed.set_text(text)
@@ -533,7 +637,11 @@ class WorkoutView(Gtk.Box):
             self.card_pace.set_value(pace)
         if cadence_spm is not None:
             # Running is double the cadence
-            out = int(cadence_spm * 2) if self.sport_type == SportTypesEnum.running else int(cadence_spm)
+            out = (
+                int(cadence_spm * 2)
+                if self.sport_type == SportTypesEnum.running
+                else int(cadence_spm)
+            )
             self.card_cad.set_value(str(out))
         if speed_mph is not None:
             self.card_spd.set_value(f"{float(speed_mph):.1f}")
@@ -542,7 +650,9 @@ class WorkoutView(Gtk.Box):
         if power_watts is not None:
             self.card_pwr.set_value(str(int(power_watts)))
 
-    def set_statuses(self, *, hr_ok: bool, cad_ok: bool, spd_ok: bool, pow_ok: bool, dist_ok: bool) -> None:
+    def set_statuses(
+        self, *, hr_ok: bool, cad_ok: bool, spd_ok: bool, pow_ok: bool, dist_ok: bool
+    ) -> None:
         self.card_hr.set_connected(hr_ok)
         # pace/power card dot represents the active target domain:
         # if power is the workout driver, use pow_ok; else use spd_ok

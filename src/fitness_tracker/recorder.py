@@ -110,6 +110,12 @@ class Recorder:
         self.trainer_mux: TrainerMux | None = None
         self._dist0_m = None  # Fallback if sensor doesn't support reset
 
+        # Current manually-set incline (percent), persisted into each metric row
+        self.incline_percent: float | None = None
+        self._current_altitude_m: float = 0.0
+        self._last_distance_m: float | None = None
+
+
     def start(self):
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
@@ -138,6 +144,8 @@ class Recorder:
             self._recording = True
             self._start_ms = None
             self._dist0_m = None
+            self._current_altitude_m = 0.0
+            self._last_distance_m = None
             self._schedule_reset_distance()
 
     def stop_recording(self):
@@ -186,6 +194,7 @@ class Recorder:
         cadence = int(sample.cadence_spm or 0)
         dist_m = sample.total_distance_m  # may be None
         watts = float(sample.power_watts) if sample.power_watts is not None else None
+        altitude_m = self._accumulate_altitude(float(dist_m) if dist_m is not None else None)
 
         # Adjust distance by baseline if needed
         if self._recording:
@@ -210,6 +219,8 @@ class Recorder:
                 ),
                 total_distance_m=(float(dist_m) if dist_m is not None else None),
                 power_watts=(float(watts) if watts is not None else None),
+                incline_percent=self.incline_percent,
+                altitude_m=altitude_m,
             )
 
     def _handle_trainer_sample(self, sample: TrainerSample):
@@ -227,6 +238,7 @@ class Recorder:
         cadence = int(sample.cadence_rpm or 0)
         dist_m = sample.distance_m
         watts = float(sample.power_watts) if sample.power_watts is not None else None
+        altitude_m = self._accumulate_altitude(float(dist_m) if dist_m is not None else None)
 
         if (
             sample.target_power is not None
@@ -263,6 +275,8 @@ class Recorder:
                     cadence_rpm=int(cadence),
                     total_distance_m=(float(dist_m) if dist_m is not None else None),
                     power_watts=(float(watts) if watts is not None else None),
+                    incline_percent=self.incline_percent,
+                    altitude_m=altitude_m,
                 )
             elif self.sport_type == SportTypesEnum.running:
                 logger.trace(
@@ -276,6 +290,8 @@ class Recorder:
                     stride_length_m=None,
                     total_distance_m=(float(dist_m) if dist_m is not None else None),
                     power_watts=(float(watts) if watts is not None else None),
+                    incline_percent=self.incline_percent,
+                    altitude_m=altitude_m,
                 )
             else:
                 logger.error(f"Unknown sport type {self.sport_type} for trainer sample insertion")
@@ -516,3 +532,17 @@ class Recorder:
         except Exception as e:
             # Don’t fail the session; just fall back
             print(f"SC Control Point reset failed: {e}")
+
+    def set_incline(self, percent: float | None) -> None:
+        """Set the current incline percentage (None = flat / unknown)."""
+        self.incline_percent = percent
+
+    def _accumulate_altitude(self, dist_m: float | None) -> float:
+        """Update and return current altitude based on distance delta and current incline."""
+        if dist_m is None or self.incline_percent is None:
+            return self._current_altitude_m
+        if self._last_distance_m is not None:
+            delta = max(0.0, dist_m - self._last_distance_m)
+            self._current_altitude_m += delta * (self.incline_percent / 100.0)
+        self._last_distance_m = dist_m
+        return self._current_altitude_m

@@ -174,6 +174,13 @@ class TrackerPageUI:
 
         title = "Free Ride" if sport_type == SportTypesEnum.biking else "Free Run"
         self._push(self.free_view, title)
+
+        # Wire incline control → recorder
+        self.free_view.set_incline_callback(self._on_incline_changed)
+        # Restore last known incline if recorder exists
+        if self.app.recorder and self.app.recorder.incline_percent is not None:
+            self.free_view.incline_control.set_value(self.app.recorder.incline_percent)
+
         # initial statuses & preview values
         self.update_metric_statuses()
         self._update_free_preview_timer_and_cards()
@@ -210,6 +217,10 @@ class TrackerPageUI:
         )
         self._push(self.workout_view, nice)
         self._active_step_index = -1
+
+        self.workout_view.set_incline_callback(self._on_incline_changed)
+        if self.app.recorder and self.app.recorder.incline_percent is not None:
+            self.workout_view.incline_control.set_value(self.app.recorder.incline_percent)
 
         # Prime UI in preview (t=0)
         self._update_workout_guidance(elapsed_s=0)
@@ -861,3 +872,8 @@ class TrackerPageUI:
     def redraw(self) -> None:
         if self.free_view and getattr(self.free_view, "fig", None):
             self.free_view.fig.canvas.draw_idle()
+
+    def _on_incline_changed(self, percent: float) -> None:
+        """Called by either FreeRunView or WorkoutView incline controls."""
+        if self.app.recorder:
+            self.app.recorder.set_incline(percent)
