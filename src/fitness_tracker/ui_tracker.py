@@ -670,35 +670,33 @@ class TrackerPageUI:
     def _tick_test(self) -> bool:
         if not (self._running or self._armed):
             return False
+
         t_now = time.monotonic()
-        t_ms = int((t_now - getattr(self, "_start_monotonic", t_now)) * 1000)
-        # In preview (armed but not running), keep t_ms at 0 so nothing progresses
-        if not self._running:
-            t_ms = 0
+        # In preview (armed but not running), hold t_ms at 0 so nothing progresses
+        t_ms = int((t_now - self._start_monotonic) * 1000) if self._running else 0
         self._last_ms = t_ms
-        t_min = max(0.0, t_ms / 60000.0)
+
         dt_s = 1.0
-        if self._hrsim_last_ms:
+        if self._hrsim_last_ms is not None:
             dt_s = max(0.001, (t_ms - self._hrsim_last_ms) / 1000.0)
         self._hrsim_last_ms = t_ms
 
-        # Target power profile
+        # ---- power / speed target resolution ----
         target_power = getattr(self, "_last_power", 250.0)
         self._sim_target_mph = None
+
         if self._workout:
-            # lock to t=0 when not running
             t_s = (t_ms / 1000.0 if self._running else 0.0) + self._manual_offset_s
             w, v_mps, _ = self._workout.target_at(t_s, self.app.ftp_watts)
             if w is not None:
                 target_power = float(w)
             elif v_mps is not None:
-                # Pace-targeted step: drive simulated power from speed
                 self._sim_target_mph = float(v_mps) * 2.23693629
                 mph = self._sim_target_mph
-                # very simple running-power proxy (keeps values sensible in 5–10 mph)
-                target_power = max(80.0, 18.0 * mph)  # e.g., 5 mph ≈ 90 W, 10 mph ≈ 180 W
+                target_power = max(80.0, 18.0 * mph)
         else:
-            # free-run waves
+            # free-run sinusoidal power wave
+            t_min = max(0.0, t_ms / 60000.0)
             cycle_len = 120.0
             phase = (t_min * 60) % cycle_len
             if phase < 30:
@@ -713,6 +711,7 @@ class TrackerPageUI:
         last_power = getattr(self, "_last_power", 250.0)
         self._last_power = last_power + 0.35 * (target_power - last_power)
 
+        # ---- HR simulation ----
         zones = self.app.calculate_hr_zones()
         z2_lo, _ = zones["Zone 3"]
         if target_power > 300:
@@ -731,7 +730,8 @@ class TrackerPageUI:
         )
         bpm = round(self._hrsim_bpm)
 
-        target_mph = getattr(self, "_sim_target_mph", None)
+        # ---- speed / cadence / distance simulation ----
+        target_mph = self._sim_target_mph
         cur_mph = getattr(self, "_last_mph", 6.8)
         if target_mph is not None:
             cur_mph = cur_mph + 0.25 * (target_mph - cur_mph)
@@ -739,8 +739,9 @@ class TrackerPageUI:
         else:
             cur_mph = max(2.0, min(10.0, cur_mph + random.uniform(-0.3, 0.3)))
         self._last_mph = cur_mph
-        self._last_cadence = max(
-            75, min(95, getattr(self, "_last_cadence", 86) + random.uniform(-2, 2))
+
+        self._last_cadence = int(
+            max(75, min(95, getattr(self, "_last_cadence", 86) + random.uniform(-2, 2)))
         )
 
         if self._running:
@@ -748,16 +749,43 @@ class TrackerPageUI:
             self._integrated_distance_miles = (
                 getattr(self, "_integrated_distance_miles", 0.0) + dmiles
             )
+        dist_m = getattr(self, "_integrated_distance_miles", 0.0) / 0.00062137119
 
-        # Push or preview
-        if self._running:
-            self._push_sample(t_ms, bpm, self._last_power)
-        else:
-            self._last_bpm = bpm
-            self._preview_cards_only()
-            if self.workout_view and self._workout:
-                self._update_workout_guidance(elapsed_s=0)
-                self.workout_view.set_progress(0.0)
+        # ---- inject through recorder pipeline ----
+        rec = self.app.recorder
+        if rec:
+            # Wall-clock timestamp that the recorder handlers expect (seconds since epoch)
+            wall_ts = time.time() if self._running else (time.time() - t_now)
+
+            # HR — routed through _handle_hr_sample for smoothing and DB persistence
+            rec.inject_test_hr_sample(t_ms, bpm)
+
+            # Speed/power sample — choose the right sample type based on recorder config
+            use_trainer = bool(rec.trainer_address)
+            if use_trainer:
+                from bleaksport.trainer import TrainerSample
+
+                sample = TrainerSample(
+                    timestamp=wall_ts,
+                    speed_kmh=float(self._last_mph) * 1.60934,
+                    cadence_rpm=self._last_cadence,
+                    distance_m=dist_m if self._running else None,
+                    power_watts=float(self._last_power),
+                    target_power=None,
+                )
+            else:
+                from bleaksport.running import RunningSample
+
+                sample = RunningSample(
+                    timestamp=wall_ts,
+                    speed_mps=float(self._last_mph) * 0.44704,
+                    cadence_spm=self._last_cadence,
+                    total_distance_m=dist_m if self._running else None,
+                    power_watts=int(self._last_power),
+                    stride_length_m=None,
+                )
+            rec.inject_test_sample(sample)
+
         return True
 
     # ---- connection dots

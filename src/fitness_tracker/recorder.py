@@ -546,3 +546,32 @@ class Recorder:
             self._current_altitude_m += delta * (self.incline_percent / 100.0)
         self._last_distance_m = dist_m
         return self._current_altitude_m
+
+    # --- Test-mode injection ---
+    def inject_test_sample(self, sample: "RunningSample | TrainerSample") -> None:
+        """
+        Directly inject a pre-built RunningSample or TrainerSample into the recorder,
+        bypassing BLE. Used exclusively in test_mode to exercise the full recorder pipeline
+        (distance baseline, altitude accumulation, DB writes, UI callbacks) from
+        simulated data produced by the UI layer.
+
+        Safe to call from the GTK main thread — the handlers only touch recorder state
+        and schedule GLib.idle_add callbacks; no asyncio involvement is needed.
+        """
+        if not self.test_mode:
+            logger.warning("inject_test_sample called outside of test_mode — ignoring")
+            return
+
+        if isinstance(sample, TrainerSample):
+            self._handle_trainer_sample(sample)
+        elif isinstance(sample, RunningSample):
+            self._handle_running_sample(sample)
+        else:
+            logger.error(f"inject_test_sample: unrecognised sample type {type(sample)}")
+
+    def inject_test_hr_sample(self, t_ms: int, bpm: int) -> None:
+        """Inject a simulated HR reading through the real HR handler in test_mode."""
+        if not self.test_mode:
+            logger.warning("inject_test_hr_sample called outside of test_mode — ignoring")
+            return
+        self._handle_hr_sample(t_ms, bpm, rr=None, energy=None)
