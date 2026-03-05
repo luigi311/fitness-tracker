@@ -89,6 +89,14 @@ class SettingsPageUI:
         personal_group = Adw.PreferencesGroup()
         personal_group.set_title("Personal Info")
 
+        # Weight
+        weight_row = Adw.ActionRow()
+        weight_row.set_title("Weight (kg)")
+        self.weight_spin = Gtk.SpinButton.new_with_range(30, 225, 1)
+        self.weight_spin.set_value(self.app.weight_kg)
+        weight_row.add_suffix(self.weight_spin)
+        personal_group.add(weight_row)
+
         # Resting HR
         rest_row = Adw.ActionRow()
         rest_row.set_title("Resting HR")
@@ -1168,6 +1176,7 @@ class SettingsPageUI:
             self.app.pebble_name = disp
             self.app.pebble_address = self.pebble_map.get(disp, self.app.pebble_address)
 
+        self.app.weight_kg = self.weight_spin.get_value_as_int()
         self.app.resting_hr = self.rest_spin.get_value_as_int()
         self.app.max_hr = self.max_spin.get_value_as_int()
         self.app.ftp_watts = self.ftp_spin.get_value_as_int()
@@ -1277,6 +1286,7 @@ class SettingsPageUI:
         }
 
         cfg["personal"] = {
+            "weight_kg": str(self.app.weight_kg),
             "resting_hr": str(self.app.resting_hr),
             "max_hr": str(self.app.max_hr),
             "ftp_watts": str(self.app.ftp_watts),

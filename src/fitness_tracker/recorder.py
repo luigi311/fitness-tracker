@@ -30,6 +30,7 @@ INPROGRESS_RE = re.compile(r"InProgress", re.IGNORECASE)
 class Recorder:
     def __init__(
         self,
+        weight_kg: float | None,
         sport_type: SportTypesEnum,
         on_bpm_update: Callable[[float, int], None],
         database_url: str,
@@ -65,6 +66,7 @@ class Recorder:
         # Disable write when in test mode
         self.test_mode = bool(test_mode)
 
+        self.weight_kg = weight_kg
         self.sport_type = sport_type
         self.on_bpm = on_bpm_update
         self.on_sample = on_sample_update
@@ -114,7 +116,6 @@ class Recorder:
         self.incline_percent: float | None = None
         self._current_altitude_m: float = 0.0
         self._last_distance_m: float | None = None
-
 
     def start(self):
         self._thread = threading.Thread(target=self._run, daemon=True)
@@ -195,6 +196,23 @@ class Recorder:
         dist_m = sample.total_distance_m  # may be None
         watts = float(sample.power_watts) if sample.power_watts is not None else None
         altitude_m = self._accumulate_altitude(float(dist_m) if dist_m is not None else None)
+        if not self.trainer_mux and watts and self.weight_kg and self.incline_percent:
+            # Estimate additional power from incline for footpods
+            # using foruma from QZ Reference:
+            # https://github.com/cagnulein/qdomyos-zwift/blob/e04b48fe1cdb3fa370824526569cdb7ca6166122/src/devices/strydrunpowersensor/strydrunpowersensor.cpp#L127
+            gravity = 9.8
+            additional_power = self.weight_kg * gravity * (self.incline_percent / 100.0)
+            additional_log = {
+                "weight_kg": self.weight_kg,
+                "incline_percent": self.incline_percent,
+                "additional_power": additional_power,
+                "watts_before": watts,
+                "watts_after": watts + additional_power,
+            }
+            logger.bind(data=additional_log).trace(
+                "Estimating additional power from incline for footpod sample",
+            )
+            watts += additional_power
 
         # Adjust distance by baseline if needed
         if self._recording:
