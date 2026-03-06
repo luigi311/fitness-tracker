@@ -198,21 +198,29 @@ class Recorder:
         altitude_m = self._accumulate_altitude(float(dist_m) if dist_m is not None else None)
         if not self.trainer_mux and watts and self.weight_kg and self.incline_percent:
             # Estimate additional power from incline for footpods
-            # using foruma from QZ Reference:
-            # https://github.com/cagnulein/qdomyos-zwift/blob/e04b48fe1cdb3fa370824526569cdb7ca6166122/src/devices/strydrunpowersensor/strydrunpowersensor.cpp#L127
-            gravity = 9.8
-            additional_power = self.weight_kg * gravity * (self.incline_percent / 100.0)
+            # using speed incline formula derived from QZ reference and Stryd calibration data:
+            # vwatts = (A + B * speed_kmh) * incline
+            # A = -0.96, B = 1.33
+            # Reference: https://github.com/cagnulein/qdomyos-zwift/commit/c22f0568fd1db86cfdf07e749ea140f21df95e4b
+            A = -0.96
+            B = 1.33
+            incline = self.incline_percent
+            speed_kmh = speed_mps * 3.6
+
+            speed_term = (A + B * speed_kmh) * incline
+
             additional_log = {
                 "weight_kg": self.weight_kg,
                 "incline_percent": self.incline_percent,
-                "additional_power": additional_power,
+                "speed_kmh": speed_kmh,
+                "speed_term": speed_term,
                 "watts_before": watts,
-                "watts_after": watts + additional_power,
+                "watts_after": watts + speed_term,
             }
             logger.bind(data=additional_log).trace(
                 "Estimating additional power from incline for footpod sample",
             )
-            watts += additional_power
+            watts += speed_term
 
         # Adjust distance by baseline if needed
         if self._recording:
