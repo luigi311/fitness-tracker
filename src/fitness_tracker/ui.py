@@ -152,6 +152,7 @@ class FitnessAppUI(Adw.Application):
         self.trainer_cycling_address: str = ""
         self.trainer_cycling_machine_type: MachineType | None = None
 
+        self.weight_kg: int = 80
         self.resting_hr: int = 60
         self.max_hr: int = 180
         self.ftp_watts: int = 150
@@ -215,6 +216,7 @@ class FitnessAppUI(Adw.Application):
             if trainer_cycling_machine_type:
                 self.trainer_cycling_machine_type = MachineType(int(trainer_cycling_machine_type))
 
+            self.weight_kg = self.cfg.getint("personal", "weight_kg", fallback=80)
             self.resting_hr = self.cfg.getint("personal", "resting_hr", fallback=60)
             self.max_hr = self.cfg.getint("personal", "max_hr", fallback=180)
             self.ftp_watts = self.cfg.getint("personal", "ftp_watts", fallback=150)
@@ -381,6 +383,7 @@ class FitnessAppUI(Adw.Application):
         # Build recorder with sensors
         logger.debug(f"Applying sensor settings for profile '{sport_type}': {desired}")
         self.recorder = Recorder(
+            weight_kg=self.weight_kg,
             sport_type=sport_type,
             on_bpm_update=self.tracker.on_bpm,
             on_sample_update=self.tracker.on_sample,
