@@ -85,6 +85,9 @@ class TrackerPageUI:
     # ---- build
     def build_page(self) -> Adw.NavigationView:
         nav = Adw.NavigationView()
+        # We want to force users to use the Stop button to exit free-run or workout pages
+        # so disable the back gesture on all pages
+        nav.set_pop_on_escape(False)
 
         self.mode_view = ModeSelectView(
             workouts_running_dir=self.app.workouts_running_dir,
@@ -288,6 +291,8 @@ class TrackerPageUI:
     # ---- nav helpers
     def _push(self, child, title: str):
         page = Adw.NavigationPage.new(child, title)
+        # Prevent back gesture on all pages to avoid accidental pops during activity.
+        page.set_can_pop(False)
         if self.nav:
             self.nav.push(page)
         else:
