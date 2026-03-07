@@ -147,7 +147,15 @@ class FreeRunView(Gtk.Box):
             on_change=self._on_incline_change,
             initial_value=initial_incline,
         )
-        grid.attach(self.incline_control, 0, 4, 2, 1)
+
+        # Only enable incline control for footpod running mode
+        # since it's only useful for treadmill runs
+        if (
+            self.sport_type == SportTypesEnum.running
+            and self.app.recorder
+            and not self.app.recorder.is_trainer
+        ):
+            grid.attach(self.incline_control, 0, 4, 2, 1)
 
         self.append(grid)
 
