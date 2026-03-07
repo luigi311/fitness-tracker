@@ -110,6 +110,7 @@ class Recorder:
         # Clearing total distance on new recording
         self._running_mux: RunningMux | None = None
         self.trainer_mux: TrainerMux | None = None
+        self.is_trainer = bool(trainer_address)
         self._dist0_m = None  # Fallback if sensor doesn't support reset
 
         # Current manually-set incline (percent), persisted into each metric row

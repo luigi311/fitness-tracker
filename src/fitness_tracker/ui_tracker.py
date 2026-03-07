@@ -211,6 +211,7 @@ class TrackerPageUI:
         raw = self._workout_path.stem if self._workout_path else "Workout"
         nice = pretty_workout_name(raw)
         self.workout_view = WorkoutView(
+            app=self.app,
             sport_type=sport_type,
             title=nice,
             on_prev=lambda: self._skip_step(-1),

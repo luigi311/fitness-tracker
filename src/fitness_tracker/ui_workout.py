@@ -422,9 +422,10 @@ class WorkoutView(Gtk.Box):
     """
 
     def __init__(
-        self, *, sport_type: SportTypesEnum, title: str, on_prev, on_next, on_stop, on_start_record
+        self, app, *, sport_type: SportTypesEnum, title: str, on_prev, on_next, on_stop, on_start_record
     ) -> None:
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        self.app = app
         self.sport_type = sport_type
 
         for m in ("top", "bottom", "start", "end"):
@@ -527,7 +528,15 @@ class WorkoutView(Gtk.Box):
             initial_value=0.0,
         )
         self.incline_control.set_hexpand(True)
-        content.append(self.incline_control)
+
+        # Only enable incline control for footpod running mode
+        # since it's only useful for treadmill runs
+        if (
+            self.sport_type == SportTypesEnum.running
+            and self.app.recorder
+            and not self.app.recorder.is_trainer
+        ):
+            content.append(self.incline_control)
 
         # Buttons
         self.btn_prev = Gtk.Button.new_with_label("◀︎ Prev")
