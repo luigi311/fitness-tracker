@@ -422,7 +422,15 @@ class WorkoutView(Gtk.Box):
     """
 
     def __init__(
-        self, app, *, sport_type: SportTypesEnum, title: str, on_prev, on_next, on_stop, on_start_record
+        self,
+        app,
+        *,
+        sport_type: SportTypesEnum,
+        title: str,
+        on_prev,
+        on_next,
+        on_stop,
+        on_start_record,
     ) -> None:
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         self.app = app

@@ -9,15 +9,15 @@ from typing import TYPE_CHECKING
 import gi
 import requests
 from bleak import BleakScanner
-from bleaksport.discover import (
+from bleaksport import (
     discover_ftms_devices,
+    discover_heart_rate_devices,
     discover_power_devices,
     discover_speed_cadence_devices,
 )
 from loguru import logger
 
 from fitness_tracker import upload_providers, workout_providers
-from fitness_tracker.hr_provider import HEART_RATE_SERVICE_UUID
 
 gi.require_versions({"Gtk": "4.0", "Adw": "1"})
 from gi.repository import Adw, GLib, Gtk  # noqa: E402
@@ -747,10 +747,7 @@ class SettingsPageUI:
         self.cycling_hr_row.set_subtitle("Scanning for HRM…")
 
         async def _scan():
-            devices = await BleakScanner.discover(
-                timeout=5.0,
-                service_uuids=[HEART_RATE_SERVICE_UUID],
-            )
+            devices = await discover_heart_rate_devices(scan_timeout=5.0)
             mapping = {d.name: d.address for d in devices if d.name}
             names = sorted(mapping.keys())
 
@@ -1158,7 +1155,6 @@ class SettingsPageUI:
             self.app.cycling_power_name = selected
             self.app.cycling_power_address = self.power_map.get(selected, "")
 
-
         # Pebble
         self.app.pebble_enable = (
             self.pebble_enable_row.get_active() if self.pebble_enable_row else False
@@ -1255,7 +1251,8 @@ class SettingsPageUI:
 
         # Keep the HR fields here separate as most trainer dont have built in HR proxy support
         cfg_trainer_running_machine_type: str = (
-            str(self.app.trainer_running_machine_type.value) if self.app.trainer_running_machine_type
+            str(self.app.trainer_running_machine_type.value)
+            if self.app.trainer_running_machine_type
             else ""
         )
         cfg["sensors_trainer_running"] = {
@@ -1266,7 +1263,8 @@ class SettingsPageUI:
             "trainer_machine_type": cfg_trainer_running_machine_type,
         }
         cfg_trainer_cycling_machine_type: str = (
-            str(self.app.trainer_cycling_machine_type.value) if self.app.trainer_cycling_machine_type
+            str(self.app.trainer_cycling_machine_type.value)
+            if self.app.trainer_cycling_machine_type
             else ""
         )
         cfg["sensors_trainer_cycling"] = {
