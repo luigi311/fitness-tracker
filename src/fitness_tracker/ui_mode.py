@@ -9,7 +9,7 @@ from fitness_tracker.workouts import discover_workouts
 
 gi.require_versions({"Gtk": "4.0", "Adw": "1"})
 
-from gi.repository import Adw, GLib, Gtk
+from gi.repository import Adw, GLib, Gtk  # noqa: E402 # noqa: I001 # ty:ignore[unresolved-import]
 
 if TYPE_CHECKING:
     from pathlib import Path

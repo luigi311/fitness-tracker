@@ -5,11 +5,14 @@ import sys
 from dataclasses import asdict, is_dataclass
 from enum import Enum
 
-from gi.repository import GLib
+import gi
 from loguru import logger
 from loguru._defaults import LOGURU_FORMAT
 
 from fitness_tracker.ui import FitnessAppUI
+
+gi.require_versions({"Gtk": "4.0", "Adw": "1"})
+from gi.repository import GLib  # noqa: E402  # ty:ignore[unresolved-import]
 
 
 def _json_default(o):

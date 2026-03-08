@@ -10,7 +10,7 @@ from fitness_tracker.database import SportTypesEnum
 from fitness_tracker.ui_workout import InclineControl
 
 gi.require_versions({"Gtk": "4.0", "Adw": "1"})
-from gi.repository import Gtk
+from gi.repository import Gtk  # noqa: E402  # ty:ignore[unresolved-import]
 
 if TYPE_CHECKING:
     import numpy as np
@@ -184,7 +184,15 @@ class FreeRunView(Gtk.Box):
     def set_timer(self, text: str) -> None:
         self.timer.set_text(text)
 
-    def set_metrics(self, dist_mi, pace_str, cadence, mph, bpm, watts) -> None:
+    def set_metrics(
+        self,
+        dist_mi: float,
+        pace_str: str,
+        cadence: int,
+        mph: float,
+        bpm: int,
+        watts: int,
+    ) -> None:
         self.card_distance.set_value(f"{dist_mi:.2f}")
         self.card_pace.set_value(pace_str)
         # Running is double the cadence
@@ -196,25 +204,36 @@ class FreeRunView(Gtk.Box):
         self.card_power.set_value(f"{int(watts)}")
 
     def set_statuses(
-        self, hr_ok: bool, speed_ok: bool, cad_ok: bool, pow_ok: bool, dist_ok: bool
+        self,
+        hr_ok: bool,
+        speed_ok: bool,
+        cad_ok: bool,
+        pow_ok: bool,
+        dist_ok: bool,
     ) -> None:
         self.card_hr.set_status(
-            hr_ok, "HR sensor connected" if hr_ok else "HR sensor not connected"
+            hr_ok,
+            "HR sensor connected" if hr_ok else "HR sensor not connected",
         )
         self.card_distance.set_status(
-            dist_ok, "Distance sensor connected" if dist_ok else "Distance sensor not connected"
+            dist_ok,
+            "Distance sensor connected" if dist_ok else "Distance sensor not connected",
         )
         self.card_pace.set_status(
-            speed_ok, "Speed sensor connected" if speed_ok else "Speed sensor not connected"
+            speed_ok,
+            "Speed sensor connected" if speed_ok else "Speed sensor not connected",
         )
         self.card_cadence.set_status(
-            cad_ok, "Cadence sensor connected" if cad_ok else "Cadence sensor not connected"
+            cad_ok,
+            "Cadence sensor connected" if cad_ok else "Cadence sensor not connected",
         )
         self.card_mph.set_status(
-            speed_ok, "Speed sensor connected" if speed_ok else "Speed sensor not connected"
+            speed_ok,
+            "Speed sensor connected" if speed_ok else "Speed sensor not connected",
         )
         self.card_power.set_status(
-            pow_ok, "Power sensor connected" if pow_ok else "Power sensor not connected"
+            pow_ok,
+            "Power sensor connected" if pow_ok else "Power sensor not connected",
         )
 
     def set_recording(self, recording: bool) -> None:
@@ -223,7 +242,11 @@ class FreeRunView(Gtk.Box):
         self.btn_stop.set_sensitive(True)  # allow stop to also act as 'back' if needed
 
     def update_chart(
-        self, x_secs: np.ndarray, hr: np.ndarray, pw: np.ndarray, hr_rgb=(1, 1, 1)
+        self,
+        x_secs: np.ndarray,
+        hr: np.ndarray,
+        pw: np.ndarray,
+        hr_rgb=(1, 1, 1),
     ) -> None:
         self.line_hr.set_data(x_secs, hr)
         self.line_pw.set_data(x_secs, pw)

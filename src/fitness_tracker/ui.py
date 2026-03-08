@@ -385,7 +385,6 @@ class FitnessAppUI(Adw.Application):
         self.recorder = Recorder(
             weight_kg=self.weight_kg,
             sport_type=sport_type,
-            on_bpm_update=self.tracker.on_bpm,
             on_sample_update=self.tracker.on_sample,
             database_url=f"sqlite:///{self.database}",
             hr_name=desired.hr_name,
