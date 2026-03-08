@@ -8,8 +8,11 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
 import requests
+from loguru import logger
 
-from .utils import DownloadedWorkout, Sport
+from fitness_tracker.database import SportTypesEnum
+
+from .utils import DownloadedWorkout
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -27,7 +30,7 @@ class IntervalsICUProvider:
 
     def fetch_between(
         self,
-        sport: Sport,
+        sport: SportTypesEnum,
         start: date,
         end: date,
         out_dir: Path,
@@ -60,9 +63,9 @@ class IntervalsICUProvider:
         new_payloads: list[tuple[date, str, bytes]] = []
         for ev in events:
             ev_type = (ev.get("type") or "").strip()
-            if sport == "running" and ev_type != "Run":
+            if sport == SportTypesEnum.running and ev_type != "Run":
                 continue
-            if sport == "cycling" and ev_type != "Ride":
+            if sport == SportTypesEnum.biking and ev_type != "Ride":
                 continue
 
             wf_b64 = ev.get("workout_file_base64")
@@ -79,7 +82,8 @@ class IntervalsICUProvider:
             try:
                 payload = base64.b64decode(wf_b64)
             except Exception:
-                continue  # skip malformed entries
+                logger.warning(f"Failed to decode workout file for event {ev.get('id')}, skipping")
+                continue
 
             new_payloads.append((d, safe_title, payload))
 
@@ -93,7 +97,7 @@ class IntervalsICUProvider:
                 try:
                     old.unlink()
                 except Exception:
-                    pass  # best-effort cleanup
+                    logger.warning(f"Failed to delete old workout file {old}, skipping")
 
         # 4) Write the new files
         written: list[DownloadedWorkout] = []
@@ -104,7 +108,7 @@ class IntervalsICUProvider:
                 out_path.write_bytes(payload)
                 written.append(DownloadedWorkout(path=out_path, start_date=d, title=safe_title))
             except Exception:
-                # continue writing others even if one fails
+                logger.warning(f"Failed to write new workout file {out_path}, skipping")
                 continue
 
         return written

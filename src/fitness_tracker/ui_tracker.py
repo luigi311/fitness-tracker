@@ -8,12 +8,13 @@ from typing import TYPE_CHECKING
 
 import gi
 import numpy as np
+from workout_parser.main import load_workout, pretty_workout_name
+from workout_parser.models import Workout
 
 from fitness_tracker.database import SportTypesEnum
 from fitness_tracker.ui_free_run import FreeRunView
 from fitness_tracker.ui_mode import ModeSelectView
 from fitness_tracker.ui_workout import WorkoutView
-from fitness_tracker.workouts import Workout, load_workout, pretty_workout_name
 
 gi.require_versions({"Gtk": "4.0", "Adw": "1"})
 from gi.repository import Adw, GLib
@@ -406,16 +407,20 @@ class TrackerPageUI:
             return
 
         t_s = max(0.0, float(elapsed_s) + self._manual_offset_s)
+        idx, step = self._workout.get_step_at(t_s)
+        if not step or idx is None:
+            return
 
-        (
-            w_mid,
-            w_lo,
-            w_hi,
-            v_mid,
-            v_lo,
-            v_hi,
-            idx,
-        ) = self._workout.target_band_at(t_s, self.app.ftp_watts)
+        step.generate_absolute_power_targets_from_percent(self.app.ftp_watts)
+        #step.generate_pace_targets_from_percent(self.app.threshold_speed_mps)
+
+        w_mid = step.watts_mid
+        w_lo = step.watts_lo
+        w_hi = step.watts_hi
+        v_mid = step.speed_mps_mid
+        v_lo = step.speed_mps_lo
+        v_hi = step.speed_mps_hi
+
         self._active_step_index = idx
 
         # target text
@@ -436,13 +441,15 @@ class TrackerPageUI:
         # next preview
         nxt_text = "Next: —"
         if 0 <= idx + 1 < len(self._workout.steps):
-            ns = self._workout.steps[idx + 1]
-            if ns.watts is not None or ns.percent_ftp is not None:
-                nxt_w = ns.target_watts(self.app.ftp_watts)
-                nxt_text = f"Next: {round(nxt_w)} W for {int(ns.duration_s)} s"
-            elif ns.speed_mps is not None:
+            next_step = self._workout.steps[idx + 1]
+            next_step.generate_absolute_power_targets_from_percent(self.app.ftp_watts)
+
+            if next_step.watts_mid is not None:
+                nxt_w = next_step.watts_mid
+                nxt_text = f"Next: {round(nxt_w)} W for {int(next_step.duration_s)} s"
+            elif next_step.speed_mps_mid is not None:
                 nxt_text = (
-                    f"Next: {self._pace_from_mps(ns.speed_mps)} /mi for {int(ns.duration_s)} s"
+                    f"Next: {self._pace_from_mps(next_step.speed_mps_mid)} /mi for {int(next_step.duration_s)} s"
                 )
 
         self.workout_view.set_target_text(tgt_txt)
@@ -588,10 +595,10 @@ class TrackerPageUI:
             if self._workout and self._active_step_index >= 0:
                 s = self._workout.steps[self._active_step_index]
                 is_power = (
-                    (s.watts is not None)
-                    or (s.percent_ftp is not None)
+                    (s.watts_mid is not None)
+                    or (s.percent_watts_mid is not None)
                     or (s.watts_hi is not None)
-                    or (s.percent_ftp_hi is not None)
+                    or (s.percent_watts_hi is not None)
                 )
             self.workout_view.set_metrics(
                 bpm=int(bpm),
@@ -693,13 +700,16 @@ class TrackerPageUI:
 
         if self._workout:
             t_s = (t_ms / 1000.0 if self._running else 0.0) + self._manual_offset_s
-            w, v_mps, _ = self._workout.target_at(t_s, self.app.ftp_watts)
+            idx, step = self._workout.get_step_at(t_s)
+            if not step or idx is None:
+                return True
+
+            w, v_mph = step.watts_mid, step.speed_mph_mid
             if w is not None:
                 target_power = float(w)
-            elif v_mps is not None:
-                self._sim_target_mph = float(v_mps) * 2.23693629
-                mph = self._sim_target_mph
-                target_power = max(80.0, 18.0 * mph)
+            elif v_mph is not None:
+                self._sim_target_mph = v_mph
+                target_power = max(80.0, 18.0 * v_mph)
         else:
             # free-run sinusoidal power wave
             t_min = max(0.0, t_ms / 60000.0)
@@ -882,12 +892,16 @@ class TrackerPageUI:
 
         if self._workout:
             t_s = (self._elapsed_display_s if self._running else 0.0) + self._manual_offset_s
-            w, v_mps, _ = self._workout.target_at(t_s, self.app.ftp_watts)
+            idx, step = self._workout.get_step_at(t_s)
+            if not step or idx is None:
+                return last
+            w = step.watts_mid
+            v_mph = step.speed_mph_mid
 
             if w is not None:
                 target_watts = float(w)
-            elif v_mps is not None:
-                self._sim_target_mph = float(v_mps) * 2.23693629
+            elif v_mph is not None:
+                self._sim_target_mph = float(v_mph)
 
         self._last_power = last + 0.25 * (target_watts - last)
         return self._last_power
