@@ -20,6 +20,7 @@ dependencies = [
     "pygobject>=3.52.3",
     "requests>=2.32.5",
     "sqlalchemy>=2.0.41",
+    "workout-parser",
     "xdg-base-dirs>=6.0.2",
 ]
 
@@ -76,3 +77,4 @@ possibly-unbound-import = "error"
 [tool.uv.sources]
 libpebble2 = { git = "https://github.com/luigi311/libpebble2", branch = "modern" }
 bleaksport = { git = "https://github.com/luigi311/bleaksport", branch = "main" }
+workout-parser = { git = "https://github.com/luigi311/workout_parser", branch = "main" }
