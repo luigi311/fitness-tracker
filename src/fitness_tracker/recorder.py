@@ -8,18 +8,22 @@ from statistics import median
 from typing import TYPE_CHECKING
 
 import gi
-from bleak import BleakError, BleakScanner
-from bleaksport import MachineType
-from bleaksport.running import RunningMux, RunningSample
-from bleaksport.trainer import TrainerMux, TrainerSample
+from bleaksport import (
+    HeartRateMux,
+    HeartRateSample,
+    MachineType,
+    RunningMux,
+    RunningSample,
+    TrainerMux,
+    TrainerSample,
+)
 from loguru import logger
 
 from fitness_tracker.database import DatabaseManager, SportTypesEnum
-from fitness_tracker.hr_provider import HEART_RATE_SERVICE_UUID, connect_and_stream
 
 gi.require_versions({"Gtk": "4.0", "Adw": "1"})
 
-from gi.repository import Adw, GLib
+from gi.repository import Adw, GLib  # noqa: E402  # ty:ignore[unresolved-import]
 
 if TYPE_CHECKING:
     from concurrent.futures import Future
@@ -107,9 +111,11 @@ class Recorder:
         self.power_connected = False
         self.distance_connected = False
 
-        # Clearing total distance on new recording
+        # BLE muxes (only created if corresponding sensors are configured)
         self._running_mux: RunningMux | None = None
         self.trainer_mux: TrainerMux | None = None
+        self._hr_mux: HeartRateMux | None = None
+
         self.is_trainer = bool(trainer_address)
         self._dist0_m = None  # Fallback if sensor doesn't support reset
 
@@ -161,13 +167,21 @@ class Recorder:
         self.loop.run_until_complete(self._workflow())
 
     # --- HR handling ---
-    def _handle_hr_sample(self, t_ms: int, bpm: int, rr: float | None, energy: float | None):
-        # initialize the session start
+    def _handle_hr_sample(self, sample: HeartRateSample) -> None:
+        """Handle a HeartRateSample from HeartRateMux."""
+        t_ms = sample.timestamp_ms
+        bpm = sample.heart_rate_bpm
+        rr = sample.rr_interval_ms
+        energy = sample.energy_expended_kcal
+
+        if bpm is None:
+            return
+
+        # Initialize the session start
         if self._start_ms is None:
             self._start_ms = t_ms
 
-        # Elapsed ms
-        delta_ms = t_ms - self._start_ms
+        delta_ms = int(t_ms - self._start_ms)
 
         # Smooth out the bpm using a rolling median
         self._bpm_history.append(bpm)
@@ -187,14 +201,14 @@ class Recorder:
 
         logger.bind(data=sample).trace("Handling running sample")
 
-        t_ms = int(sample.timestamp * 1000.0)
+        t_ms = sample.timestamp_ms
         if self._start_ms is None:
             self._start_ms = t_ms
-        delta_ms = t_ms - self._start_ms
+        delta_ms = int(t_ms - self._start_ms)
 
         speed_mps = float(sample.speed_mps or 0.0)
         cadence = int(sample.cadence_spm or 0)
-        dist_m = sample.total_distance_m  # may be None
+        dist_m = sample.distance_m
         watts = float(sample.power_watts) if sample.power_watts is not None else None
         altitude_m = self._accumulate_altitude(float(dist_m) if dist_m is not None else None)
         if not self.trainer_mux and watts and self.weight_kg and self.incline_percent:
@@ -256,10 +270,10 @@ class Recorder:
 
         logger.bind(data=sample).trace("Handling trainer sample")
 
-        t_ms = int(sample.timestamp * 1000.0)
+        t_ms = sample.timestamp_ms
         if self._start_ms is None:
             self._start_ms = t_ms
-        delta_ms = t_ms - self._start_ms
+        delta_ms = int(t_ms - self._start_ms)
 
         speed_mps = float(sample.speed_kmh or 0.0) / 3.6  # Convert km/h to m/s
         cadence = int(sample.cadence_rpm or 0)
@@ -329,7 +343,10 @@ class Recorder:
         if self._stop_event._loop is not self.loop:
             self._stop_event = asyncio.Event()
 
-        device_tasks = [asyncio.create_task(self._hr_loop())]
+        device_tasks = []
+
+        if self.hr_address or self.hr_name:
+            device_tasks.append(asyncio.create_task(self._hr_loop()))
 
         logger.debug(f"on_sample callback provided: {self.on_sample is not None}")
 
@@ -347,7 +364,8 @@ class Recorder:
 
         # Wait until either a device task finishes or we were asked to stop
         done, pending = await asyncio.wait(
-            device_tasks + [stop_task], return_when=asyncio.FIRST_COMPLETED
+            device_tasks + [stop_task],
+            return_when=asyncio.FIRST_COMPLETED,
         )
 
         # If we were asked to stop, cancel device tasks
@@ -355,67 +373,6 @@ class Recorder:
             t.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await t
-
-    async def _hr_loop(self) -> None:
-        target = None
-        while not self._stop_event.is_set():
-            try:
-                # Resolve address ONCE (if not provided)
-                if not self.hr_address and self.hr_name:
-                    async with self._ble_lock:
-                        devices = await BleakScanner.discover(
-                            timeout=5.0, service_uuids=[HEART_RATE_SERVICE_UUID]
-                        )
-                    cand = next((d for d in devices if d.name == self.hr_name), None)
-                    if cand:
-                        self.hr_address = cand.address
-
-                # Find device by address (no general scan)
-                if not self.hr_address:
-                    await asyncio.sleep(3.0)
-                    continue
-
-                async with self._ble_lock:
-                    target = await BleakScanner.find_device_by_address(self.hr_address, timeout=5.0)
-                if not target:
-                    if self.hr_connected:
-                        self.hr_connected = False
-
-                    # device not seen right now; back off but don’t scan wildly
-                    await asyncio.sleep(3.0)
-                    continue
-
-                # Connect + notifications (serialized)
-                try:
-                    async with self._ble_lock:
-                        async for t_ms, bpm, rr, energy in connect_and_stream(
-                            target, self.queue, self._on_ble_error
-                        ):
-                            if not self.hr_connected:
-                                self.hr_connected = True
-                            self._handle_hr_sample(t_ms, bpm, rr, energy)
-                except BleakError as e:
-                    self.hr_connected = False
-                    if INPROGRESS_RE.search(str(e)):
-                        await asyncio.sleep(1.5)
-                    else:
-                        self._on_ble_error(f"🔄  HR BLE error, will retry: {e}")
-
-            except asyncio.CancelledError:
-                # task is being cancelled during shutdown; exit quietly
-                return
-            except Exception as e:
-                self.hr_connected = False
-                # If InProgress,
-                if INPROGRESS_RE.search(str(e)):
-                    # This can happen if the device is in a weird state; just wait and retry
-                    logger.warning("HR loop ble connection in progress, will retry")
-                    await asyncio.sleep(1.5)
-                else:
-                    # include the type so empty messages aren’t mysterious
-                    self._on_ble_error(f"HR loop unexpected error: {type(e).__name__}: {e!s}")
-
-            await asyncio.sleep(2.0)
 
     async def _running_loop(self) -> None:
         mux = RunningMux(
@@ -441,16 +398,6 @@ class Recorder:
         self.distance_connected = connected and roles.get("rsc", False)
         self.power_connected = connected and roles.get("cps", False)
 
-    def _on_trainer_link(self, _addr: str, connected: bool, _info: dict[str, bool]) -> None:
-        self.speed_connected = connected
-        self.cadence_connected = connected
-        self.power_connected = connected
-        self.distance_connected = connected
-
-        if not connected:
-            # reset erg watts on disconnect so it applies immediately on reconnect
-            self._erg_applied_watts = None
-
     async def _trainer_loop(self) -> None:
         logger.debug(
             f"Starting trainer loop with address {self.trainer_address} and machine type {self.trainer_machine_type}"
@@ -469,6 +416,36 @@ class Recorder:
             with contextlib.suppress(Exception):
                 await self.trainer_mux.stop()
             self.trainer_mux = None
+
+    def _on_trainer_link(self, _addr: str, connected: bool, _info: dict[str, bool]) -> None:
+        self.speed_connected = connected
+        self.cadence_connected = connected
+        self.power_connected = connected
+        self.distance_connected = connected
+
+        if not connected:
+            # reset erg watts on disconnect so it applies immediately on reconnect
+            self._erg_applied_watts = None
+
+    async def _hr_loop(self) -> None:
+        """Connect to the HR monitor via HeartRateMux and stream samples."""
+        self._hr_mux = HeartRateMux(
+            addr=self.hr_address,
+            name=self.hr_name,
+            on_sample=self._handle_hr_sample,
+            on_status=self._on_ble_error,
+            on_link=self._on_hr_link,
+            ble_lock=self._ble_lock,
+        )
+        try:
+            await self._hr_mux.start()
+        finally:
+            with contextlib.suppress(Exception):
+                await self._hr_mux.stop()
+            self._hr_mux = None
+
+    def _on_hr_link(self, addr: str, connected: bool, roles: dict[str, bool]) -> None:
+        self.hr_connected = connected
 
     def _on_ble_error(self, msg: str) -> None:
         GLib.idle_add(lambda: self.on_error(msg))
@@ -575,7 +552,7 @@ class Recorder:
         return self._current_altitude_m
 
     # --- Test-mode injection ---
-    def inject_test_sample(self, sample: "RunningSample | TrainerSample") -> None:
+    def inject_test_sample(self, sample: "RunningSample | TrainerSample | HeartRateSample") -> None:
         """
         Directly inject a pre-built RunningSample or TrainerSample into the recorder,
         bypassing BLE. Used exclusively in test_mode to exercise the full recorder pipeline
@@ -593,12 +570,7 @@ class Recorder:
             self._handle_trainer_sample(sample)
         elif isinstance(sample, RunningSample):
             self._handle_running_sample(sample)
+        elif isinstance(sample, HeartRateSample):
+            self._handle_hr_sample(sample)
         else:
             logger.error(f"inject_test_sample: unrecognised sample type {type(sample)}")
-
-    def inject_test_hr_sample(self, t_ms: int, bpm: int) -> None:
-        """Inject a simulated HR reading through the real HR handler in test_mode."""
-        if not self.test_mode:
-            logger.warning("inject_test_hr_sample called outside of test_mode — ignoring")
-            return
-        self._handle_hr_sample(t_ms, bpm, rr=None, energy=None)

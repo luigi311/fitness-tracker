@@ -8,8 +8,8 @@ from typing import TYPE_CHECKING
 
 import gi
 import numpy as np
+from bleaksport import HeartRateSample, RunningSample, TrainerSample
 from workout_parser.main import load_workout, pretty_workout_name
-from workout_parser.models import Workout
 
 from fitness_tracker.database import SportTypesEnum
 from fitness_tracker.ui_free_run import FreeRunView
@@ -21,6 +21,8 @@ from gi.repository import Adw, GLib
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+    from workout_parser.models import Workout
 
 # Pebble bridge workout constants
 TGT_NONE, TGT_POWER, TGT_PACE = 0, 1, 2
@@ -412,7 +414,7 @@ class TrackerPageUI:
             return
 
         step.generate_absolute_power_targets_from_percent(self.app.ftp_watts)
-        #step.generate_pace_targets_from_percent(self.app.threshold_speed_mps)
+        # step.generate_pace_targets_from_percent(self.app.threshold_speed_mps)
 
         w_mid = step.watts_mid
         w_lo = step.watts_lo
@@ -448,9 +450,7 @@ class TrackerPageUI:
                 nxt_w = next_step.watts_mid
                 nxt_text = f"Next: {round(nxt_w)} W for {int(next_step.duration_s)} s"
             elif next_step.speed_mps_mid is not None:
-                nxt_text = (
-                    f"Next: {self._pace_from_mps(next_step.speed_mps_mid)} /mi for {int(next_step.duration_s)} s"
-                )
+                nxt_text = f"Next: {self._pace_from_mps(next_step.speed_mps_mid)} /mi for {int(next_step.duration_s)} s"
 
         self.workout_view.set_target_text(tgt_txt)
         self.workout_view.set_next_text(nxt_text)
@@ -772,17 +772,22 @@ class TrackerPageUI:
         if rec:
             # Wall-clock timestamp that the recorder handlers expect (seconds since epoch)
             wall_ts = time.time() if self._running else (time.time() - t_now)
+            wall_ts_ms = int(wall_ts * 1000)
 
-            # HR — routed through _handle_hr_sample for smoothing and DB persistence
-            rec.inject_test_hr_sample(t_ms, bpm)
+            # HR sample
+            sample = HeartRateSample(
+                timestamp_ms=wall_ts_ms,
+                heart_rate_bpm=bpm,
+                rr_interval_ms=None,
+                energy_expended_kcal=None,
+            )
+            rec.inject_test_sample(sample)
 
             # Speed/power sample — choose the right sample type based on recorder config
             use_trainer = bool(rec.trainer_address)
             if use_trainer:
-                from bleaksport.trainer import TrainerSample
-
                 sample = TrainerSample(
-                    timestamp=wall_ts,
+                    timestamp_ms=wall_ts_ms,
                     speed_kmh=float(self._last_mph) * 1.60934,
                     cadence_rpm=self._last_cadence,
                     distance_m=dist_m if self._running else None,
@@ -790,13 +795,11 @@ class TrackerPageUI:
                     target_power=None,
                 )
             else:
-                from bleaksport.running import RunningSample
-
                 sample = RunningSample(
-                    timestamp=wall_ts,
+                    timestamp_ms=wall_ts_ms,
                     speed_mps=float(self._last_mph) * 0.44704,
                     cadence_spm=self._last_cadence,
-                    total_distance_m=dist_m if self._running else None,
+                    distance_m=dist_m if self._running else None,
                     power_watts=int(self._last_power),
                     stride_length_m=None,
                 )

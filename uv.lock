@@ -82,10 +82,12 @@ wheels = [
 [[package]]
 name = "bleaksport"
 version = "0.3.0"
-source = { git = "https://github.com/luigi311/bleaksport?branch=main#5c79b6e972910ffab4f6e92b676d11f43a7136e4" }
+source = { git = "https://github.com/luigi311/bleaksport?branch=main#c2ef065270a1bfd9a35416c5cbaacf43e0af1623" }
 dependencies = [
     { name = "bleak" },
+    { name = "bleakheart" },
     { name = "loguru" },
+    { name = "pydantic" },
     { name = "pyftms" },
 ]
 
