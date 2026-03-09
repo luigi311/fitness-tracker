@@ -1,3 +1,4 @@
+from fitness_tracker.database import SportTypesEnum
 import asyncio
 import contextlib
 import subprocess
@@ -1063,8 +1064,8 @@ class SettingsPageUI:
                 end = start + timedelta(days=6)
                 end = end.replace(hour=23, minute=59, second=59)
 
-                provider.fetch_between("running", start, end, out_dir_running)
-                provider.fetch_between("cycling", start, end, out_dir_cycling)
+                provider.fetch_between(SportTypesEnum.running, start, end, out_dir_running)
+                provider.fetch_between(SportTypesEnum.biking, start, end, out_dir_cycling)
 
                 # simply refresh the existing list
                 GLib.idle_add(self.app.tracker.mode_view.refresh)
