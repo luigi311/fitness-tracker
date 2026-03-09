@@ -23,7 +23,7 @@ _API_BASE = "https://intervals.icu/api/v1"
 class IntervalsICUProvider:
     athlete_id: str
     api_key: str
-    ext: Literal["fit", "zwo", "erg", "mrc"] = "fit"
+    ext: Literal["fit", "zwo", "erg", "mrc", "json"] = "fit"
 
     def _auth(self):
         return requests.auth.HTTPBasicAuth("API_KEY", self.api_key)
@@ -90,7 +90,7 @@ class IntervalsICUProvider:
         # 3) SUCCESSFUL request: clean the folder first (authoritative sync)
         #    Even if there are zero events, we still clear old files.
         def _is_workout_file(p: Path) -> bool:
-            return p.is_file() and p.suffix.lower() in (".fit", ".zwo", ".erg", ".mrc")
+            return p.is_file() and p.suffix.lower() in (".fit", ".zwo", ".erg", ".mrc", ".json")
 
         for old in list(out_dir.iterdir()):
             if _is_workout_file(old):
