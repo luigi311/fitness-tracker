@@ -1,3 +1,4 @@
+from fitness_tracker.database import SportTypesEnum
 import asyncio
 import contextlib
 import subprocess
@@ -18,9 +19,10 @@ from bleaksport import (
 from loguru import logger
 
 from fitness_tracker import upload_providers, workout_providers
+from fitness_tracker.database import SportTypesEnum
 
 gi.require_versions({"Gtk": "4.0", "Adw": "1"})
-from gi.repository import Adw, GLib, Gtk  # noqa: E402
+from gi.repository import Adw, GLib, Gtk  # noqa: E402  # ty:ignore[unresolved-import]
 
 if TYPE_CHECKING:
     from bleaksport import MachineType
@@ -29,7 +31,7 @@ NONE_LABEL = "None"
 
 
 class SettingsPageUI:
-    def __init__(self, app: "FitnessAppUI"):
+    def __init__(self, app):
         self.app = app
 
         # Widgets to toggle
@@ -49,9 +51,10 @@ class SettingsPageUI:
         self.power_map: dict[str, str] = {}
 
         # Trainer (FTMS): display -> {"address": str, "machine_type": MachineType}
-        self.trainer_map: dict[str, dict[str, MachineType]] = {}
         self.trainer_cycling_hr_map: dict[str, str] = {}
+        self.trainer_cycling_map: dict[str, dict[str, MachineType]] = {}
         self.trainer_running_hr_map: dict[str, str] = {}
+        self.trainer_running_map: dict[str, dict[str, MachineType]] = {}
 
         # pebble
         self.pebble_map: dict[str, str] = {}
@@ -852,10 +855,7 @@ class SettingsPageUI:
         GLib.idle_add(self.trainer_running_hr_row.set_subtitle, "Scanning for HRM…")
 
         async def _scan():
-            devices = await BleakScanner.discover(
-                timeout=5.0,
-                service_uuids=[HEART_RATE_SERVICE_UUID],
-            )
+            devices = await discover_heart_rate_devices(scan_timeout=5.0)
             mapping = {d.name: d.address for d in devices if d.name}
             names = sorted(mapping.keys())
 
@@ -917,7 +917,8 @@ class SettingsPageUI:
                 self._combo_set_items_with_none(
                     self.trainer_cycling_combo, names, self.app.trainer_cycling_name
                 )
-                self.trainer_map = mapping
+                self.trainer_running_map = mapping
+                self.trainer_cycling_map = mapping
 
             GLib.idle_add(_apply)
 
@@ -1063,8 +1064,8 @@ class SettingsPageUI:
                 end = start + timedelta(days=6)
                 end = end.replace(hour=23, minute=59, second=59)
 
-                provider.fetch_between("running", start, end, out_dir_running)
-                provider.fetch_between("cycling", start, end, out_dir_cycling)
+                provider.fetch_between(SportTypesEnum.running, start, end, out_dir_running)
+                provider.fetch_between(SportTypesEnum.biking, start, end, out_dir_cycling)
 
                 # simply refresh the existing list
                 GLib.idle_add(self.app.tracker.mode_view.refresh)
@@ -1181,17 +1182,16 @@ class SettingsPageUI:
         self.app.icu_api_key = self.icu_key_entry.get_text().strip() if self.icu_key_entry else ""
 
         # Trainer running
-        if self.trainer_running_combo:
-            selected = self.trainer_running_combo.get_active_text() or ""
-            if selected == NONE_LABEL or not selected:
-                self.app.trainer_running_name = ""
-                self.app.trainer_running_address = ""
-                self.app.trainer_running_machine_type = None
-            else:
-                self.app.trainer_running_name = selected
-                trainer_info = self.trainer_map.get(selected, {})
-                self.app.trainer_running_address = trainer_info.get("address", "")
-                self.app.trainer_running_machine_type = trainer_info.get("machine_type", None)
+        selected = self.trainer_running_combo.get_active_text() or ""
+        if selected == NONE_LABEL or not selected:
+            self.app.trainer_running_name = ""
+            self.app.trainer_running_address = ""
+            self.app.trainer_running_machine_type = None
+        else:
+            self.app.trainer_running_name = selected
+            trainer_info = self.trainer_running_map.get(selected, {})
+            self.app.trainer_running_address = trainer_info.get("address", "")
+            self.app.trainer_running_machine_type = trainer_info.get("machine_type", None)
 
         # Trainer Running HRM
         if self.trainer_running_hr_combo:
@@ -1212,7 +1212,7 @@ class SettingsPageUI:
                 self.app.trainer_cycling_machine_type = None
             else:
                 self.app.trainer_cycling_name = selected
-                trainer_info = self.trainer_map.get(selected, {})
+                trainer_info = self.trainer_running_map.get(selected, {})
                 self.app.trainer_cycling_address = trainer_info.get("address", "")
                 self.app.trainer_cycling_machine_type = trainer_info.get("machine_type", None)
 

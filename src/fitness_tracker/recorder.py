@@ -36,7 +36,6 @@ class Recorder:
         self,
         weight_kg: float | None,
         sport_type: SportTypesEnum,
-        on_bpm_update: Callable[[float, int], None],
         database_url: str,
         hr_name: str | None,
         hr_address: str | None,
@@ -51,7 +50,7 @@ class Recorder:
         trainer_machine_type: MachineType | None,
         on_error: Callable[[str], None],
         *,
-        on_sample_update: Callable[[float, float, int, float | None, float | None], None]
+        on_sample_update: Callable[[HeartRateSample | RunningSample | TrainerSample], None]
         | None = None,
         test_mode: bool = False,
     ):
@@ -72,7 +71,6 @@ class Recorder:
 
         self.weight_kg = weight_kg
         self.sport_type = sport_type
-        self.on_bpm = on_bpm_update
         self.on_sample = on_sample_update
         self.on_error = on_error
         self.db = DatabaseManager(database_url=database_url)
@@ -169,30 +167,37 @@ class Recorder:
     # --- HR handling ---
     def _handle_hr_sample(self, sample: HeartRateSample) -> None:
         """Handle a HeartRateSample from HeartRateMux."""
-        t_ms = sample.timestamp_ms
-        bpm = sample.heart_rate_bpm
-        rr = sample.rr_interval_ms
-        energy = sample.energy_expended_kcal
-
-        if bpm is None:
+        if sample.heart_rate_bpm is None:
             return
+
+        logger.bind(data=sample).trace("Handling heart rate sample")
 
         # Initialize the session start
         if self._start_ms is None:
-            self._start_ms = t_ms
+            self._start_ms = sample.timestamp_ms
 
-        delta_ms = int(t_ms - self._start_ms)
+        delta_ms = int(sample.timestamp_ms - self._start_ms)
 
         # Smooth out the bpm using a rolling median
-        self._bpm_history.append(bpm)
+        self._bpm_history.append(sample.heart_rate_bpm)
         smoothed_bpm = int(median(self._bpm_history))
 
-        # Update the live UI
-        GLib.idle_add(self.on_bpm, delta_ms, smoothed_bpm)
+        # Cleaned sample for UI
+        cleaned_sample = HeartRateSample(
+            timestamp_ms=delta_ms,
+            heart_rate_bpm=smoothed_bpm,
+        )
+        GLib.idle_add(self.on_sample, cleaned_sample)
 
         # Persist to the DB if recording
         if self._recording and self._activity_id:
-            self.db.insert_heart_rate(self._activity_id, delta_ms, smoothed_bpm, rr, energy)
+            self.db.insert_heart_rate(
+                self._activity_id,
+                delta_ms,
+                smoothed_bpm,
+                sample.rr_interval_ms,
+                sample.energy_expended_kcal,
+            )
 
     # --- Running handling ---
     def _handle_running_sample(self, sample: RunningSample):
@@ -201,28 +206,25 @@ class Recorder:
 
         logger.bind(data=sample).trace("Handling running sample")
 
-        t_ms = sample.timestamp_ms
         if self._start_ms is None:
-            self._start_ms = t_ms
-        delta_ms = int(t_ms - self._start_ms)
+            self._start_ms = sample.timestamp_ms
 
-        speed_mps = float(sample.speed_mps or 0.0)
-        cadence = int(sample.cadence_spm or 0)
-        dist_m = sample.distance_m
-        watts = float(sample.power_watts) if sample.power_watts is not None else None
-        altitude_m = self._accumulate_altitude(float(dist_m) if dist_m is not None else None)
+        delta_ms = int(sample.timestamp_ms - self._start_ms)
+
+        watts = sample.power_watts
+        altitude_m = self._accumulate_altitude(sample.distance_m)
         if not self.trainer_mux and watts and self.weight_kg and self.incline_percent:
             # Estimate additional power from incline for footpods
             # using speed incline formula derived from QZ reference and Stryd calibration data:
-            # vwatts = (A + B * speed_kmh) * incline
-            # A = -0.96, B = 1.33
+            # vwatts = (a + b * speed_kmh) * incline
+            # a = -0.96, b = 1.33
             # Reference: https://github.com/cagnulein/qdomyos-zwift/commit/c22f0568fd1db86cfdf07e749ea140f21df95e4b
-            A = -0.96
-            B = 1.33
+            a = -0.96
+            b = 1.33
             incline = self.incline_percent
-            speed_kmh = speed_mps * 3.6
+            speed_kmh = sample.speed_kph or 0.0
 
-            speed_term = (A + B * speed_kmh) * incline
+            speed_term = (a + b * speed_kmh) * incline
 
             additional_log = {
                 "weight_kg": self.weight_kg,
@@ -237,29 +239,40 @@ class Recorder:
             )
             watts += speed_term
 
+            # Clamp to 0 watts
+            if watts < 0:
+                watts = 0.0
+
         # Adjust distance by baseline if needed
         if self._recording:
-            if self._dist0_m is None and dist_m is not None:
+            if self._dist0_m is None and sample.distance_m is not None:
                 # If SC reset worked, first distance will be ~0; if not, this becomes our baseline.
-                self._dist0_m = float(dist_m)
-            if dist_m is not None and self._dist0_m is not None:
-                dist_m = max(0.0, float(dist_m) - self._dist0_m)
+                self._dist0_m = sample.distance_m
 
-        # Update UI
-        GLib.idle_add(self.on_sample, delta_ms, speed_mps, cadence, dist_m, watts)
+            if sample.distance_m is not None and self._dist0_m is not None:
+                sample.distance_m = max(0.0, sample.distance_m - self._dist0_m)
+
+        # Adjusted sample for UI update
+        cleaned_sample = RunningSample(
+            timestamp_ms=delta_ms,
+            speed_mps=sample.speed_mps,
+            cadence_spm=sample.cadence_spm,
+            distance_m=sample.distance_m,
+            power_watts=watts,
+            stride_length_m=sample.stride_length_m,
+        )
+        GLib.idle_add(self.on_sample, cleaned_sample)
 
         # Persist to DB if recording
         if self._recording and self._activity_id:
             self.db.insert_running_metrics(
                 self._activity_id,
                 delta_ms,
-                speed_mps=float(speed_mps),
-                cadence_spm=int(cadence),
-                stride_length_m=(
-                    float(sample.stride_length_m) if sample.stride_length_m is not None else None
-                ),
-                total_distance_m=(float(dist_m) if dist_m is not None else None),
-                power_watts=(float(watts) if watts is not None else None),
+                speed_mps=sample.speed_mps if sample.speed_mps is not None else 0.0,
+                cadence_spm=sample.cadence_spm if sample.cadence_spm is not None else 0,
+                stride_length_m=sample.stride_length_m,
+                total_distance_m=sample.distance_m,
+                power_watts=watts,
                 incline_percent=self.incline_percent,
                 altitude_m=altitude_m,
             )
@@ -270,16 +283,11 @@ class Recorder:
 
         logger.bind(data=sample).trace("Handling trainer sample")
 
-        t_ms = sample.timestamp_ms
         if self._start_ms is None:
-            self._start_ms = t_ms
-        delta_ms = int(t_ms - self._start_ms)
+            self._start_ms = sample.timestamp_ms
 
-        speed_mps = float(sample.speed_kmh or 0.0) / 3.6  # Convert km/h to m/s
-        cadence = int(sample.cadence_rpm or 0)
-        dist_m = sample.distance_m
-        watts = float(sample.power_watts) if sample.power_watts is not None else None
-        altitude_m = self._accumulate_altitude(float(dist_m) if dist_m is not None else None)
+        delta_ms = int(sample.timestamp_ms - self._start_ms)
+        altitude_m = self._accumulate_altitude(sample.distance_m)
 
         if (
             sample.target_power is not None
@@ -295,42 +303,37 @@ class Recorder:
 
         # Adjust distance by baseline if needed
         if self._recording:
-            if self._dist0_m is None and dist_m is not None:
-                self._dist0_m = float(dist_m)
-            if dist_m is not None and self._dist0_m is not None:
-                dist_m = max(0.0, float(dist_m) - self._dist0_m)
+            if self._dist0_m is None and sample.distance_m is not None:
+                self._dist0_m = sample.distance_m
+
+            if sample.distance_m is not None and self._dist0_m is not None:
+                sample.distance_m = max(0.0, sample.distance_m - self._dist0_m)
 
         # Update UI
-        GLib.idle_add(self.on_sample, delta_ms, speed_mps, cadence, dist_m, watts)
+        GLib.idle_add(self.on_sample, sample)
 
         # Persist to DB if recording
         if self._recording and self._activity_id:
             if self.sport_type == SportTypesEnum.biking:
-                logger.trace(
-                    f"Inserting cycling metrics into DB: \n\tActivity ID: {self._activity_id} \n\tDelta MS: {delta_ms} \n\tSpeed: {speed_mps} \n\tCadence: {cadence} \n\tDistance: {dist_m} \n\tPower: {watts}"
-                )
                 self.db.insert_cycling_metrics(
                     self._activity_id,
                     delta_ms,
-                    speed_mps=float(speed_mps),
-                    cadence_rpm=int(cadence),
-                    total_distance_m=(float(dist_m) if dist_m is not None else None),
-                    power_watts=(float(watts) if watts is not None else None),
+                    speed_mps=sample.speed_mps if sample.speed_mps is not None else 0.0,
+                    cadence_rpm=int(sample.cadence_rpm) if sample.cadence_rpm is not None else 0,
+                    total_distance_m=sample.distance_m,
+                    power_watts=sample.power_watts,
                     incline_percent=self.incline_percent,
                     altitude_m=altitude_m,
                 )
             elif self.sport_type == SportTypesEnum.running:
-                logger.trace(
-                    f"Inserting running metrics into DB: \n\tActivity ID: {self._activity_id} \n\tDelta MS: {delta_ms} \n\tSpeed: {speed_mps} \n\tCadence: {cadence} \n\tDistance: {dist_m} \n\tPower: {watts}"
-                )
                 self.db.insert_running_metrics(
                     self._activity_id,
                     delta_ms,
-                    speed_mps=float(speed_mps),
-                    cadence_spm=int(cadence),
+                    speed_mps=sample.speed_mps if sample.speed_mps is not None else 0.0,
+                    cadence_spm=int(sample.cadence_rpm) if sample.cadence_rpm is not None else 0,
                     stride_length_m=None,
-                    total_distance_m=(float(dist_m) if dist_m is not None else None),
-                    power_watts=(float(watts) if watts is not None else None),
+                    total_distance_m=sample.distance_m,
+                    power_watts=sample.power_watts,
                     incline_percent=self.incline_percent,
                     altitude_m=altitude_m,
                 )
@@ -360,15 +363,13 @@ class Recorder:
         if have_trainer and self.on_sample:
             device_tasks.append(asyncio.create_task(self._trainer_loop()))
 
-        stop_task = asyncio.create_task(self._stop_event.wait())
+        if not device_tasks:
+            logger.debug("No device tasks to run")
+            return
 
-        # Wait until either a device task finishes or we were asked to stop
-        done, pending = await asyncio.wait(
-            device_tasks + [stop_task],
-            return_when=asyncio.FIRST_COMPLETED,
-        )
+        # Wait for explicit stop only — let each mux's internal loop handle reconnects
+        await self._stop_event.wait()
 
-        # If we were asked to stop, cancel device tasks
         for t in device_tasks:
             t.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -382,6 +383,7 @@ class Recorder:
             on_sample=self._handle_running_sample,
             on_status=self._on_ble_error,
             on_link=self._on_running_link,
+            ble_lock=self._ble_lock,
         )
         self._running_mux = mux
         try:

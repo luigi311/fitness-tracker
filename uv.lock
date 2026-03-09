@@ -82,7 +82,7 @@ wheels = [
 [[package]]
 name = "bleaksport"
 version = "0.3.0"
-source = { git = "https://github.com/luigi311/bleaksport?branch=main#c2ef065270a1bfd9a35416c5cbaacf43e0af1623" }
+source = { git = "https://github.com/luigi311/bleaksport?branch=main#97d4e650c97ab6e6d1ed15dafe9b2b877516163d" }
 dependencies = [
     { name = "bleak" },
     { name = "bleakheart" },
@@ -1292,7 +1292,7 @@ wheels = [
 [[package]]
 name = "workout-parser"
 version = "0.1.0"
-source = { git = "https://github.com/luigi311/workout_parser?branch=main#3d7d9b687ac97defbccafa67545ff21a972fbf19" }
+source = { git = "https://github.com/luigi311/workout_parser?branch=main#3835100ea3702dc9caf3711eabb0c0a3d65bc713" }
 dependencies = [
     { name = "fitparse" },
     { name = "pydantic" },

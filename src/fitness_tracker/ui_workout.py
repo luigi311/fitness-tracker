@@ -7,7 +7,7 @@ import gi
 from fitness_tracker.database import SportTypesEnum
 
 gi.require_versions({"Gtk": "4.0", "Adw": "1"})
-from gi.repository import Adw, Gdk, Gtk, Pango, PangoCairo
+from gi.repository import Adw, Gdk, Gtk, Pango, PangoCairo  # noqa: E402, I001  # ty:ignore[unresolved-import]
 
 
 class InclineControl(Gtk.Frame):
@@ -119,7 +119,7 @@ class TargetGauge(Gtk.DrawingArea):
         # Target model
         self._tgt_lo = 0.0
         self._tgt_hi = 0.0
-        self._tgt_ctr = 0.0
+        self._tgt_mid = 0.0
 
         # Display domain (we map [min,max] -> [start,end] of the arc)
         self._dom_min = 0.0
@@ -131,12 +131,12 @@ class TargetGauge(Gtk.DrawingArea):
     # --- helpers exposed to parent view ---
     def band_status(self) -> str:
         """Return 'in', 'near', 'low', or 'high' relative to target band."""
-        if self._tgt_ctr <= 0:
+        if self._tgt_mid <= 0:
             return "in"
         in_band = self._tgt_lo <= self._value <= self._tgt_hi
         if in_band:
             return "in"
-        near = 0.1 * self._tgt_ctr
+        near = 0.1 * self._tgt_mid
         if self._value < self._tgt_lo:
             return "near" if (self._tgt_lo - self._value) <= near else "low"
         return "near" if (self._value - self._tgt_hi) <= near else "high"
@@ -148,6 +148,7 @@ class TargetGauge(Gtk.DrawingArea):
         value: float,
         units: str,
         target_lo: float,
+        target_mid: float,
         target_hi: float,
         headline: str,
         subline: str,
@@ -157,27 +158,24 @@ class TargetGauge(Gtk.DrawingArea):
         kind: "power" or "pace" (case-insensitive)
         value: current numeric (watts or m/s)
         units: e.g. "W" or "min/mi"
-        target_lo/hi: numeric range in the same unit as `value`
+        target_lo/mid/hi: numeric range in the same unit as `value`
         headline/subline: text to render under the arc
         domain_pad: fraction around center for min/max (0.5 == ±50%).
         """
-        lo = float(min(target_lo, target_hi))
-        hi = float(max(target_lo, target_hi))
-        ctr = 0.5 * (lo + hi)
         pad = max(0.1, float(domain_pad))
 
         self._kind = "PACE" if (kind or "").lower().startswith("pace") else "POWER"
         self._value = float(value)
         self._units = units or ""
-        self._tgt_lo = lo
-        self._tgt_hi = hi
-        self._tgt_ctr = ctr
+        self._tgt_lo = target_lo
+        self._tgt_hi = target_hi
+        self._tgt_mid = target_mid
         self._headline = headline
         self._subline = subline
 
         # Domain is ctr*(1-pad) .. ctr*(1+pad) — avoid zero/neg ranges
-        dmin = max(1e-6, ctr * (1.0 - pad))
-        dmax = max(dmin + 1e-6, ctr * (1.0 + pad))
+        dmin = max(1e-6, target_mid * (1.0 - pad))
+        dmax = max(dmin + 1e-6, target_mid * (1.0 + pad))
         self._dom_min = dmin
         self._dom_max = dmax
 
@@ -248,7 +246,7 @@ class TargetGauge(Gtk.DrawingArea):
         ctx.set_line_width(2.6)
         ctx.set_source_rgba(grid.red, grid.green, grid.blue, grid.alpha)
         for frac in (0.5, 1.0, 1.5):
-            ang = ang_of_value(self._tgt_ctr * frac)
+            ang = ang_of_value(self._tgt_mid * frac)
             x0 = cx + math.cos(ang) * (radius - bar_w * 0.7)
             y0 = cy + math.sin(ang) * (radius - bar_w * 0.7)
             x1 = cx + math.cos(ang) * (radius + bar_w * 0.15)
@@ -262,8 +260,8 @@ class TargetGauge(Gtk.DrawingArea):
         # color by in/out of band
         in_band = self._tgt_lo <= self._value <= self._tgt_hi
         near_band = (
-            self._value < self._tgt_lo and (self._tgt_lo - self._value) <= 0.1 * self._tgt_ctr
-        ) or (self._value > self._tgt_hi and (self._value - self._tgt_hi) <= 0.1 * self._tgt_ctr)
+            self._value < self._tgt_lo and (self._tgt_lo - self._value) <= 0.1 * self._tgt_mid
+        ) or (self._value > self._tgt_hi and (self._value - self._tgt_hi) <= 0.1 * self._tgt_mid)
         if in_band:
             needle_col = (0.20, 0.85, 0.30, 1.0)
         elif near_band:
@@ -463,7 +461,7 @@ class WorkoutView(Gtk.Box):
         # Timers row (Remaining / Elapsed)
         timers = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         self.timer_elapsed = _TimerBig("Elapsed")
-        self.timer_remaining = _TimerBig("Remaining")
+        self.timer_remaining = _TimerBig("Step Remaining")
         timers.append(self.timer_elapsed)
         timers.append(self.timer_remaining)
         content.append(timers)
@@ -668,7 +666,13 @@ class WorkoutView(Gtk.Box):
             self.card_pwr.set_value(str(int(power_watts)))
 
     def set_statuses(
-        self, *, hr_ok: bool, cad_ok: bool, spd_ok: bool, pow_ok: bool, dist_ok: bool
+        self,
+        *,
+        hr_ok: bool,
+        cad_ok: bool,
+        spd_ok: bool,
+        pow_ok: bool,
+        dist_ok: bool,
     ) -> None:
         self.card_hr.set_connected(hr_ok)
         # pace/power card dot represents the active target domain:
@@ -685,38 +689,28 @@ class WorkoutView(Gtk.Box):
         self,
         *,
         current_w: float,
-        target_w: float,
-        target_w_lo: float | None = None,
-        target_w_hi: float | None = None,
+        target_w_lo: float,
+        target_w_mid: float,
+        target_w_hi: float,
     ) -> None:
-        """
-        Show a power band; if you don't have a range, pass only target_w and
-        we'll synthesize a ±5% band for readability.
-        """
-        cur = float(current_w)
-        tgt = float(target_w)
-        if target_w_lo is None or target_w_hi is None:
-            lo = tgt * 0.95
-            hi = tgt * 1.05
-        else:
-            lo = float(min(target_w_lo, target_w_hi))
-            hi = float(max(target_w_lo, target_w_hi))
+        """Show a power band with current watts and target range."""
+        headline = f"{round(current_w)} W"
+        subline = f"Target: {target_w_mid} W"
 
-        headline = f"{round(cur)} W"
-        subline = f"Target: {round(lo)} - {round(hi)} W"
         self.gauge.set_state(
             kind="power",
-            value=cur,
+            value=current_w,
             units="W",
-            target_lo=lo,
-            target_hi=hi,
+            target_lo=target_w_lo,
+            target_mid=target_w_mid,
+            target_hi=target_w_hi,
             headline=headline,
             subline=subline,
             domain_pad=0.5,  # ±50% around center
         )
         # Gauge pill mirrors the gauge; keep its label static as "Gauge"
         self.card_pp.set_unit("W")
-        self.card_pp.set_value(f"{round(cur)}")
+        self.card_pp.set_value(f"{round(current_w)}")
         self._update_compliance_pill()
 
     # -------- Gauge helpers (pace) --------
@@ -724,33 +718,22 @@ class WorkoutView(Gtk.Box):
         self,
         *,
         current_mps: float,
-        target_mps: float,
         current_pace_text: str,
         target_pace_text: str,
-        target_mps_lo: float | None = None,
-        target_mps_hi: float | None = None,
+        target_mps_lo: float,
+        target_mps_mid: float,
+        target_mps_hi: float,
     ) -> None:
-        """
-        Show a pace band (internally speed m/s).
-        If no range provided, uses ±3% to make the band visible.
-        """
-        cur_v = float(current_mps)
-        tgt_v = float(target_mps)
-        if target_mps_lo is None or target_mps_hi is None:
-            lo_v = tgt_v * 0.97
-            hi_v = tgt_v * 1.03
-        else:
-            lo_v = float(min(target_mps_lo, target_mps_hi))
-            hi_v = float(max(target_mps_lo, target_mps_hi))
-
+        """Show a pace band (internally speed m/s)."""
         headline = f"{current_pace_text} /mi"
         subline = f"Target: {target_pace_text} /mi"
         self.gauge.set_state(
             kind="pace",
-            value=cur_v,
+            value=current_mps,
             units="min/mi",
-            target_lo=lo_v,
-            target_hi=hi_v,
+            target_lo=target_mps_lo,
+            target_mid=target_mps_mid,
+            target_hi=target_mps_hi,
             headline=headline,
             subline=subline,
             domain_pad=0.5,

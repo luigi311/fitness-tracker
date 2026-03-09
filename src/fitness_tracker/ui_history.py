@@ -24,7 +24,7 @@ from fitness_tracker.database import (
 from fitness_tracker.exporters import activity_to_tcx, infer_sport
 
 gi.require_versions({"Gtk": "4.0", "Adw": "1"})
-from gi.repository import Adw, Gio, GLib, Gtk  # noqa: E402
+from gi.repository import Adw, Gio, GLib, Gtk  # noqa: E402  # ty:ignore[unresolved-import]
 
 # ---------- Helpers / small data structures ----------
 
@@ -101,7 +101,7 @@ def _tz_aware_localize(dt: datetime.datetime) -> datetime.datetime:
 
 
 class HistoryPageUI:
-    def __init__(self, app: "FitnessAppUI"):
+    def __init__(self, app):
         self.app = app
 
         # State

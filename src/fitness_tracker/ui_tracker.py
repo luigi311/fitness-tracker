@@ -17,7 +17,7 @@ from fitness_tracker.ui_mode import ModeSelectView
 from fitness_tracker.ui_workout import WorkoutView
 
 gi.require_versions({"Gtk": "4.0", "Adw": "1"})
-from gi.repository import Adw, GLib
+from gi.repository import Adw, GLib  # noqa: E402  # ty:ignore[unresolved-import]
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -29,7 +29,7 @@ TGT_NONE, TGT_POWER, TGT_PACE = 0, 1, 2
 
 
 class TrackerPageUI:
-    def __init__(self, app: "FitnessAppUI") -> None:
+    def __init__(self, app) -> None:
         self.app = app
 
         # buffers (ms + values)
@@ -38,7 +38,7 @@ class TrackerPageUI:
         self._times = deque()
         self._bpms = deque()
         self._powers = deque()
-        self._last_ms = None
+        self._last_ms: int | None = None
         self._erg_last_set_watts: int | None = None
         self._erg_last_set_ts: float = 0.0
 
@@ -57,11 +57,13 @@ class TrackerPageUI:
         self._start_monotonic = 0.0
 
         # live sensor cache
-        self._rt_mph = 0.0
-        self._rt_cadence = 0
-        self._rt_dist_mi = 0.0
-        self._rt_pace_str = "0:00"
-        self._rt_watts = 0.0
+        self._rt_mph: float = 0.0
+        self._rt_mps: float = 0.0
+        self._rt_cadence: int = 0
+        self._rt_dist_mi: float = 0.0
+        self._rt_dist_m: float = 0.0
+        self._rt_pace_str: str = "0:00"
+        self._rt_watts: int = 0
 
         # status updater
         self._status_timer_id: int | None = None
@@ -311,49 +313,48 @@ class TrackerPageUI:
             raise RuntimeError(msg)
 
     # ---- recorder callbacks (public)
-    def on_bpm(self, delta_ms: float, bpm: int) -> None:
-        self._last_bpm = bpm
-        self._last_ms = delta_ms
+    def on_sample(self, sample: HeartRateSample | RunningSample | TrainerSample) -> None:
+        if isinstance(sample, HeartRateSample):
+            if sample.heart_rate_bpm is None:
+                return
+            self._last_bpm = sample.heart_rate_bpm
+            self._last_ms = sample.timestamp_ms
+        else:
+            self._last_ms = sample.timestamp_ms
+            self._rt_mph = sample.speed_mph if sample.speed_mph is not None else 0.0
+            self._rt_mps = sample.speed_mps if sample.speed_mps is not None else 0.0
+            cadence_spm = (
+                sample.cadence_spm
+                if isinstance(sample, RunningSample) and sample.cadence_spm is not None
+                else 0
+            )
+            cadence_rpm = (
+                sample.cadence_rpm
+                if isinstance(sample, TrainerSample) and sample.cadence_rpm is not None
+                else 0
+            )
+            cadence = cadence_spm or cadence_rpm
+            self._rt_cadence = int(cadence)
+            self._rt_dist_mi = float(sample.distance_miles or 0.0)
+            self._rt_dist_m = float(sample.distance_m or 0.0)
+            self._rt_pace_str = self._pace_from_mph(self._rt_mph)
+            self._rt_watts = int(sample.power_watts or 0)
 
-        # If not running yet, keep preview values/cards updated but do NOT progress timers
         if not self._running:
             self._preview_cards_only()
-            # workout preview: keep guidance at t=0
             if self.workout_view and self._workout:
                 self._update_workout_guidance(elapsed_s=0)
                 self.workout_view.set_progress(0.0)
             return
 
-        # Running → feed sample
-        watts = self._current_power_for_time(delta_ms)
-        self._push_sample(delta_ms, bpm, watts)
-
-    def on_sample(self, delta_ms, speed_mps, cadence_spm, distance_m, power_watts):
-        mph = speed_mps * 2.23693629
-        dist_mi = (distance_m or 0.0) * 0.00062137119
-        pace_str = self._pace_from_mph(mph) if mph > 0.01 else "0:00"
-        watts = power_watts if power_watts is not None else 0.0
-
-        self._rt_mph = mph
-        self._rt_cadence = int(cadence_spm)
-        self._rt_dist_mi = dist_mi
-        self._rt_pace_str = pace_str
-        self._rt_watts = float(watts)
-
-        if not self._running:
-            # live preview to cards
-            self._preview_cards_only()
-            # keep workout targeting visible at t=0
-            if self.workout_view and self._workout:
-                self._update_workout_guidance(elapsed_s=0)
-                self.workout_view.set_progress(0.0)
-            return
-
-        # Running: use last bpm + current watts
-        self._push_sample(delta_ms, self._last_bpm, self._rt_watts)
+        self._push_sample()
 
     # ---- core update
-    def _push_sample(self, t_ms: float, bpm: int, watts: float) -> None:
+    def _push_sample(self) -> None:
+        bpm = self._last_bpm
+        t_ms = self._last_ms if self._last_ms is not None else int(time.monotonic() * 1000)
+        watts = self._rt_watts
+
         self._bpm_sum += bpm
         self._bpm_n += 1
         self._bpm_max = max(self._bpm_max, bpm)
@@ -377,22 +378,18 @@ class TrackerPageUI:
             self.free_view.update_chart(x, hr, pw, hr_rgb=rgb)
 
         # cards/timer
-        mph = self._rt_mph if not self.app.test_mode else getattr(self, "_last_mph", 0.0)
-        cadence = self._rt_cadence if not self.app.test_mode else getattr(self, "_last_cadence", 0)
-        dist_mi = (
-            self._rt_dist_mi
-            if not self.app.test_mode
-            else getattr(self, "_integrated_distance_miles", 0.0)
-        )
-        pace_str = self._rt_pace_str if not self.app.test_mode else self._pace_from_mph(mph)
-        watts_val = round(self._rt_watts if not self.app.test_mode else watts)
+        speed_mph = self._rt_mph
+        speed_mps = self._rt_mps
+        cadence = self._rt_cadence
+        dist_mi = self._rt_dist_mi
+        dist_m = self._rt_dist_m
+        pace_str = self._rt_pace_str
+        watts_val = round(self._rt_watts)
 
-        self._set_cards(dist_mi, pace_str, cadence, mph, bpm, watts_val)
+        self._set_cards(dist_mi, pace_str, cadence, speed_mph, bpm, watts_val)
 
         # pebble bridge
         if self.app.pebble_bridge:
-            speed_mps = float(mph) * 0.44704
-            dist_m = float(dist_mi) / 0.00062137119
             self.app.pebble_bridge.update(
                 hr=int(bpm),
                 speed_mps=speed_mps,
@@ -413,66 +410,60 @@ class TrackerPageUI:
         if not step or idx is None:
             return
 
-        step.generate_absolute_power_targets_from_percent(self.app.ftp_watts)
-        # step.generate_pace_targets_from_percent(self.app.threshold_speed_mps)
-
-        w_mid = step.watts_mid
-        w_lo = step.watts_lo
-        w_hi = step.watts_hi
-        v_mid = step.speed_mps_mid
-        v_lo = step.speed_mps_lo
-        v_hi = step.speed_mps_hi
+        if step.watts_mid is None and step.speed_mps_mid is None:
+            # Only generate absolute targets if they are not already defined
+            # to avoid overwriting any watt/pace targets set by the workout author
+            step.generate_absolute_power_targets_from_percent(self.app.ftp_watts)
+            # step.generate_pace_targets_from_percent(self.app.threshold_speed_mps)
 
         self._active_step_index = idx
 
         # target text
         tgt_txt = "Target: —"
-        if w_mid is not None:
-            tgt_txt = f"Target: {round(w_lo or w_mid * 0.95)} - {round(w_hi or w_mid * 1.05)} W"
-        elif v_mid is not None:
-            tgt_txt = f"Target: {self._pace_from_mps(v_mid)} /mi"
-            if v_lo is not None and v_hi is not None:
-                # order pace strings from faster to slower
-                lo_s = 1609.344 / max(1e-6, v_lo)
-                hi_s = 1609.344 / max(1e-6, v_hi)
-                a = self._pace_from_mps(v_lo)
-                b = self._pace_from_mps(v_hi)
-                pace_a, pace_b = (a, b) if lo_s <= hi_s else (b, a)
-                tgt_txt = f"Target: {pace_a} - {pace_b} /mi"
+        # lo and hi are guaranteed if any are present due to pydantic validators.
+        if step.watts_lo is not None and step.watts_hi is not None:
+            a = round(step.watts_lo)
+            b = round(step.watts_hi)
+            tgt_txt = f"Target: {a} - {b} W"
+        elif step.speed_mph_lo is not None and step.speed_mph_hi is not None:
+            a = self._pace_from_mph(step.speed_mph_lo)
+            b = self._pace_from_mph(step.speed_mph_hi)
+            tgt_txt = f"Target: {b} - {a} /mi"
 
         # next preview
         nxt_text = "Next: —"
         if 0 <= idx + 1 < len(self._workout.steps):
             next_step = self._workout.steps[idx + 1]
-            next_step.generate_absolute_power_targets_from_percent(self.app.ftp_watts)
 
-            if next_step.watts_mid is not None:
-                nxt_w = next_step.watts_mid
-                nxt_text = f"Next: {round(nxt_w)} W for {int(next_step.duration_s)} s"
-            elif next_step.speed_mps_mid is not None:
-                nxt_text = f"Next: {self._pace_from_mps(next_step.speed_mps_mid)} /mi for {int(next_step.duration_s)} s"
+            if next_step.watts_mid is None and next_step.speed_mps_mid is None:
+                next_step.generate_absolute_power_targets_from_percent(self.app.ftp_watts)
+                # next_step.generate_pace_targets_from_percent(self.app.threshold_speed_mps)
+
+            if next_step.watts_lo is not None and next_step.watts_hi is not None:
+                a = round(next_step.watts_lo)
+                b = round(next_step.watts_hi)
+                nxt_text = f"Next: {a} - {b} W for {int(next_step.duration_s)} s"
+            elif next_step.speed_mph_lo is not None and next_step.speed_mph_hi is not None:
+                a = self._pace_from_mph(next_step.speed_mph_lo)
+                b = self._pace_from_mph(next_step.speed_mph_hi)
+                nxt_text = f"Next: {b} - {a} /mi for {int(next_step.duration_s)} s"
 
         self.workout_view.set_target_text(tgt_txt)
         self.workout_view.set_next_text(nxt_text)
 
         # gauge update (choose power vs pace)
-        if w_mid is not None:
-            cur_w = float(
-                self._rt_watts if not self.app.test_mode else getattr(self, "_last_power", 0.0),
-            )
+        if step.watts_lo is not None and step.watts_hi is not None and step.watts_mid is not None:
             self.workout_view.set_gauge_power(
-                current_w=cur_w,
-                target_w=float(w_mid),
-                target_w_lo=w_lo,
-                target_w_hi=w_hi,
+                current_w=self._rt_watts,
+                target_w_mid=step.watts_mid,
+                target_w_lo=step.watts_lo,
+                target_w_hi=step.watts_hi,
             )
             if self.app.pebble_bridge:
-                lo = float(w_lo if w_lo is not None else w_mid * 0.95)
-                hi = float(w_hi if w_hi is not None else w_mid * 1.05)
                 self.app.pebble_bridge.update(
                     tgt_kind=TGT_POWER,
-                    tgt_lo=w_lo,
-                    tgt_hi=w_hi,
+                    tgt_lo=step.watts_lo,
+                    tgt_hi=step.watts_hi,
                 )
 
             # ERG Mode controls
@@ -483,31 +474,34 @@ class TrackerPageUI:
                 watt_diff = 3
                 time_diff = 2.0
                 if self._erg_last_set_watts is None or (
-                    abs(self._erg_last_set_watts - int(w_mid)) >= watt_diff
+                    abs(self._erg_last_set_watts - step.watts_mid) >= watt_diff
                     and now - self._erg_last_set_ts > time_diff
                 ):
-                    self.app.recorder.set_target_power(int(w_mid))
-                    self._erg_last_set_watts = int(w_mid)
+                    self.app.recorder.set_target_power(step.watts_mid)
+                    self._erg_last_set_watts = step.watts_mid
                     self._erg_last_set_ts = now
 
-        elif v_mid is not None:
-            mph = self._rt_mph if not self.app.test_mode else getattr(self, "_last_mph", 0.0)
-            cur_mps = float(mph) * 0.44704
+        # If a single speed target is defined
+        # all of them are guaranteed to be defined due to pydantic validators
+        elif (
+            step.speed_mps_mid is not None
+            and step.speed_mph_mid is not None
+            and step.speed_mps_lo is not None
+            and step.speed_mps_hi is not None
+        ):
             self.workout_view.set_gauge_pace(
-                current_mps=cur_mps,
-                target_mps=float(v_mid),
-                current_pace_text=self._pace_from_mps(cur_mps),
-                target_pace_text=self._pace_from_mps(v_mid),
-                target_mps_lo=v_lo,
-                target_mps_hi=v_hi,
+                current_mps=self._rt_mps,
+                current_pace_text=self._pace_from_mph(self._rt_mph),
+                target_pace_text=self._pace_from_mph(step.speed_mph_mid),
+                target_mps_lo=step.speed_mps_lo,
+                target_mps_mid=step.speed_mps_mid,
+                target_mps_hi=step.speed_mps_hi,
             )
             if self.app.pebble_bridge:
-                lo = float(v_lo if v_lo is not None else v_mid * 0.97)
-                hi = float(v_hi if v_hi is not None else v_mid * 1.03)
                 self.app.pebble_bridge.update(
                     tgt_kind=TGT_PACE,
-                    tgt_lo=lo,  # m/s
-                    tgt_hi=hi,  # m/s
+                    tgt_lo=step.speed_mps_lo,
+                    tgt_hi=step.speed_mps_hi,
                 )
         elif self.app.pebble_bridge:
             self.app.pebble_bridge.update(tgt_kind=TGT_NONE)
@@ -534,17 +528,20 @@ class TrackerPageUI:
             return
         t_s = max(0.0, float(elapsed_s) + self._manual_offset_s)
         total = float(self._workout.total_seconds)
-        if t_s >= total - 1e-6:
+
+        if t_s >= total:
             self._workout = None
             self._workout_path = None
             self._active_step_index = -1
             self._manual_offset_s = 0.0
+
             # Swap UI to free-run (keep recording, timer, charts alive)
             sport_type = (
                 self.workout_view.sport_type if self.workout_view else SportTypesEnum.running
             )
             self.free_view = FreeRunView(self.app, sport_type=sport_type)
             self.free_view.btn_stop.connect("clicked", lambda *_: self._stop_run_and_back())
+
             # Replace the top page: pop workout, push free-run
             if self.nav:
                 self.nav.pop()
@@ -584,10 +581,19 @@ class TrackerPageUI:
         self._update_workout_guidance(int(current_elapsed if self._running else 0))
 
     # ---- helpers
-    def _set_cards(self, dist_mi, pace_str, cadence, mph, bpm, watts):
+    def _set_cards(
+        self,
+        dist_mi: float,
+        pace_str: str,
+        cadence: int,
+        mph: float,
+        bpm: int,
+        watts: int,
+    ) -> None:
         # Free-run cards
         if self.free_view:
             self.free_view.set_metrics(dist_mi, pace_str, cadence, mph, bpm, watts)
+
         # Workout metric strip
         if self.workout_view:
             # pick center card domain based on whether there is an active power target
@@ -601,29 +607,25 @@ class TrackerPageUI:
                     or (s.percent_watts_hi is not None)
                 )
             self.workout_view.set_metrics(
-                bpm=int(bpm),
+                bpm=bpm,
                 pace=pace_str,
-                cadence_spm=int(cadence),
-                speed_mph=float(mph),
-                dist_mi=float(dist_mi),
-                power_watts=int(watts),
+                cadence_spm=cadence,
+                speed_mph=mph,
+                dist_mi=dist_mi,
+                power_watts=watts,
                 is_power=is_power,
             )
 
     def _preview_cards_only(self) -> None:
         """Update the visible cards/labels without progressing time/progress."""
-        mph = self._rt_mph if not self.app.test_mode else getattr(self, "_last_mph", 0.0)
-        cadence = self._rt_cadence if not self.app.test_mode else getattr(self, "_last_cadence", 0)
-        dist_mi = (
-            self._rt_dist_mi
-            if not self.app.test_mode
-            else getattr(self, "_integrated_distance_miles", 0.0)
-        )
-        pace_str = self._rt_pace_str if not self.app.test_mode else self._pace_from_mph(mph)
-        watts_val = round(
-            self._rt_watts if not self.app.test_mode else getattr(self, "_last_power", 0.0)
-        )
-        self._set_cards(dist_mi, pace_str, cadence, mph, int(self._last_bpm or 0), watts_val)
+        speed_mph = self._rt_mph
+        speed_mps = self._rt_mps
+        cadence = self._rt_cadence
+        dist_mi = self._rt_dist_mi
+        dist_m = self._rt_dist_m
+        pace_str = self._rt_pace_str
+        watts_val = round(self._rt_watts)
+        self._set_cards(dist_mi, pace_str, cadence, speed_mph, int(self._last_bpm or 0), watts_val)
 
         # keep timers frozen in preview
         self._update_free_preview_timer_and_cards()
@@ -633,11 +635,11 @@ class TrackerPageUI:
         if self.app.pebble_bridge:
             self.app.pebble_bridge.update(
                 hr=int(self._last_bpm or 0),
-                speed_mps=float(mph) * 0.44704,
-                cadence=int(cadence),
-                dist_m=float(dist_mi) / 0.00062137119,
+                speed_mps=speed_mps,
+                cadence=cadence,
+                dist_m=dist_m,
                 status=0,
-                power_w=int(watts_val),
+                power_w=watts_val,
             )
 
     def _update_free_preview_timer_and_cards(self) -> None:
@@ -668,7 +670,7 @@ class TrackerPageUI:
         acc = 0.0
         step_start = 0.0
         step_dur = 0.0
-        for i, s in enumerate(self._workout.steps):
+        for s in self._workout.steps:
             nxt = acc + s.duration_s
             if t_s < nxt + 1e-6:
                 step_start = acc
@@ -757,7 +759,7 @@ class TrackerPageUI:
         self._last_mph = cur_mph
 
         self._last_cadence = int(
-            max(75, min(95, getattr(self, "_last_cadence", 86) + random.uniform(-2, 2)))
+            max(75, min(95, getattr(self, "_last_cadence", 86) + random.uniform(-2, 2))),
         )
 
         if self._running:
@@ -790,7 +792,7 @@ class TrackerPageUI:
                     timestamp_ms=wall_ts_ms,
                     speed_kmh=float(self._last_mph) * 1.60934,
                     cadence_rpm=self._last_cadence,
-                    distance_m=dist_m if self._running else None,
+                    distance_m=dist_m,
                     power_watts=float(self._last_power),
                     target_power=None,
                 )
@@ -799,7 +801,7 @@ class TrackerPageUI:
                     timestamp_ms=wall_ts_ms,
                     speed_mps=float(self._last_mph) * 0.44704,
                     cadence_spm=self._last_cadence,
-                    distance_m=dist_m if self._running else None,
+                    distance_m=dist_m,
                     power_watts=int(self._last_power),
                     stride_length_m=None,
                 )
@@ -809,7 +811,7 @@ class TrackerPageUI:
 
     # ---- connection dots
     def update_metric_statuses(self) -> None:
-        rec = self.app.recorder if self.app.recorder else None
+        rec = self.app.recorder or None
         if self.app.test_mode or not rec:
             hr_ok = speed_ok = cad_ok = pow_ok = dist_ok = True
         else:
@@ -877,37 +879,6 @@ class TrackerPageUI:
             m += 1
             s = 0
         return f"{m}:{s:02d}"
-
-    @staticmethod
-    def _pace_from_mps(mps: float) -> str:
-        if mps <= 0.001:
-            return "0:00"
-        mph = mps * 2.23693629
-        return TrackerPageUI._pace_from_mph(mph)
-
-    def _current_power_for_time(self, _t_ms: float) -> float:
-        if not self.app.test_mode:
-            return float(self._rt_watts or 0.0)
-
-        last = getattr(self, "_last_power", 250.0)
-        target_watts = last
-        self._sim_target_mph = None
-
-        if self._workout:
-            t_s = (self._elapsed_display_s if self._running else 0.0) + self._manual_offset_s
-            idx, step = self._workout.get_step_at(t_s)
-            if not step or idx is None:
-                return last
-            w = step.watts_mid
-            v_mph = step.speed_mph_mid
-
-            if w is not None:
-                target_watts = float(w)
-            elif v_mph is not None:
-                self._sim_target_mph = float(v_mph)
-
-        self._last_power = last + 0.25 * (target_watts - last)
-        return self._last_power
 
     @staticmethod
     def _fmt_mmss(total_s: int) -> str:
