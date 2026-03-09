@@ -363,15 +363,13 @@ class Recorder:
         if have_trainer and self.on_sample:
             device_tasks.append(asyncio.create_task(self._trainer_loop()))
 
-        stop_task = asyncio.create_task(self._stop_event.wait())
+        if not device_tasks:
+            logger.debug("No device tasks to run")
+            return
 
-        # Wait until either a device task finishes or we were asked to stop
-        done, pending = await asyncio.wait(
-            device_tasks + [stop_task],
-            return_when=asyncio.FIRST_COMPLETED,
-        )
+        # Wait for explicit stop only — let each mux's internal loop handle reconnects
+        await self._stop_event.wait()
 
-        # If we were asked to stop, cancel device tasks
         for t in device_tasks:
             t.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -385,6 +383,7 @@ class Recorder:
             on_sample=self._handle_running_sample,
             on_status=self._on_ble_error,
             on_link=self._on_running_link,
+            ble_lock=self._ble_lock,
         )
         self._running_mux = mux
         try:
