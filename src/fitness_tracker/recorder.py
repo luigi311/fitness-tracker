@@ -282,7 +282,6 @@ class Recorder:
 
         delta_ms = int(sample.timestamp_ms - self._start_ms)
         adjusted_distance_m = sample.distance_m
-        altitude_m = self._accumulate_altitude(sample.distance_m)
 
         if (
             sample.target_power is not None

@@ -88,8 +88,8 @@ class RunningMetrics(Base):
     timestamp_ms = Column(BigInteger, nullable=False)
 
     # core metrics
-    speed_mps = Column(Float, nullable=False) # speed (m/s)
-    cadence_spm = Column(Integer, nullable=False) # steps per minute
+    speed_mps = Column(Float, nullable=False)  # speed (m/s)
+    cadence_spm = Column(Integer, nullable=False)  # steps per minute
     stride_length_m = Column(Float)
     total_distance_m = Column(Float)
     power_watts = Column(Float)
@@ -110,8 +110,8 @@ class CyclingMetrics(Base):
     activity_id = Column(Integer, ForeignKey("activities.id"), nullable=False)
     timestamp_ms = Column(BigInteger, nullable=False)
 
-    speed_mps = Column(Float, nullable=False) # speed (m/s)
-    cadence_rpm = Column(Integer) # cadence revolutions per minute
+    speed_mps = Column(Float, nullable=False)  # speed (m/s)
+    cadence_rpm = Column(Integer)  # cadence revolutions per minute
     total_distance_m = Column(Float)
     power_watts = Column(Float)
     incline_percent = Column(Float)
@@ -312,7 +312,8 @@ class DatabaseManager:
             total_distance_m=sample.distance_m,
             power_watts=sample.power_watts,
             incline_percent=incline_percent,
-            altitude_m=sample.altitude_m,
+            altitude_m=sample.altitude_m
+            or (sample.inclination if isinstance(sample, TrainerSample) else None),
         )
         self._pending_run.append(rm)
         if len(self._pending_run) >= self.BATCH_SIZE:
@@ -332,7 +333,8 @@ class DatabaseManager:
             total_distance_m=sample.distance_m,
             power_watts=sample.power_watts,
             incline_percent=incline_percent,
-            altitude_m=sample.altitude_m,
+            altitude_m=sample.altitude_m
+            or (sample.inclination if isinstance(sample, TrainerSample) else None),
         )
         self._pending_cyc.append(cm)
         if len(self._pending_cyc) >= self.BATCH_SIZE:
