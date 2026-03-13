@@ -793,7 +793,7 @@ class TrackerPageUI:
                     speed_kmh=float(self._last_mph) * 1.60934,
                     cadence_rpm=self._last_cadence,
                     distance_m=dist_m,
-                    power_watts=float(self._last_power),
+                    power_watts=int(self._last_power),
                     target_power=None,
                 )
             else:
