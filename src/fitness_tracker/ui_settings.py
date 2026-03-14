@@ -678,6 +678,21 @@ class SettingsPageUI:
             [self.app.trainer_cycling_name] if self.app.trainer_cycling_name else [],
             self.app.trainer_cycling_name,
         )
+        self.trainer_running_map = (
+            {
+                self.app.app_settings.trainer_running.trainer_name: self.app.app_settings.trainer_running.machine_type
+            }
+            if self.app.app_settings.trainer_running.trainer_name
+            else {}
+        )
+        self.trainer_cycling_map = (
+            {
+                self.app.app_settings.trainer_cycling.trainer_name: self.app.app_settings.trainer_cycling.machine_type
+            }
+            if self.app.app_settings.trainer_cycling.trainer_name
+            else {}
+        )
+
         self._combo_set_items_with_none(
             self.trainer_running_hr_combo,
             [self.app.trainer_running_hr_name] if self.app.trainer_running_hr_name else [],
@@ -687,6 +702,20 @@ class SettingsPageUI:
             self.trainer_cycling_hr_combo,
             [self.app.trainer_cycling_hr_name] if self.app.trainer_cycling_hr_name else [],
             self.app.trainer_cycling_hr_name,
+        )
+        self.trainer_running_hr_map = (
+            {
+                self.app.app_settings.trainer_running.hr_name: self.app.app_settings.trainer_running.hr_address
+            }
+            if self.app.app_settings.trainer_running.hr_name
+            else {}
+        )
+        self.trainer_cycling_hr_map = (
+            {
+                self.app.app_settings.trainer_cycling.hr_name: self.app.app_settings.trainer_cycling.hr_address
+            }
+            if self.app.app_settings.trainer_cycling.hr_name
+            else {}
         )
 
         # Prepopulate Pebble
