@@ -264,6 +264,8 @@ dependencies = [
     { name = "loguru" },
     { name = "matplotlib" },
     { name = "psycopg2-binary" },
+    { name = "pydantic-file-settings" },
+    { name = "pydantic-settings" },
     { name = "pygobject" },
     { name = "requests" },
     { name = "sqlalchemy" },
@@ -290,6 +292,8 @@ requires-dist = [
     { name = "loguru", specifier = ">=0.7.3" },
     { name = "matplotlib", specifier = ">=3.10.3" },
     { name = "psycopg2-binary", specifier = ">=2.9.10" },
+    { name = "pydantic-file-settings", specifier = ">=0.1.0" },
+    { name = "pydantic-settings", specifier = ">=2.13.1" },
     { name = "pygobject", specifier = ">=3.52.3" },
     { name = "requests", specifier = ">=2.32.5" },
     { name = "sqlalchemy", specifier = ">=2.0.41" },
@@ -779,6 +783,32 @@ wheels = [
 ]
 
 [[package]]
+name = "pydantic-file-settings"
+version = "0.1.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pydantic-settings" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/5f/e4/45773ea853be0ba78894dbe2330eb5d9faa9470962897535f62ddf538ad2/pydantic_file_settings-0.1.0.tar.gz", hash = "sha256:c9ca0f7594181ff1c561fc0f5b606b2748f86a70aae28cc6d3d3d7fdaefe61fb", size = 37481, upload-time = "2025-12-01T17:41:43.402Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/7c/2c/48357357e1099816e063011fad34b7cc07cd83fcd2ed1c48d1967e9963f5/pydantic_file_settings-0.1.0-py3-none-any.whl", hash = "sha256:0e0eef39c044b17cc175e761ae6b82d7a7240f5100dc4dc0e71739c36defa539", size = 5563, upload-time = "2025-12-01T17:41:41.994Z" },
+]
+
+[[package]]
+name = "pydantic-settings"
+version = "2.13.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pydantic" },
+    { name = "python-dotenv" },
+    { name = "typing-inspection" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/52/6d/fffca34caecc4a3f97bda81b2098da5e8ab7efc9a66e819074a11955d87e/pydantic_settings-2.13.1.tar.gz", hash = "sha256:b4c11847b15237fb0171e1462bf540e294affb9b86db4d9aa5c01730bdbe4025", size = 223826, upload-time = "2026-02-19T13:45:08.055Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/00/4b/ccc026168948fec4f7555b9164c724cf4125eac006e176541483d2c959be/pydantic_settings-2.13.1-py3-none-any.whl", hash = "sha256:d56fd801823dbeae7f0975e1f8c8e25c258eb75d278ea7abb5d9cebb01b56237", size = 58929, upload-time = "2026-02-19T13:45:06.034Z" },
+]
+
+[[package]]
 name = "pyftms"
 version = "0.4.15"
 source = { git = "https://github.com/luigi311/python-pyftms?branch=dont_fail_on_gatt_read#ac161b874eb052335c66b793e895c2e954611b98" }
@@ -908,6 +938,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/66/c0/0c8b6ad9f17a802ee498c46e004a0eb49bc148f2fd230864601a86dcf6db/python-dateutil-2.9.0.post0.tar.gz", hash = "sha256:37dd54208da7e1cd875388217d5e00ebd4179249f90fb72437e91a35459a0ad3", size = 342432, upload-time = "2024-03-01T18:36:20.211Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/ec/57/56b9bcc3c9c6a792fcbaf139543cee77261f3651ca9da0c93f5c1221264b/python_dateutil-2.9.0.post0-py2.py3-none-any.whl", hash = "sha256:a8b2bc7bffae282281c8140a97d3aa9c14da0b136dfe83f850eea9a5f7470427", size = 229892, upload-time = "2024-03-01T18:36:18.57Z" },
+]
+
+[[package]]
+name = "python-dotenv"
+version = "1.2.2"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/82/ed/0301aeeac3e5353ef3d94b6ec08bbcabd04a72018415dcb29e588514bba8/python_dotenv-1.2.2.tar.gz", hash = "sha256:2c371a91fbd7ba082c2c1dc1f8bf89ca22564a087c2c287cd9b662adde799cf3", size = 50135, upload-time = "2026-03-01T16:00:26.196Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/0b/d7/1959b9648791274998a9c3526f6d0ec8fd2233e4d4acce81bbae76b44b2a/python_dotenv-1.2.2-py3-none-any.whl", hash = "sha256:1d8214789a24de455a8b8bd8ae6fe3c6b69a5e3d64aa8a8e5d68e694bbcb285a", size = 22101, upload-time = "2026-03-01T16:00:25.09Z" },
 ]
 
 [[package]]
