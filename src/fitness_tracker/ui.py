@@ -8,7 +8,6 @@ from typing import TYPE_CHECKING
 import gi
 from bleaksport import MachineType
 from loguru import logger
-from matplotlib.artist import get
 from pebble_bridge import PebbleBridge
 from xdg_base_dirs import (
     xdg_config_home,
