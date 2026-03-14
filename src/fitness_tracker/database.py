@@ -2,6 +2,7 @@ from datetime import UTC, datetime
 from enum import Enum
 from zoneinfo import ZoneInfo
 
+from bleaksport.models import CyclingSample, RunningSample, TrainerSample
 from sqlalchemy import (
     BigInteger,
     Column,
@@ -87,8 +88,8 @@ class RunningMetrics(Base):
     timestamp_ms = Column(BigInteger, nullable=False)
 
     # core metrics
-    speed_mps = Column(Float, nullable=False) # speed (m/s)
-    cadence_spm = Column(Integer, nullable=False) # steps per minute
+    speed_mps = Column(Float, nullable=False)  # speed (m/s)
+    cadence_spm = Column(Integer, nullable=False)  # steps per minute
     stride_length_m = Column(Float)
     total_distance_m = Column(Float)
     power_watts = Column(Float)
@@ -109,8 +110,8 @@ class CyclingMetrics(Base):
     activity_id = Column(Integer, ForeignKey("activities.id"), nullable=False)
     timestamp_ms = Column(BigInteger, nullable=False)
 
-    speed_mps = Column(Float, nullable=False) # speed (m/s)
-    cadence_rpm = Column(Integer) # cadence revolutions per minute
+    speed_mps = Column(Float, nullable=False)  # speed (m/s)
+    cadence_rpm = Column(Integer)  # cadence revolutions per minute
     total_distance_m = Column(Float)
     power_watts = Column(Float)
     incline_percent = Column(Float)
@@ -299,25 +300,20 @@ class DatabaseManager:
     def insert_running_metrics(
         self,
         activity_id: int,
-        timestamp_ms: int,
-        speed_mps: float,
-        cadence_spm: int,
-        stride_length_m: float | None,
-        total_distance_m: float | None,
-        power_watts: float | None,
+        sample: RunningSample | TrainerSample,
         incline_percent: float | None,
-        altitude_m: float | None,
     ) -> None:
         rm = RunningMetrics(
             activity_id=activity_id,
-            timestamp_ms=timestamp_ms,
-            speed_mps=speed_mps,
-            cadence_spm=cadence_spm,
-            stride_length_m=stride_length_m,
-            total_distance_m=total_distance_m,
-            power_watts=power_watts,
+            timestamp_ms=sample.timestamp_ms,
+            speed_mps=sample.speed_mps,
+            cadence_spm=sample.cadence_spm,
+            stride_length_m=sample.stride_length_m if isinstance(sample, RunningSample) else None,
+            total_distance_m=sample.distance_m,
+            power_watts=sample.power_watts,
             incline_percent=incline_percent,
-            altitude_m=altitude_m,
+            altitude_m=sample.altitude_m
+            or (sample.inclination if isinstance(sample, TrainerSample) else None),
         )
         self._pending_run.append(rm)
         if len(self._pending_run) >= self.BATCH_SIZE:
@@ -326,23 +322,19 @@ class DatabaseManager:
     def insert_cycling_metrics(
         self,
         activity_id: int,
-        timestamp_ms: int,
-        speed_mps: float,
-        cadence_rpm: int | None,
-        total_distance_m: float | None,
-        power_watts: float | None,
+        sample: CyclingSample | TrainerSample,
         incline_percent: float | None,
-        altitude_m: float | None,
     ) -> None:
         cm = CyclingMetrics(
             activity_id=activity_id,
-            timestamp_ms=timestamp_ms,
-            speed_mps=speed_mps,
-            cadence_rpm=cadence_rpm,
-            total_distance_m=total_distance_m,
-            power_watts=power_watts,
+            timestamp_ms=sample.timestamp_ms,
+            speed_mps=sample.speed_mps,
+            cadence_rpm=sample.cadence_rpm,
+            total_distance_m=sample.distance_m,
+            power_watts=sample.power_watts,
             incline_percent=incline_percent,
-            altitude_m=altitude_m,
+            altitude_m=sample.altitude_m
+            or (sample.inclination if isinstance(sample, TrainerSample) else None),
         )
         self._pending_cyc.append(cm)
         if len(self._pending_cyc) >= self.BATCH_SIZE:
