@@ -286,8 +286,8 @@ class FreeRunView(Gtk.Box):
         ax.tick_params(colors=self.app.DARK_FG)
 
         ax.set_xlim(0, 60)
-        ymin = self.app.resting_hr - 20
-        ymax = self.app.max_hr + 20
+        ymin = self.app.app_settings.personal.resting_hr - 20
+        ymax = self.app.app_settings.personal.max_hr + 20
         ax.set_ylim(ymin, ymax)
         ax.set_autoscaley_on(False)
 

@@ -1,22 +1,26 @@
-from fitness_tracker.database import SportTypesEnum
 import asyncio
 import contextlib
 import subprocess
 import threading
 from configparser import ConfigParser
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import gi
 import requests
 from bleak import BleakScanner
 from bleaksport import (
+    MachineType,
     discover_ftms_devices,
     discover_heart_rate_devices,
     discover_power_devices,
     discover_speed_cadence_devices,
 )
 from loguru import logger
+from pydantic import BaseModel
+from pydantic_file_settings import FileSettings
+from pydantic_settings import SettingsConfigDict
 
 from fitness_tracker import upload_providers, workout_providers
 from fitness_tracker.database import SportTypesEnum
@@ -24,10 +28,199 @@ from fitness_tracker.database import SportTypesEnum
 gi.require_versions({"Gtk": "4.0", "Adw": "1"})
 from gi.repository import Adw, GLib, Gtk  # noqa: E402  # ty:ignore[unresolved-import]
 
-if TYPE_CHECKING:
-    from bleaksport import MachineType
-
 NONE_LABEL = "None"
+
+
+class PersonalSettings(BaseModel):
+    weight_kg: float = 80.0
+    resting_hr: int = 60
+    max_hr: int = 200
+    ftp_watts: int = 150
+
+
+class SensorSettings(BaseModel):
+    hr_name: str | None = None
+    hr_address: str | None = None
+    speed_name: str | None = None
+    speed_address: str | None = None
+    cadence_name: str | None = None
+    cadence_address: str | None = None
+    power_name: str | None = None
+    power_address: str | None = None
+
+
+class TrainerSettings(BaseModel):
+    hr_name: str | None = None
+    hr_address: str | None = None
+    trainer_name: str | None = None
+    trainer_address: str | None = None
+    trainer_machine_type: MachineType | None = None
+
+
+class PebbleSettings(BaseModel):
+    enable: bool = False
+    uuid: str = "f4fcdac7-f58e-4d22-96bd-48cf98e25d09"
+    use_emulator: bool = False
+    port: int = 47527
+    name: str | None = None
+    address: str | None = None
+
+
+class IntervalsIcuAPI(BaseModel):
+    athlete_id: str | None = None
+    api_key: str | None = None
+
+
+class DatabaseSettings(BaseModel):
+    dsn: str | None = None
+
+
+class AppSettings(FileSettings):
+    model_config = SettingsConfigDict(nested_model_default_partial_update=True)
+
+    personal: PersonalSettings = PersonalSettings()
+    running_sensors: SensorSettings = SensorSettings()
+    cycling_sensors: SensorSettings = SensorSettings()
+    trainer_running: TrainerSettings = TrainerSettings()
+    trainer_cycling: TrainerSettings = TrainerSettings()
+    pebble: PebbleSettings = PebbleSettings()
+    icu: IntervalsIcuAPI = IntervalsIcuAPI()
+    database: DatabaseSettings = DatabaseSettings()
+
+
+def fallback_settings(file: Path) -> AppSettings | None:
+    if not file.exists():
+        return None
+
+    logger.debug(f"Found old config file at {file}, attempting to migrate settings")
+    cfg = ConfigParser()
+    cfg.read(file)
+    database_dsn = cfg.get("server", "database_dsn", fallback="")
+
+    # Sensors Running
+    hr_name = cfg.get("sensors_running", "hr_name", fallback="")
+    hr_address = cfg.get("sensors_running", "hr_address", fallback="")
+    speed_name = cfg.get("sensors_running", "speed_name", fallback="")
+    speed_address = cfg.get("sensors_running", "speed_address", fallback="")
+    cadence_name = cfg.get("sensors_running", "cadence_name", fallback="")
+    cadence_address = cfg.get("sensors_running", "cadence_address", fallback="")
+    power_name = cfg.get("sensors_running", "power_name", fallback="")
+    power_address = cfg.get("sensors_running", "power_address", fallback="")
+
+    # Sensors Cycling
+    cycling_hr_name = cfg.get("sensors_cycling", "hr_name", fallback="")
+    cycling_hr_address = cfg.get("sensors_cycling", "hr_address", fallback="")
+    cycling_speed_name = cfg.get("sensors_cycling", "speed_name", fallback="")
+    cycling_speed_address = cfg.get("sensors_cycling", "speed_address", fallback="")
+    cycling_cadence_name = cfg.get("sensors_cycling", "cadence_name", fallback="")
+    cycling_cadence_address = cfg.get("sensors_cycling", "cadence_address", fallback="")
+    cycling_power_name = cfg.get("sensors_cycling", "power_name", fallback="")
+    cycling_power_address = cfg.get("sensors_cycling", "power_address", fallback="")
+
+    # Trainer (FTMS)
+    trainer_running_hr_name = cfg.get("sensors_trainer_running", "hr_name", fallback="")
+    trainer_running_hr_address = cfg.get("sensors_trainer_running", "hr_address", fallback="")
+    trainer_running_name = cfg.get("sensors_trainer_running", "trainer_name", fallback="")
+    trainer_running_address = cfg.get("sensors_trainer_running", "trainer_address", fallback="")
+
+    trainer_running_machine_type = None
+    trainer_running_machine_type_str = cfg.get(
+        "sensors_trainer_running",
+        "trainer_machine_type",
+        fallback="",
+    )
+    if trainer_running_machine_type_str:
+        trainer_running_machine_type = MachineType(int(trainer_running_machine_type_str))
+    trainer_cycling_hr_name = cfg.get("sensors_trainer_cycling", "hr_name", fallback="")
+    trainer_cycling_hr_address = cfg.get("sensors_trainer_cycling", "hr_address", fallback="")
+    trainer_cycling_name = cfg.get("sensors_trainer_cycling", "trainer_name", fallback="")
+    trainer_cycling_address = cfg.get("sensors_trainer_cycling", "trainer_address", fallback="")
+
+    trainer_cycling_machine_type = None
+    trainer_cycling_machine_type_str = cfg.get(
+        "sensors_trainer_cycling",
+        "trainer_machine_type",
+        fallback="",
+    )
+    if trainer_cycling_machine_type_str:
+        trainer_cycling_machine_type = MachineType(int(trainer_cycling_machine_type_str))
+    weight_kg = cfg.getint("personal", "weight_kg", fallback=80)
+    resting_hr = cfg.getint("personal", "resting_hr", fallback=60)
+    max_hr = cfg.getint("personal", "max_hr", fallback=180)
+    ftp_watts = cfg.getint("personal", "ftp_watts", fallback=150)
+
+    # Pebble device
+    pebble_enable = cfg.getboolean(
+        "pebble",
+        "enable",
+        fallback=False,
+    )
+    pebble_use_emulator = cfg.getboolean(
+        "pebble",
+        "use_emulator",
+        fallback=False,
+    )
+    pebble_name = cfg.get("pebble", "name", fallback=None)
+    pebble_address = cfg.get("pebble", "mac", fallback=None)
+    pebble_port = cfg.getint("pebble", "port", fallback=47527)
+
+    # Intervals.icu
+    icu_athlete_id = cfg.get("intervals_icu", "athlete_id", fallback="")
+    icu_api_key = cfg.get("intervals_icu", "api_key", fallback="")
+
+    return AppSettings(
+        personal=PersonalSettings(
+            weight_kg=weight_kg,
+            resting_hr=resting_hr,
+            max_hr=max_hr,
+            ftp_watts=ftp_watts,
+        ),
+        running_sensors=SensorSettings(
+            hr_name=hr_name,
+            hr_address=hr_address,
+            speed_name=speed_name,
+            speed_address=speed_address,
+            cadence_name=cadence_name,
+            cadence_address=cadence_address,
+            power_name=power_name,
+            power_address=power_address,
+        ),
+        cycling_sensors=SensorSettings(
+            hr_name=cycling_hr_name,
+            hr_address=cycling_hr_address,
+            speed_name=cycling_speed_name,
+            speed_address=cycling_speed_address,
+            cadence_name=cycling_cadence_name,
+            cadence_address=cycling_cadence_address,
+            power_name=cycling_power_name,
+            power_address=cycling_power_address,
+        ),
+        trainer_running=TrainerSettings(
+            hr_name=trainer_running_hr_name,
+            hr_address=trainer_running_hr_address,
+            trainer_name=trainer_running_name,
+            trainer_address=trainer_running_address,
+            trainer_machine_type=trainer_running_machine_type,
+        ),
+        trainer_cycling=TrainerSettings(
+            hr_name=trainer_cycling_hr_name,
+            hr_address=trainer_cycling_hr_address,
+            trainer_name=trainer_cycling_name,
+            trainer_address=trainer_cycling_address,
+            trainer_machine_type=trainer_cycling_machine_type,
+        ),
+        pebble=PebbleSettings(
+            enable=pebble_enable,
+            use_emulator=pebble_use_emulator,
+            name=pebble_name,
+            address=pebble_address,
+            port=pebble_port,
+        ),
+        icu=IntervalsIcuAPI(athlete_id=icu_athlete_id, api_key=icu_api_key),
+        database=DatabaseSettings(
+            dsn=database_dsn,
+        ),
+    )
 
 
 class SettingsPageUI:
@@ -96,7 +289,7 @@ class SettingsPageUI:
         weight_row = Adw.ActionRow()
         weight_row.set_title("Weight (kg)")
         self.weight_spin = Gtk.SpinButton.new_with_range(30, 225, 1)
-        self.weight_spin.set_value(self.app.weight_kg)
+        self.weight_spin.set_value(self.app.app_settings.personal.weight_kg)
         weight_row.add_suffix(self.weight_spin)
         personal_group.add(weight_row)
 
@@ -104,7 +297,7 @@ class SettingsPageUI:
         rest_row = Adw.ActionRow()
         rest_row.set_title("Resting HR")
         self.rest_spin = Gtk.SpinButton.new_with_range(30, 120, 1)
-        self.rest_spin.set_value(self.app.resting_hr)
+        self.rest_spin.set_value(self.app.app_settings.personal.resting_hr)
         rest_row.add_suffix(self.rest_spin)
         personal_group.add(rest_row)
 
@@ -112,7 +305,7 @@ class SettingsPageUI:
         max_row = Adw.ActionRow()
         max_row.set_title("Max HR")
         self.max_spin = Gtk.SpinButton.new_with_range(100, 250, 1)
-        self.max_spin.set_value(self.app.max_hr)
+        self.max_spin.set_value(self.app.app_settings.personal.max_hr)
         max_row.add_suffix(self.max_spin)
         personal_group.add(max_row)
 
@@ -120,7 +313,7 @@ class SettingsPageUI:
         ftp_row = Adw.ActionRow()
         ftp_row.set_title("FTP (Watts)")
         self.ftp_spin = Gtk.SpinButton.new_with_range(50, 2000, 1)
-        self.ftp_spin.set_value(self.app.ftp_watts)
+        self.ftp_spin.set_value(self.app.app_settings.personal.ftp_watts)
         ftp_row.add_suffix(self.ftp_spin)
         personal_group.add(ftp_row)
 
@@ -419,7 +612,7 @@ class SettingsPageUI:
         # Enable
         pebble_enable_row = Adw.SwitchRow()
         pebble_enable_row.set_title("Enable Pebble")
-        pebble_enable_row.set_active(self.app.pebble_enable)
+        pebble_enable_row.set_active(self.app.app_settings.pebble.enable)
         pebble_group.add(pebble_enable_row)
         self.pebble_enable_row = pebble_enable_row
 
@@ -430,7 +623,7 @@ class SettingsPageUI:
 
         pebble_emu_switch = Adw.SwitchRow()
         pebble_emu_switch.set_title("Use Emulator")
-        pebble_emu_switch.set_active(self.app.pebble_use_emulator)
+        pebble_emu_switch.set_active(self.app.app_settings.pebble.use_emulator)
         pebble_expander.add_row(pebble_emu_switch)
         self.pebble_emu_switch = pebble_emu_switch
 
@@ -455,7 +648,7 @@ class SettingsPageUI:
         pebble_port_row = Adw.ActionRow()
         pebble_port_row.set_title("Emulator Port")
         pebble_port_spin = Gtk.SpinButton.new_with_range(1, 65535, 1)
-        pebble_port_spin.set_value(self.app.pebble_port or 47527)
+        pebble_port_spin.set_value(self.app.app_settings.pebble.port or 47527)
         pebble_port_spin.set_hexpand(False)
         pebble_port_spin.set_width_chars(6)
         pebble_port_row.add_suffix(pebble_port_spin)
@@ -504,7 +697,7 @@ class SettingsPageUI:
         row_icu_id.set_title("Athlete ID")
         self.icu_id_entry = Gtk.Entry()
         self.icu_id_entry.set_hexpand(True)
-        self.icu_id_entry.set_text(self.app.icu_athlete_id or "")
+        self.icu_id_entry.set_text(self.app.app_settings.icu.athlete_id or "")
         row_icu_id.add_suffix(self.icu_id_entry)
         icu_expander.add_row(row_icu_id)
 
@@ -513,7 +706,7 @@ class SettingsPageUI:
         self.icu_key_entry = Gtk.Entry()
         self.icu_key_entry.set_visibility(False)
         self.icu_key_entry.set_hexpand(True)
-        self.icu_key_entry.set_text(self.app.icu_api_key or "")
+        self.icu_key_entry.set_text(self.app.app_settings.icu.api_key or "")
         row_icu_key.add_suffix(self.icu_key_entry)
         icu_expander.add_row(row_icu_key)
 
@@ -541,7 +734,7 @@ class SettingsPageUI:
         dsn_row.set_title("Database DSN")
         self.dsn_entry = Gtk.Entry()
         self.dsn_entry.set_hexpand(True)
-        self.dsn_entry.set_text(self.app.database_dsn)
+        self.dsn_entry.set_text(self.app.app_settings.database.dsn or "")
         dsn_row.add_suffix(self.dsn_entry)
         database_expander.add_row(dsn_row)
 
@@ -567,32 +760,32 @@ class SettingsPageUI:
         save_row.add_suffix(self.save_button)
         action_group.add(save_row)
 
-        row_fetch = Adw.ActionRow()
-        row_fetch.set_title("Fetch Intervals.icu week")
-        row_fetch.set_activatable(bool(self.app.icu_api_key))
+        self.row_fetch = Adw.ActionRow()
+        self.row_fetch.set_title("Fetch Intervals.icu week")
+        self.row_fetch.set_activatable(bool(self.app.app_settings.icu.api_key))
         self.btn_fetch_icu = Gtk.Button(label="Fetch")
         self.btn_fetch_icu.get_style_context().add_class("suggested-action")
         self.btn_fetch_icu.connect("clicked", self._on_fetch_icu)
-        row_fetch.add_suffix(self.btn_fetch_icu)
-        action_group.add(row_fetch)
+        self.row_fetch.add_suffix(self.btn_fetch_icu)
+        action_group.add(self.row_fetch)
 
-        row_upload = Adw.ActionRow()
-        row_upload.set_title("Upload to Intervals.icu")
-        row_upload.set_activatable(bool(self.app.icu_api_key))
+        self.row_upload = Adw.ActionRow()
+        self.row_upload.set_title("Upload to Intervals.icu")
+        self.row_upload.set_activatable(bool(self.app.app_settings.icu.api_key))
         self.btn_upload_icu = Gtk.Button(label="Upload")
         self.btn_upload_icu.get_style_context().add_class("suggested-action")
         self.btn_upload_icu.connect("clicked", self._on_upload_icu)
-        row_upload.add_suffix(self.btn_upload_icu)
-        action_group.add(row_upload)
+        self.row_upload.add_suffix(self.btn_upload_icu)
+        action_group.add(self.row_upload)
 
-        sync_row = Adw.ActionRow()
-        sync_row.set_title("Sync to Database")
-        sync_row.set_activatable(bool(self.app.database_dsn))
+        self.row_sync = Adw.ActionRow()
+        self.row_sync.set_title("Sync to Database")
+        self.row_sync.set_activatable(bool(self.app.app_settings.database.dsn))
         self.sync_button = Gtk.Button(label="Sync")
         self.sync_button.get_style_context().add_class("suggested-action")
         self.sync_button.connect("clicked", self._on_sync)
-        sync_row.add_suffix(self.sync_button)
-        action_group.add(sync_row)
+        self.row_sync.add_suffix(self.sync_button)
+        action_group.add(self.row_sync)
 
         # Layout container
         container = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
@@ -612,134 +805,223 @@ class SettingsPageUI:
         # Prepopulate HRM
         self._combo_set_items_with_none(
             self.hr_combo,
-            ([self.app.hr_name] if self.app.hr_name else []),
-            self.app.hr_name,
+            (
+                [self.app.app_settings.running_sensors.hr_name]
+                if self.app.app_settings.running_sensors.hr_name
+                else []
+            ),
+            self.app.app_settings.running_sensors.hr_name,
         )
         self._combo_set_items_with_none(
             self.cycling_hr_combo,
-            ([self.app.cycling_hr_name] if self.app.cycling_hr_name else []),
-            self.app.cycling_hr_name,
+            (
+                [self.app.app_settings.cycling_sensors.hr_name]
+                if self.app.app_settings.cycling_sensors.hr_name
+                else []
+            ),
+            self.app.app_settings.cycling_sensors.hr_name,
         )
-        self.hr_map = {self.app.hr_name: self.app.hr_address} if self.app.hr_name else {}
+        self.hr_map = (
+            {
+                self.app.app_settings.running_sensors.hr_name: self.app.app_settings.running_sensors.hr_address
+            }
+            if self.app.app_settings.running_sensors.hr_name
+            else {}
+        )
 
         # Prepopulate Speed
         self._combo_set_items_with_none(
             self.speed_combo,
-            ([self.app.speed_name] if self.app.speed_name else []),
-            self.app.speed_name,
+            (
+                [self.app.app_settings.running_sensors.speed_name]
+                if self.app.app_settings.running_sensors.speed_name
+                else []
+            ),
+            self.app.app_settings.running_sensors.speed_name,
         )
         self._combo_set_items_with_none(
             self.cycling_speed_combo,
-            ([self.app.cycling_speed_name] if self.app.cycling_speed_name else []),
-            self.app.cycling_speed_name,
+            (
+                [self.app.app_settings.cycling_sensors.speed_name]
+                if self.app.app_settings.cycling_sensors.speed_name
+                else []
+            ),
+            self.app.app_settings.cycling_sensors.speed_name,
         )
         self.speed_map = (
-            {self.app.speed_name: self.app.speed_address} if self.app.speed_name else {}
+            {
+                self.app.app_settings.running_sensors.speed_name: self.app.app_settings.running_sensors.speed_address
+            }
+            if self.app.app_settings.running_sensors.speed_name
+            else {}
         )
 
         # Prepopulate Cadence
         self._combo_set_items_with_none(
             self.cadence_combo,
-            ([self.app.cadence_name] if self.app.cadence_name else []),
-            self.app.cadence_name,
+            (
+                [self.app.app_settings.running_sensors.cadence_name]
+                if self.app.app_settings.running_sensors.cadence_name
+                else []
+            ),
+            self.app.app_settings.running_sensors.cadence_name,
         )
         self._combo_set_items_with_none(
             self.cycling_cadence_combo,
-            ([self.app.cycling_cadence_name] if self.app.cycling_cadence_name else []),
-            self.app.cycling_cadence_name,
+            (
+                [self.app.app_settings.cycling_sensors.cadence_name]
+                if self.app.app_settings.cycling_sensors.cadence_name
+                else []
+            ),
+            self.app.app_settings.cycling_sensors.cadence_name,
         )
         self.cadence_map = (
-            {self.app.cadence_name: self.app.cadence_address} if self.app.cadence_name else {}
+            {
+                self.app.app_settings.running_sensors.cadence_name: self.app.app_settings.running_sensors.cadence_address
+            }
+            if self.app.app_settings.running_sensors.cadence_name
+            else {}
         )
 
         # Prepopulate Power
         self._combo_set_items_with_none(
             self.power_combo,
-            ([self.app.power_name] if self.app.power_name else []),
-            self.app.power_name,
+            (
+                [self.app.app_settings.running_sensors.power_name]
+                if self.app.app_settings.running_sensors.power_name
+                else []
+            ),
+            self.app.app_settings.running_sensors.power_name,
         )
         self._combo_set_items_with_none(
             self.cycling_power_combo,
-            ([self.app.cycling_power_name] if self.app.cycling_power_name else []),
-            self.app.cycling_power_name,
+            (
+                [self.app.app_settings.cycling_sensors.power_name]
+                if self.app.app_settings.cycling_sensors.power_name
+                else []
+            ),
+            self.app.app_settings.cycling_sensors.power_name,
         )
         self.power_map = (
-            {self.app.power_name: self.app.power_address} if self.app.power_name else {}
+            {
+                self.app.app_settings.running_sensors.power_name: self.app.app_settings.running_sensors.power_address
+            }
+            if self.app.app_settings.running_sensors.power_name
+            else {}
         )
 
         # Prepopulate Trainers plus their HRMs
         self._combo_set_items_with_none(
             self.trainer_running_combo,
-            [self.app.trainer_running_name] if self.app.trainer_running_name else [],
-            self.app.trainer_running_name,
+            [self.app.app_settings.trainer_running.trainer_name]
+            if self.app.app_settings.trainer_running.trainer_name
+            else [],
+            self.app.app_settings.trainer_running.trainer_name,
         )
         self._combo_set_items_with_none(
             self.trainer_cycling_combo,
-            [self.app.trainer_cycling_name] if self.app.trainer_cycling_name else [],
-            self.app.trainer_cycling_name,
+            [self.app.app_settings.trainer_cycling.trainer_name]
+            if self.app.app_settings.trainer_cycling.trainer_name
+            else [],
+            self.app.app_settings.trainer_cycling.trainer_name,
         )
+        self.trainer_running_map = (
+            {
+                self.app.app_settings.trainer_running.trainer_name: {
+                    "address": self.app.app_settings.trainer_running.trainer_address,
+                    "machine_type": self.app.app_settings.trainer_running.trainer_machine_type,
+                },
+            }
+            if self.app.app_settings.trainer_running.trainer_name
+            else {}
+        )
+        self.trainer_cycling_map = (
+            {
+                self.app.app_settings.trainer_cycling.trainer_name: {
+                    "address": self.app.app_settings.trainer_cycling.trainer_address,
+                    "machine_type": self.app.app_settings.trainer_cycling.trainer_machine_type,
+                },
+            }
+            if self.app.app_settings.trainer_cycling.trainer_name
+            else {}
+        )
+
         self._combo_set_items_with_none(
             self.trainer_running_hr_combo,
-            [self.app.trainer_running_hr_name] if self.app.trainer_running_hr_name else [],
-            self.app.trainer_running_hr_name,
+            [self.app.app_settings.trainer_running.hr_name]
+            if self.app.app_settings.trainer_running.hr_name
+            else [],
+            self.app.app_settings.trainer_running.hr_name,
         )
         self._combo_set_items_with_none(
             self.trainer_cycling_hr_combo,
-            [self.app.trainer_cycling_hr_name] if self.app.trainer_cycling_hr_name else [],
-            self.app.trainer_cycling_hr_name,
+            [self.app.app_settings.trainer_cycling.hr_name]
+            if self.app.app_settings.trainer_cycling.hr_name
+            else [],
+            self.app.app_settings.trainer_cycling.hr_name,
+        )
+        self.trainer_running_hr_map = (
+            {
+                self.app.app_settings.trainer_running.hr_name: self.app.app_settings.trainer_running.hr_address
+            }
+            if self.app.app_settings.trainer_running.hr_name
+            else {}
+        )
+        self.trainer_cycling_hr_map = (
+            {
+                self.app.app_settings.trainer_cycling.hr_name: self.app.app_settings.trainer_cycling.hr_address
+            }
+            if self.app.app_settings.trainer_cycling.hr_name
+            else {}
         )
 
         # Prepopulate Pebble
-        if self.app.pebble_use_emulator and self.pebble_row:
+        if self.app.app_settings.pebble.use_emulator and self.pebble_row:
             self.pebble_row.set_subtitle("Emulator mode")
-        if self.app.pebble_name and self.pebble_combo:
-            self.pebble_combo.append_text(self.app.pebble_name)
+        if self.app.app_settings.pebble.name and self.pebble_combo:
+            self.pebble_combo.append_text(self.app.app_settings.pebble.name)
             self.pebble_combo.set_active(0)
-            self.pebble_map = {self.app.pebble_name: self.app.pebble_address}
+            self.pebble_map = {
+                self.app.app_settings.pebble.name: self.app.app_settings.pebble.address,
+            }
 
         if self.pebble_emu_switch:
             self.pebble_emu_switch.connect("notify::active", self._on_pebble_mode_toggled)
             self._on_pebble_mode_toggled(self.pebble_emu_switch)
 
-        def _set_action_enabled(row: Adw.ActionRow, button: Gtk.Button, enabled: bool):
-            # Disable the actual clickable widget
-            button.set_sensitive(enabled)
-
-            # Optional: also grey out the whole row (subtitle, label, etc.)
-            row.set_sensitive(enabled)
-
-            # Optional: suggested-action class makes it look "primary" even when disabled
-            ctx = button.get_style_context()
-            if enabled:
-                ctx.add_class("suggested-action")
-            else:
-                ctx.remove_class("suggested-action")
-
-        def _update_actions_state(*_args):
-            intervals_athlete_id = (
-                (self.icu_id_entry.get_text() or "").strip() if self.icu_id_entry else ""
-            )
-            intervals_key = (
-                (self.icu_key_entry.get_text() or "").strip() if self.icu_key_entry else ""
-            )
-            database_dsn = (self.dsn_entry.get_text() or "").strip() if self.dsn_entry else ""
-
-            icu_ok = bool(intervals_athlete_id and intervals_key)
-            db_ok = bool(database_dsn)
-
-            _set_action_enabled(row_fetch, self.btn_fetch_icu, icu_ok)
-            _set_action_enabled(row_upload, self.btn_upload_icu, icu_ok)
-            _set_action_enabled(sync_row, self.sync_button, db_ok)
-
-        # Call once for initial state
-        _update_actions_state()
-
-        # Recompute whenever the relevant fields change
-        self.icu_id_entry.connect("changed", _update_actions_state)
-        self.icu_key_entry.connect("changed", _update_actions_state)
-        self.dsn_entry.connect("changed", _update_actions_state)
+        self._update_actions_state()
 
         return scroller
+
+    def _set_action_enabled(self, row: Adw.ActionRow, button: Gtk.Button, enabled: bool):
+        # Disable the actual clickable widget
+        button.set_sensitive(enabled)
+
+        # Optional: also grey out the whole row (subtitle, label, etc.)
+        row.set_sensitive(enabled)
+
+        # Optional: suggested-action class makes it look "primary" even when disabled
+        ctx = button.get_style_context()
+        if enabled:
+            ctx.add_class("suggested-action")
+        else:
+            ctx.remove_class("suggested-action")
+
+    def _update_actions_state(self, *_args):
+        intervals_athlete_id = (
+            (self.icu_id_entry.get_text() or "").strip() if self.icu_id_entry else None
+        )
+        intervals_key = (
+            (self.icu_key_entry.get_text() or "").strip() if self.icu_key_entry else None
+        )
+        database_dsn = (self.dsn_entry.get_text() or "").strip() if self.dsn_entry else None
+
+        icu_ok = bool(intervals_athlete_id and intervals_key)
+        db_ok = bool(database_dsn)
+
+        self._set_action_enabled(self.row_fetch, self.btn_fetch_icu, icu_ok)
+        self._set_action_enabled(self.row_upload, self.btn_upload_icu, icu_ok)
+        self._set_action_enabled(self.row_sync, self.sync_button, db_ok)
 
     # ----- Scanners -----
     def _fill_devices_hr(self):
@@ -761,9 +1043,15 @@ class SettingsPageUI:
                 self.cycling_hr_spinner.stop()
                 self.cycling_hr_row.set_subtitle("" if names else "No HRM found")
 
-                self._combo_set_items_with_none(self.hr_combo, names, self.app.hr_name)
                 self._combo_set_items_with_none(
-                    self.cycling_hr_combo, names, self.app.cycling_hr_name
+                    self.hr_combo,
+                    names,
+                    self.app.app_settings.running_sensors.hr_name,
+                )
+                self._combo_set_items_with_none(
+                    self.cycling_hr_combo,
+                    names,
+                    self.app.app_settings.cycling_sensors.hr_name,
                 )
                 self.hr_map = mapping
 
@@ -796,9 +1084,15 @@ class SettingsPageUI:
                 self.cycling_speed_spinner.stop()
                 self.cycling_speed_row.set_subtitle("" if names else "No speed devices found")
 
-                self._combo_set_items_with_none(self.speed_combo, names, self.app.speed_name)
                 self._combo_set_items_with_none(
-                    self.cycling_speed_combo, names, self.app.cycling_speed_name
+                    self.speed_combo,
+                    names,
+                    self.app.app_settings.running_sensors.speed_name,
+                )
+                self._combo_set_items_with_none(
+                    self.cycling_speed_combo,
+                    names,
+                    self.app.app_settings.cycling_sensors.speed_name,
                 )
                 self.speed_map = mapping
 
@@ -809,9 +1103,15 @@ class SettingsPageUI:
                 self.cycling_cadence_spinner.stop()
                 self.cycling_cadence_row.set_subtitle("" if names else "No cadence devices found")
 
-                self._combo_set_items_with_none(self.cadence_combo, names, self.app.cadence_name)
                 self._combo_set_items_with_none(
-                    self.cycling_cadence_combo, names, self.app.cycling_cadence_name
+                    self.cadence_combo,
+                    names,
+                    self.app.app_settings.running_sensors.cadence_name,
+                )
+                self._combo_set_items_with_none(
+                    self.cycling_cadence_combo,
+                    names,
+                    self.app.app_settings.cycling_sensors.cadence_name,
                 )
                 self.cadence_map = mapping
 
@@ -838,9 +1138,15 @@ class SettingsPageUI:
                 self.cycling_power_spinner.stop()
                 self.cycling_power_row.set_subtitle("" if names else "No power devices found")
 
-                self._combo_set_items_with_none(self.power_combo, names, self.app.power_name)
                 self._combo_set_items_with_none(
-                    self.cycling_power_combo, names, self.app.cycling_power_name
+                    self.power_combo,
+                    names,
+                    self.app.app_settings.running_sensors.power_name,
+                )
+                self._combo_set_items_with_none(
+                    self.cycling_power_combo,
+                    names,
+                    self.app.app_settings.cycling_sensors.power_name,
                 )
                 self.power_map = mapping
 
@@ -866,7 +1172,7 @@ class SettingsPageUI:
                 self._combo_set_items_with_none(
                     self.trainer_cycling_hr_combo,
                     names,
-                    self.app.trainer_cycling_hr_name,
+                    self.app.app_settings.trainer_cycling.hr_name,
                 )
                 self.trainer_cycling_hr_map = mapping
 
@@ -876,7 +1182,7 @@ class SettingsPageUI:
                 self._combo_set_items_with_none(
                     self.trainer_running_hr_combo,
                     names,
-                    self.app.trainer_running_hr_name,
+                    self.app.app_settings.trainer_running.hr_name,
                 )
                 self.trainer_running_hr_map = mapping
 
@@ -912,10 +1218,14 @@ class SettingsPageUI:
                 self.trainer_cycling_row.set_subtitle("" if names else "No FTMS trainers found")
 
                 self._combo_set_items_with_none(
-                    self.trainer_running_combo, names, self.app.trainer_running_name
+                    self.trainer_running_combo,
+                    names,
+                    self.app.app_settings.trainer_running.trainer_name,
                 )
                 self._combo_set_items_with_none(
-                    self.trainer_cycling_combo, names, self.app.trainer_cycling_name
+                    self.trainer_cycling_combo,
+                    names,
+                    self.app.app_settings.trainer_cycling.trainer_name,
                 )
                 self.trainer_running_map = mapping
                 self.trainer_cycling_map = mapping
@@ -1001,9 +1311,9 @@ class SettingsPageUI:
                 else:
                     self.pebble_row.set_subtitle("")
                     # auto-select saved MAC if present
-                    if self.app.pebble_address:
+                    if self.app.app_settings.pebble.address:
                         for i, disp in enumerate(names):
-                            if display_map[disp] == self.app.pebble_address:
+                            if display_map[disp] == self.app.app_settings.pebble.address:
                                 self.pebble_combo.set_active(i)
                                 break
                 self.pebble_map = display_map
@@ -1043,8 +1353,8 @@ class SettingsPageUI:
         out_dir_cycling = self.app.workouts_cycling_dir / "intervals_icu"
         out_dir_cycling.mkdir(parents=True, exist_ok=True)
 
-        aid = (self.icu_id_entry.get_text() or "").strip()
-        key = (self.icu_key_entry.get_text() or "").strip()
+        aid = (self.app.app_settings.icu.athlete_id or "").strip()
+        key = (self.app.app_settings.icu.api_key or "").strip()
         if not (aid and key):
             self.app.show_toast("Intervals.icu Athlete ID and API key required")
             return
@@ -1080,223 +1390,164 @@ class SettingsPageUI:
         threading.Thread(target=worker, daemon=True).start()
 
     def _on_save_settings(self, _button):
-        self.app.database_dsn = self.dsn_entry.get_text()
+        self.app.app_settings.database.dsn = self.dsn_entry.get_text()
 
         # Running sensors
         # HR
-        selected = self.hr_combo.get_active_text() or ""
+        selected = self.hr_combo.get_active_text()
         if selected == NONE_LABEL or not selected:
-            self.app.hr_name = ""
-            self.app.hr_address = ""
+            self.app.app_settings.running_sensors.hr_name = None
+            self.app.app_settings.running_sensors.hr_address = None
         else:
-            self.app.hr_name = selected
-            self.app.hr_address = self.hr_map.get(selected, "")
+            self.app.app_settings.running_sensors.hr_name = selected
+            self.app.app_settings.running_sensors.hr_address = self.hr_map.get(selected)
 
         # Speed
-        selected = self.speed_combo.get_active_text() or ""
+        selected = self.speed_combo.get_active_text()
         if selected == NONE_LABEL or not selected:
-            self.app.speed_name = ""
-            self.app.speed_address = ""
+            self.app.app_settings.running_sensors.speed_name = None
+            self.app.app_settings.running_sensors.speed_address = None
         else:
-            self.app.speed_name = selected
-            self.app.speed_address = self.speed_map.get(selected, "")
-
+            self.app.app_settings.running_sensors.speed_name = selected
+            self.app.app_settings.running_sensors.speed_address = self.speed_map.get(selected)
         # Cadence
-        selected = self.cadence_combo.get_active_text() or ""
+        selected = self.cadence_combo.get_active_text()
         if selected == NONE_LABEL or not selected:
-            self.app.cadence_name = ""
-            self.app.cadence_address = ""
+            self.app.app_settings.running_sensors.cadence_name = None
+            self.app.app_settings.running_sensors.cadence_address = None
         else:
-            self.app.cadence_name = selected
-            self.app.cadence_address = self.cadence_map.get(selected, "")
+            self.app.app_settings.running_sensors.cadence_name = selected
+            self.app.app_settings.running_sensors.cadence_address = self.cadence_map.get(selected)
 
         # Power
-        selected = self.power_combo.get_active_text() or ""
+        selected = self.power_combo.get_active_text()
         if selected == NONE_LABEL or not selected:
-            self.app.power_name = ""
-            self.app.power_address = ""
+            self.app.app_settings.running_sensors.power_name = None
+            self.app.app_settings.running_sensors.power_address = None
         else:
-            self.app.power_name = selected
-            self.app.power_address = self.power_map.get(selected, "")
-
+            self.app.app_settings.running_sensors.power_name = selected
+            self.app.app_settings.running_sensors.power_address = self.power_map.get(selected)
         # Cycling sensors
         # HR
-        selected = self.cycling_hr_combo.get_active_text() or ""
+        selected = self.cycling_hr_combo.get_active_text()
         if selected == NONE_LABEL or not selected:
-            self.app.cycling_hr_name = ""
-            self.app.cycling_hr_address = ""
+            self.app.app_settings.cycling_sensors.hr_name = None
+            self.app.app_settings.cycling_sensors.hr_address = None
         else:
-            self.app.cycling_hr_name = selected
-            self.app.cycling_hr_address = self.hr_map.get(selected, "")
+            self.app.app_settings.cycling_sensors.hr_name = selected
+            self.app.app_settings.cycling_sensors.hr_address = self.hr_map.get(selected)
 
         # Speed
-        selected = self.cycling_speed_combo.get_active_text() or ""
+        selected = self.cycling_speed_combo.get_active_text()
         if selected == NONE_LABEL or not selected:
-            self.app.cycling_speed_name = ""
-            self.app.cycling_speed_address = ""
+            self.app.app_settings.cycling_sensors.speed_name = None
+            self.app.app_settings.cycling_sensors.speed_address = None
         else:
-            self.app.cycling_speed_name = selected
-            self.app.cycling_speed_address = self.speed_map.get(selected, "")
-
+            self.app.app_settings.cycling_sensors.speed_name = selected
+            self.app.app_settings.cycling_sensors.speed_address = self.speed_map.get(selected)
         # Cadence
-        selected = self.cycling_cadence_combo.get_active_text() or ""
+        selected = self.cycling_cadence_combo.get_active_text()
         if selected == NONE_LABEL or not selected:
-            self.app.cycling_cadence_name = ""
-            self.app.cycling_cadence_address = ""
+            self.app.app_settings.cycling_sensors.cadence_name = None
+            self.app.app_settings.cycling_sensors.cadence_address = None
         else:
-            self.app.cycling_cadence_name = selected
-            self.app.cycling_cadence_address = self.cadence_map.get(selected, "")
+            self.app.app_settings.cycling_sensors.cadence_name = selected
+            self.app.app_settings.cycling_sensors.cadence_address = self.cadence_map.get(selected)
 
         # Power
-        selected = self.cycling_power_combo.get_active_text() or ""
+        selected = self.cycling_power_combo.get_active_text()
         if selected == NONE_LABEL or not selected:
-            self.app.cycling_power_name = ""
-            self.app.cycling_power_address = ""
+            self.app.app_settings.cycling_sensors.power_name = None
+            self.app.app_settings.cycling_sensors.power_address = None
         else:
-            self.app.cycling_power_name = selected
-            self.app.cycling_power_address = self.power_map.get(selected, "")
-
+            self.app.app_settings.cycling_sensors.power_name = selected
+            self.app.app_settings.cycling_sensors.power_address = self.power_map.get(selected)
         # Pebble
-        self.app.pebble_enable = (
+        self.app.app_settings.pebble.enable = (
             self.pebble_enable_row.get_active() if self.pebble_enable_row else False
         )
-        self.app.pebble_use_emulator = (
+        self.app.app_settings.pebble.use_emulator = (
             self.pebble_emu_switch.get_active() if self.pebble_emu_switch else False
         )
         if self.pebble_port_spin:
-            self.app.pebble_port = self.pebble_port_spin.get_value_as_int()
-        if self.app.pebble_use_emulator:
-            self.app.pebble_name = ""
-            self.app.pebble_address = ""
+            self.app.app_settings.pebble.port = self.pebble_port_spin.get_value_as_int()
+        if self.app.app_settings.pebble.use_emulator:
+            self.app.app_settings.pebble.name = None
+            self.app.app_settings.pebble.address = None
         else:
             disp = self.pebble_combo.get_active_text() if self.pebble_combo else ""
-            self.app.pebble_name = disp
-            self.app.pebble_address = self.pebble_map.get(disp, self.app.pebble_address)
+            self.app.app_settings.pebble.name = disp
+            self.app.app_settings.pebble.address = self.pebble_map.get(disp)
 
-        self.app.weight_kg = self.weight_spin.get_value_as_int()
-        self.app.resting_hr = self.rest_spin.get_value_as_int()
-        self.app.max_hr = self.max_spin.get_value_as_int()
-        self.app.ftp_watts = self.ftp_spin.get_value_as_int()
+        self.app.app_settings.personal.weight_kg = self.weight_spin.get_value_as_int()
+        self.app.app_settings.personal.resting_hr = self.rest_spin.get_value_as_int()
+        self.app.app_settings.personal.max_hr = self.max_spin.get_value_as_int()
+        self.app.app_settings.personal.ftp_watts = self.ftp_spin.get_value_as_int()
 
-        self.app.icu_athlete_id = self.icu_id_entry.get_text().strip() if self.icu_id_entry else ""
-        self.app.icu_api_key = self.icu_key_entry.get_text().strip() if self.icu_key_entry else ""
+        self.app.app_settings.icu.athlete_id = (
+            self.icu_id_entry.get_text().strip() if self.icu_id_entry else None
+        )
+        self.app.app_settings.icu.api_key = (
+            self.icu_key_entry.get_text().strip() if self.icu_key_entry else None
+        )
 
         # Trainer running
-        selected = self.trainer_running_combo.get_active_text() or ""
+        selected = self.trainer_running_combo.get_active_text()
         if selected == NONE_LABEL or not selected:
-            self.app.trainer_running_name = ""
-            self.app.trainer_running_address = ""
-            self.app.trainer_running_machine_type = None
+            self.app.app_settings.trainer_running.trainer_name = None
+            self.app.app_settings.trainer_running.trainer_address = None
+            self.app.app_settings.trainer_running.trainer_machine_type = None
         else:
-            self.app.trainer_running_name = selected
+            self.app.app_settings.trainer_running.trainer_name = selected
             trainer_info = self.trainer_running_map.get(selected, {})
-            self.app.trainer_running_address = trainer_info.get("address", "")
-            self.app.trainer_running_machine_type = trainer_info.get("machine_type", None)
+            self.app.app_settings.trainer_running.trainer_address = trainer_info.get("address")
+            self.app.app_settings.trainer_running.trainer_machine_type = trainer_info.get(
+                "machine_type",
+            )
 
         # Trainer Running HRM
         if self.trainer_running_hr_combo:
-            sel = self.trainer_running_hr_combo.get_active_text() or ""
+            sel = self.trainer_running_hr_combo.get_active_text()
             if sel == NONE_LABEL or not sel:
-                self.app.trainer_running_hr_name = ""
-                self.app.trainer_running_hr_address = ""
+                self.app.app_settings.trainer_running.hr_name = None
+                self.app.app_settings.trainer_running.hr_address = None
             else:
-                self.app.trainer_running_hr_name = sel
-                self.app.trainer_running_hr_address = self.trainer_running_hr_map.get(sel, "")
+                self.app.app_settings.trainer_running.hr_name = sel
+                self.app.app_settings.trainer_running.hr_address = self.trainer_running_hr_map.get(
+                    sel,
+                )
 
         # Trainer cycling
         if self.trainer_cycling_combo:
-            selected = self.trainer_cycling_combo.get_active_text() or ""
+            selected = self.trainer_cycling_combo.get_active_text()
             if selected == NONE_LABEL or not selected:
-                self.app.trainer_cycling_name = ""
-                self.app.trainer_cycling_address = ""
-                self.app.trainer_cycling_machine_type = None
+                self.app.app_settings.trainer_cycling.trainer_name = None
+                self.app.app_settings.trainer_cycling.trainer_address = None
+                self.app.app_settings.trainer_cycling.trainer_machine_type = None
             else:
-                self.app.trainer_cycling_name = selected
-                trainer_info = self.trainer_running_map.get(selected, {})
-                self.app.trainer_cycling_address = trainer_info.get("address", "")
-                self.app.trainer_cycling_machine_type = trainer_info.get("machine_type", None)
+                self.app.app_settings.trainer_cycling.trainer_name = selected
+                trainer_info = self.trainer_cycling_map.get(selected, {})
+                self.app.app_settings.trainer_cycling.trainer_address = trainer_info.get(
+                    "address",
+                )
+                self.app.app_settings.trainer_cycling.trainer_machine_type = trainer_info.get(
+                    "machine_type",
+                )
 
         # Trainer Cycling HRM
         if self.trainer_cycling_hr_combo:
-            sel = self.trainer_cycling_hr_combo.get_active_text() or ""
+            sel = self.trainer_cycling_hr_combo.get_active_text()
             if sel == NONE_LABEL or not sel:
-                self.app.trainer_cycling_hr_name = ""
-                self.app.trainer_cycling_hr_address = ""
+                self.app.app_settings.trainer_cycling.hr_name = None
+                self.app.app_settings.trainer_cycling.hr_address = None
             else:
-                self.app.trainer_cycling_hr_name = sel
-                self.app.trainer_cycling_hr_address = self.trainer_cycling_hr_map.get(sel, "")
+                self.app.app_settings.trainer_cycling.hr_name = sel
+                self.app.app_settings.trainer_cycling.hr_address = self.trainer_cycling_hr_map.get(
+                    sel,
+                )
 
-        cfg = ConfigParser()
-        cfg["server"] = {"database_dsn": self.app.database_dsn}
-        cfg["sensors_running"] = {
-            "hr_name": self.app.hr_name,
-            "hr_address": self.app.hr_address,
-            "speed_name": self.app.speed_name,
-            "speed_address": self.app.speed_address,
-            "cadence_name": self.app.cadence_name,
-            "cadence_address": self.app.cadence_address,
-            "power_name": self.app.power_name,
-            "power_address": self.app.power_address,
-        }
-        cfg["sensors_cycling"] = {
-            "hr_name": self.app.cycling_hr_name,
-            "hr_address": self.app.cycling_hr_address,
-            "speed_name": self.app.cycling_speed_name,
-            "speed_address": self.app.cycling_speed_address,
-            "cadence_name": self.app.cycling_cadence_name,
-            "cadence_address": self.app.cycling_cadence_address,
-            "power_name": self.app.cycling_power_name,
-            "power_address": self.app.cycling_power_address,
-        }
-
-        # Keep the HR fields here separate as most trainer dont have built in HR proxy support
-        cfg_trainer_running_machine_type: str = (
-            str(self.app.trainer_running_machine_type.value)
-            if self.app.trainer_running_machine_type
-            else ""
-        )
-        cfg["sensors_trainer_running"] = {
-            "hr_name": str(self.app.trainer_running_hr_name or ""),
-            "hr_address": str(self.app.trainer_running_hr_address or ""),
-            "trainer_name": str(self.app.trainer_running_name or ""),
-            "trainer_address": str(self.app.trainer_running_address or ""),
-            "trainer_machine_type": cfg_trainer_running_machine_type,
-        }
-        cfg_trainer_cycling_machine_type: str = (
-            str(self.app.trainer_cycling_machine_type.value)
-            if self.app.trainer_cycling_machine_type
-            else ""
-        )
-        cfg["sensors_trainer_cycling"] = {
-            "hr_name": str(self.app.trainer_cycling_hr_name or ""),
-            "hr_address": str(self.app.trainer_cycling_hr_address or ""),
-            "trainer_name": str(self.app.trainer_cycling_name or ""),
-            "trainer_address": str(self.app.trainer_cycling_address or ""),
-            "trainer_machine_type": cfg_trainer_cycling_machine_type,
-        }
-
-        cfg["pebble"] = {
-            "enable": str(self.app.pebble_enable),
-            "use_emulator": str(self.app.pebble_use_emulator),
-            "name": self.app.pebble_name or "",
-            "mac": self.app.pebble_address or "",
-            "port": str(self.app.pebble_port),
-        }
-
-        cfg["personal"] = {
-            "weight_kg": str(self.app.weight_kg),
-            "resting_hr": str(self.app.resting_hr),
-            "max_hr": str(self.app.max_hr),
-            "ftp_watts": str(self.app.ftp_watts),
-        }
-
-        cfg["intervals_icu"] = {
-            "athlete_id": self.app.icu_athlete_id,
-            "api_key": self.app.icu_api_key,
-        }
-
-        with open(self.app.config_file, "w") as f:
-            cfg.write(f)
+        self.app.app_settings.save()
+        self._update_actions_state()
 
         # Apply Pebble settings right away (start/stop bridge without restart)
         GLib.idle_add(self.app.apply_pebble_settings)
@@ -1316,13 +1567,13 @@ class SettingsPageUI:
         GLib.idle_add(self.app.show_toast, "Syncing…")
 
         def do_sync():
-            if not self.app.database_dsn:
+            if not self.app.app_settings.database.dsn:
                 GLib.idle_add(self.app.show_toast, "No database DSN configured")
                 GLib.idle_add(button.set_sensitive, True)
                 return
 
             try:
-                self.app.recorder.db.sync_to_database(self.app.database_dsn)
+                self.app.recorder.db.sync_to_database(self.app.app_settings.database.dsn)
             except ConnectionError as e:
                 GLib.idle_add(self.app.show_toast, f"Sync failed: {e}")
                 GLib.idle_add(button.set_sensitive, True)
@@ -1338,14 +1589,9 @@ class SettingsPageUI:
         threading.Thread(target=do_sync, daemon=True).start()
 
     def _on_upload_icu(self, _button: Gtk.Button):
-        aid = (self.icu_id_entry.get_text() if self.icu_id_entry else "").strip()
-        key = (self.icu_key_entry.get_text() if self.icu_key_entry else "").strip()
-        if not key:
+        if not self.app.app_settings.icu.api_key:
             self.app.show_toast("Intervals.icu API key required")
             return
-        # Persist to app state so helper can read it
-        self.app.icu_athlete_id = aid or "0"
-        self.app.icu_api_key = key
 
         if self.btn_upload_icu:
             self.btn_upload_icu.set_sensitive(False)
@@ -1353,7 +1599,10 @@ class SettingsPageUI:
 
         def worker():
             try:
-                provider = upload_providers.IntervalsICUUploader(athlete_id=aid, api_key=key)
+                provider = upload_providers.IntervalsICUUploader(
+                    athlete_id=self.app.app_settings.icu.athlete_id,
+                    api_key=self.app.app_settings.icu.api_key,
+                )
                 results = provider.upload_not_uploaded(self.app)
                 if not results:
                     GLib.idle_add(self.app.show_toast, "No new activities to upload")

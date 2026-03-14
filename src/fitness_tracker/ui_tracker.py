@@ -198,7 +198,7 @@ class TrackerPageUI:
         # If test mode, we still feed preview samples, but we gate timers/progress
         if self.app.test_mode and self._test_source is None:
             self._hrsim_last_ms = None
-            self._hrsim_bpm = float(self.app.resting_hr or 60)
+            self._hrsim_bpm = float(self.app.app_settings.personal.resting_hr or 60)
             self._test_source = GLib.timeout_add(1000, self._tick_test)
 
     def _show_workout_page(
@@ -239,7 +239,7 @@ class TrackerPageUI:
 
         if self.app.test_mode and self._test_source is None:
             self._hrsim_last_ms = None
-            self._hrsim_bpm = float(self.app.resting_hr or 60)
+            self._hrsim_bpm = float(self.app.app_settings.personal.resting_hr or 60)
             self._test_source = GLib.timeout_add(1000, self._tick_test)
 
     def _begin_run_now(self) -> None:
@@ -413,7 +413,9 @@ class TrackerPageUI:
         if step.watts_mid is None and step.speed_mps_mid is None:
             # Only generate absolute targets if they are not already defined
             # to avoid overwriting any watt/pace targets set by the workout author
-            step.generate_absolute_power_targets_from_percent(self.app.ftp_watts)
+            step.generate_absolute_power_targets_from_percent(
+                self.app.app_settings.personal.ftp_watts
+            )
             # step.generate_pace_targets_from_percent(self.app.threshold_speed_mps)
 
         self._active_step_index = idx
@@ -436,7 +438,9 @@ class TrackerPageUI:
             next_step = self._workout.steps[idx + 1]
 
             if next_step.watts_mid is None and next_step.speed_mps_mid is None:
-                next_step.generate_absolute_power_targets_from_percent(self.app.ftp_watts)
+                next_step.generate_absolute_power_targets_from_percent(
+                    self.app.app_settings.personal.ftp_watts
+                )
                 # next_step.generate_pace_targets_from_percent(self.app.threshold_speed_mps)
 
             if next_step.watts_lo is not None and next_step.watts_hi is not None:
@@ -733,18 +737,21 @@ class TrackerPageUI:
         zones = self.app.calculate_hr_zones()
         z2_lo, _ = zones["Zone 3"]
         if target_power > 300:
-            hr_target = self.app.max_hr - random.uniform(0, 3)
+            hr_target = self.app.app_settings.personal.max_hr - random.uniform(0, 3)
             tau = 10.0
         else:
             hr_target = z2_lo - random.uniform(0, 5)
             tau = 45.0
         alpha = 1.0 - math.exp(-dt_s / tau)
         if self._hrsim_bpm is None:
-            self._hrsim_bpm = float(self.app.resting_hr or 60)
+            self._hrsim_bpm = float(self.app.app_settings.personal.resting_hr or 60)
         self._hrsim_bpm += alpha * (hr_target - self._hrsim_bpm)
         self._hrsim_bpm += random.uniform(-0.8, 0.8)
         self._hrsim_bpm = float(
-            max(self.app.resting_hr or 60, min(self.app.max_hr or 190, self._hrsim_bpm))
+            max(
+                self.app.app_settings.personal.resting_hr or 60,
+                min(self.app.app_settings.personal.max_hr or 190, self._hrsim_bpm),
+            )
         )
         bpm = round(self._hrsim_bpm)
 
