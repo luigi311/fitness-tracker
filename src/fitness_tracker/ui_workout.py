@@ -5,6 +5,7 @@ import math
 import gi
 
 from fitness_tracker.database import SportTypesEnum
+from fitness_tracker.ui_mode import IndoorOutdoorEnum
 
 gi.require_versions({"Gtk": "4.0", "Adw": "1"})
 from gi.repository import Adw, Gdk, Gtk, Pango, PangoCairo  # noqa: E402, I001  # ty:ignore[unresolved-import]
@@ -429,10 +430,14 @@ class WorkoutView(Gtk.Box):
         on_next,
         on_stop,
         on_start_record,
+        in_outdoor: IndoorOutdoorEnum = IndoorOutdoorEnum.indoor,
+        trainer: bool = False,
     ) -> None:
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         self.app = app
         self.sport_type = sport_type
+        self.in_outdoor = in_outdoor
+        self.trainer = trainer
 
         for m in ("top", "bottom", "start", "end"):
             getattr(self, f"set_margin_{m}")(12)
@@ -539,8 +544,9 @@ class WorkoutView(Gtk.Box):
         # since it's only useful for treadmill runs
         if (
             self.sport_type == SportTypesEnum.running
+            and self.in_outdoor == IndoorOutdoorEnum.indoor
             and self.app.recorder
-            and not self.app.recorder.is_trainer
+            and not self.trainer
         ):
             content.append(self.incline_control)
 

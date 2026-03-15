@@ -13,7 +13,7 @@ from workout_parser.main import load_workout, pretty_workout_name
 
 from fitness_tracker.database import SportTypesEnum
 from fitness_tracker.ui_free_run import FreeRunView
-from fitness_tracker.ui_mode import ModeSelectView
+from fitness_tracker.ui_mode import IndoorOutdoorEnum, ModeSelectView
 from fitness_tracker.ui_workout import WorkoutView
 
 gi.require_versions({"Gtk": "4.0", "Adw": "1"})
@@ -114,16 +114,22 @@ class TrackerPageUI:
         self,
         path: Path,
         sport_type: SportTypesEnum,
+        in_outdoor: IndoorOutdoorEnum,
         trainer: bool = False,
     ) -> None:
         w = load_workout(path)
         self._workout = w if w.steps else None
         self._workout_path = path
         self._manual_offset_s = 0.0
-        self._show_workout_page(sport_type=sport_type, trainer=trainer)
+        self._show_workout_page(sport_type=sport_type, in_outdoor=in_outdoor, trainer=trainer)
 
-    def _show_free_from_mode(self, sport_type: SportTypesEnum, trainer: bool = False) -> None:
-        self._show_free_run_page(sport_type=sport_type, trainer=trainer)
+    def _show_free_from_mode(
+        self,
+        sport_type: SportTypesEnum,
+        in_outdoor: IndoorOutdoorEnum,
+        trainer: bool = False,
+    ) -> None:
+        self._show_free_run_page(sport_type=sport_type, in_outdoor=in_outdoor, trainer=trainer)
 
     def _tick_timer(self) -> bool:
         """
@@ -160,6 +166,7 @@ class TrackerPageUI:
     def _show_free_run_page(
         self,
         sport_type: SportTypesEnum = SportTypesEnum.running,
+        in_outdoor: IndoorOutdoorEnum = IndoorOutdoorEnum.indoor,
         trainer: bool = False,
     ) -> None:
         # Reconfigure recorder for this activity *before* preview/status updates.
@@ -172,13 +179,12 @@ class TrackerPageUI:
         self._running = False
         self._reset_buffers()
 
-        self.free_view = FreeRunView(self.app, sport_type=sport_type)
-        # Stop always works
+        self.free_view = FreeRunView(
+            self.app, sport_type=sport_type, in_outdoor=in_outdoor, trainer=trainer
+        )
+        # Wire start/stop controls
         self.free_view.btn_stop.connect("clicked", lambda *_: self._stop_run_and_back())
-        # Start may or may not exist depending on your FreeRunView version
-        btn_start = getattr(self.free_view, "btn_start", None)
-        if btn_start:
-            btn_start.connect("clicked", lambda *_: self._begin_run_now())
+        self.free_view.btn_start.connect("clicked", lambda *_: self._begin_run_now())
 
         title = "Free Ride" if sport_type == SportTypesEnum.biking else "Free Run"
         self._push(self.free_view, title)
@@ -204,6 +210,7 @@ class TrackerPageUI:
     def _show_workout_page(
         self,
         sport_type: SportTypesEnum = SportTypesEnum.running,
+        in_outdoor: IndoorOutdoorEnum = IndoorOutdoorEnum.indoor,
         trainer: bool = False,
     ) -> None:
         # Reconfigure recorder for this activity *before* preview/status updates.
@@ -223,6 +230,8 @@ class TrackerPageUI:
             on_next=lambda: self._skip_step(+1),
             on_stop=self._stop_run_and_back,
             on_start_record=self._begin_run_now,
+            in_outdoor=in_outdoor,
+            trainer=trainer,
         )
         self._push(self.workout_view, nice)
         self._active_step_index = -1
@@ -544,7 +553,16 @@ class TrackerPageUI:
             sport_type = (
                 self.workout_view.sport_type if self.workout_view else SportTypesEnum.running
             )
-            self.free_view = FreeRunView(self.app, sport_type=sport_type)
+            in_outdoor = (
+                self.workout_view.in_outdoor if self.workout_view else IndoorOutdoorEnum.indoor
+            )
+            trainer = self.workout_view.trainer if self.workout_view else False
+            self.free_view = FreeRunView(
+                self.app,
+                sport_type=sport_type,
+                in_outdoor=in_outdoor,
+                trainer=trainer,
+            )
             self.free_view.btn_stop.connect("clicked", lambda *_: self._stop_run_and_back())
 
             # Replace the top page: pop workout, push free-run
@@ -553,6 +571,8 @@ class TrackerPageUI:
                 self._push(self.free_view, "Free Run")
                 self.free_view.set_recording(True)
                 self.update_metric_statuses()
+            # Clear reference to the workout view so it is not updated off-screen
+            self.workout_view = None
             self.app.show_toast("✅ Workout complete. Continuing in Free Run…")
 
             if self.app.pebble_bridge:
