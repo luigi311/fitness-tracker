@@ -278,6 +278,8 @@ class TrackerPageUI:
 
         if self.app.recorder:
             self.app.recorder.stop_recording()
+            if self.app.recorder.activity_id:
+                GLib.idle_add(self.app.history.append_activity, self.app.recorder.activity_id)
         if self._test_source:
             GLib.source_remove(self._test_source)
             self._test_source = None
@@ -291,7 +293,6 @@ class TrackerPageUI:
         if self.app.recorder and self.app.recorder.trainer_mux:
             self.app.recorder.set_target_power(0)
 
-        GLib.idle_add(self.app.history.refresh)
         self._pop_to_mode()
 
     # ---- nav helpers

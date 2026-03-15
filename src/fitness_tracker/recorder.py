@@ -19,6 +19,7 @@ from bleaksport import (
 )
 from loguru import logger
 
+from fitness_tracker.activity_stats import StatsCalculator
 from fitness_tracker.database import DatabaseManager, SportTypesEnum
 
 gi.require_versions({"Gtk": "4.0", "Adw": "1"})
@@ -74,11 +75,12 @@ class Recorder:
         self.on_sample = on_sample_update
         self.on_error = on_error
         self.db = DatabaseManager(database_url=database_url)
+        self.stat_calc = StatsCalculator(self.db)
         self.loop = asyncio.new_event_loop()
         self.queue: asyncio.Queue = asyncio.Queue()
         self._stop_event = asyncio.Event()
         self._recording = False
-        self._activity_id = None
+        self.activity_id = None
         self._start_ms = None
         self._pending_erg_watts: int | None = None
         self._erg_retry_task: Future | None = None
@@ -144,9 +146,9 @@ class Recorder:
         if not self._recording:
             # Only create an activity when not in test mode
             if not self.test_mode:
-                self._activity_id = self.db.start_activity(sport_type=self.sport_type)
+                self.activity_id = self.db.start_activity(sport_type=self.sport_type)
             else:
-                self._activity_id = None
+                self.activity_id = None
             self._recording = True
             self._start_ms = None
             self._dist0_m = None
@@ -156,8 +158,10 @@ class Recorder:
 
     def stop_recording(self):
         if self._recording:
-            if self._activity_id is not None:
-                self.db.stop_activity(self._activity_id)
+            if self.activity_id is not None:
+                self.db.stop_activity(self.activity_id)
+                self.stat_calc.compute_for_activity(self.activity_id)
+
             self._recording = False
 
     def _run(self):
@@ -190,9 +194,9 @@ class Recorder:
         GLib.idle_add(self.on_sample, cleaned_sample)
 
         # Persist to the DB if recording
-        if self._recording and self._activity_id:
+        if self._recording and self.activity_id:
             self.db.insert_heart_rate(
-                self._activity_id,
+                self.activity_id,
                 delta_ms,
                 smoothed_bpm,
                 sample.rr_interval_ms,
@@ -264,9 +268,9 @@ class Recorder:
         GLib.idle_add(self.on_sample, cleaned_sample)
 
         # Persist to DB if recording
-        if self._recording and self._activity_id:
+        if self._recording and self.activity_id:
             self.db.insert_running_metrics(
-                self._activity_id,
+                self.activity_id,
                 cleaned_sample,
                 incline_percent=self.incline_percent,
             )
@@ -310,16 +314,16 @@ class Recorder:
         GLib.idle_add(self.on_sample, cleaned_sample)
 
         # Persist to DB if recording
-        if self._recording and self._activity_id:
+        if self._recording and self.activity_id:
             if self.sport_type == SportTypesEnum.biking:
                 self.db.insert_cycling_metrics(
-                    self._activity_id,
+                    self.activity_id,
                     cleaned_sample,
                     incline_percent=self.incline_percent,
                 )
             elif self.sport_type == SportTypesEnum.running:
                 self.db.insert_running_metrics(
-                    self._activity_id,
+                    self.activity_id,
                     cleaned_sample,
                     incline_percent=self.incline_percent,
                 )
