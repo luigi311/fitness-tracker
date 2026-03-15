@@ -7,6 +7,7 @@ from matplotlib.backends.backend_gtk4agg import FigureCanvasGTK4Agg as FigureCan
 from matplotlib.figure import Figure
 
 from fitness_tracker.database import SportTypesEnum
+from fitness_tracker.ui_mode import IndoorOutdoorEnum
 from fitness_tracker.ui_workout import InclineControl
 
 gi.require_versions({"Gtk": "4.0", "Adw": "1"})
@@ -96,10 +97,14 @@ class FreeRunView(Gtk.Box):
       - set_recording(recording_bool)  # toggles Start/Stop buttons.
     """
 
-    def __init__(self, app, sport_type: SportTypesEnum) -> None:
+    def __init__(
+        self, app, sport_type: SportTypesEnum, in_outdoor: IndoorOutdoorEnum, trainer: bool = False
+    ) -> None:
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=16)
         self.app = app
         self.sport_type = sport_type
+        self.in_outdoor = in_outdoor
+        self.trainer = trainer
         for m in ("top", "bottom", "start", "end"):
             getattr(self, f"set_margin_{m}")(12)
 
@@ -153,7 +158,8 @@ class FreeRunView(Gtk.Box):
         if (
             self.sport_type == SportTypesEnum.running
             and self.app.recorder
-            and not self.app.recorder.is_trainer
+            and self.in_outdoor == IndoorOutdoorEnum.indoor
+            and not self.trainer
         ):
             grid.attach(self.incline_control, 0, 4, 2, 1)
 
