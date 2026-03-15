@@ -1559,7 +1559,6 @@ class SettingsPageUI:
         GLib.idle_add(self.app.toast_overlay.add_toast, toast)
 
         GLib.idle_add(self.app.tracker.redraw)
-        GLib.idle_add(self.app.history.refresh)
 
     def _on_sync(self, button: Gtk.Button):
         # disable the Settings-page sync button
@@ -1580,8 +1579,7 @@ class SettingsPageUI:
                 return
 
             # refresh history after a successful sync
-            # GLib.idle_add(self._clear_history)
-            # threading.Thread(target=self._load_history, daemon=True).start()
+            GLib.idle_add(self.app.history.refresh)
 
             GLib.idle_add(self.app.show_toast, "Sync complete")
             GLib.idle_add(button.set_sensitive, True)

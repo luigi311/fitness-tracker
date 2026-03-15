@@ -143,6 +143,59 @@ class ActivityUpload(Base):
         Index("ix_upload_activity", "activity_id"),
     )
 
+class ActivityStats(Base):
+    """Flat, pre-computed summary row for a single activity.
+
+    Kept deliberately wide so the history list can be populated with a single
+    SELECT — no joins to heart_rate / running_metrics / cycling_metrics at
+    display time.
+    """
+
+    __tablename__ = "activity_stats"
+
+    id = Column(Integer, primary_key=True)
+    activity_id = Column(
+        Integer,
+        ForeignKey("activities.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+
+    # Sport
+    sport_type_id = Column(Integer, nullable=False, default=SportTypesEnum.unknown.value)
+
+    # Timing (stored as timezone-aware UTC datetimes; UI is free to localise)
+    start_time = Column(DateTime(timezone=True), nullable=False)
+    end_time = Column(DateTime(timezone=True))
+    duration_s = Column(Integer, nullable=False, default=0)
+
+    # Distance / pace / speed
+    distance_m = Column(Float)
+    avg_speed_mps = Column(Float)
+
+    # Heart rate
+    avg_bpm = Column(Float)
+    max_bpm = Column(Integer)
+    total_energy_kj = Column(Float, nullable=False, default=0.0)
+
+    # Cadence / power
+    avg_cadence = Column(Float)     # spm for running, rpm for cycling
+    avg_power_watts = Column(Float)
+
+    # Elevation
+    total_ascent_m = Column(Float)
+    total_descent_m = Column(Float)
+
+    # Computed at
+    computed_at = Column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("activity_id", name="uq_activity_stats_activity_id"),
+        Index("ix_stats_activity_id", "activity_id"),
+        Index("ix_stats_start_time", "start_time"),
+        Index("ix_stats_sport", "sport_type_id"),
+    )
+
+
 
 def _sqlite_pragmas(dbapi_con, _con_record) -> None:
     cur = dbapi_con.cursor()
