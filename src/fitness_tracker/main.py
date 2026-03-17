@@ -9,8 +9,6 @@ import gi
 from loguru import logger
 from loguru._defaults import LOGURU_FORMAT
 
-from fitness_tracker.ui import FitnessAppUI
-
 gi.require_versions({"Gtk": "4.0", "Adw": "1"})
 from gi.repository import GLib  # noqa: E402  # ty:ignore[unresolved-import]
 
@@ -84,6 +82,9 @@ def main():
     args = parser.parse_args()
 
     configure_logger(args.debug_level)
+
+    # Only import UI (and trigger GTK init) after args are parsed
+    from fitness_tracker.ui import FitnessAppUI  # noqa: PLC0415
 
     app = FitnessAppUI(test_mode=args.test)
 
