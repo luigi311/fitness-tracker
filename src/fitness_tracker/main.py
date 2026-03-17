@@ -83,7 +83,7 @@ def main():
 
     configure_logger(args.debug_level)
 
-    # Only import UI (and trigger GTK init) after args are parsed
+    # Delay importing UI/GI modules and GTK/Adw initialization until after args are parsed
     from fitness_tracker.ui import FitnessAppUI  # noqa: PLC0415
 
     app = FitnessAppUI(test_mode=args.test)

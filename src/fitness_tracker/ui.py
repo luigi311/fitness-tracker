@@ -27,24 +27,6 @@ from gi.repository import Adw, Gdk, Gtk  # noqa: E402  # ty:ignore[unresolved-im
 if TYPE_CHECKING:
     import datetime
 
-Adw.init()
-
-# Determine dark-mode status and define colors
-_style_manager = Adw.StyleManager.get_default()
-_IS_DARK = _style_manager.get_dark()
-
-_PROV = Gtk.CssProvider()
-_PROV.load_from_data(b"""
-.pill { padding: 4px 10px; border-radius: 9999px; color: white; }
-.pill-in   { background-color: rgba(51,204,77,0.95); }   /* #33CC4D-ish */
-.pill-near { background-color: rgba(242,191,51,0.95); }  /* amber */
-.pill-low  { background-color: rgba(242,140,51,0.95); }  /* orange */
-.pill-high { background-color: rgba(242,89,89,0.95); }   /* red */
-""")
-Gtk.StyleContext.add_provider_for_display(
-    Gdk.Display.get_default(), _PROV, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
-)
-
 
 @dataclass(frozen=True)
 class SensorProfile:
@@ -68,10 +50,12 @@ class SensorProfile:
 
 class FitnessAppUI(Adw.Application):
     def __init__(self, test_mode: bool = False):
+        Adw.init()
         super().__init__(application_id="io.luigi311.fitness-tracker")
         self.test_mode = test_mode
+        self._is_dark = Adw.StyleManager.get_default().get_dark()
 
-        if _IS_DARK:
+        if self._is_dark:
             self.DARK_BG = "#2e3436"
             self.DARK_FG = "#ffffff"
             self.DARK_GRID = "#555555"
@@ -135,7 +119,6 @@ class FitnessAppUI(Adw.Application):
             # Remove old .ini file after successful migration
             with contextlib.suppress(Exception):
                 self.fall_back_config_file.unlink()
-
 
     def show_toast(self, message: str) -> None:
         print(message)
@@ -332,6 +315,19 @@ class FitnessAppUI(Adw.Application):
         self.window.present()
 
     def _build_ui(self):
+        prov = Gtk.CssProvider()
+        prov.load_from_data(b"""
+        .pill { padding: 4px 10px; border-radius: 9999px; color: white; }
+        .pill-in   { background-color: rgba(51,204,77,0.95); }   /* #33CC4D-ish */
+        .pill-near { background-color: rgba(242,191,51,0.95); }  /* amber */
+        .pill-low  { background-color: rgba(242,140,51,0.95); }  /* orange */
+        .pill-high { background-color: rgba(242,89,89,0.95); }   /* red */
+        """)
+        Gtk.StyleContext.add_provider_for_display(
+            Gdk.Display.get_default(),
+            prov,
+            Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION,
+        )
         self.window = Adw.ApplicationWindow(application=self)
         self.window.connect("close-request", lambda *a: (self.quit(), False)[1])
         self.window.set_title("Fitness Tracker")
