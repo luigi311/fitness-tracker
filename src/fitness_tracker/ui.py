@@ -68,7 +68,7 @@ class SensorProfile:
 
 class FitnessAppUI(Adw.Application):
     def __init__(self, test_mode: bool = False):
-        super().__init__(application_id="io.Luigi311.Fitness")
+        super().__init__(application_id="io.luigi311.fitness")
         self.test_mode = test_mode
 
         if _IS_DARK:
