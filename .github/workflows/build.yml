@@ -23,13 +23,13 @@ jobs:
             name: fitness_tracker-arm64
   
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v7
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version-file: ".python-version"
 
@@ -63,13 +63,13 @@ jobs:
             --scie-pbs-stripped
 
       - name: Upload Full
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.name }}
           path: dist/fitness_tracker
 
       - name: Upload Pex
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.name }}.pex
           path: dist/fitness_tracker.pex
@@ -106,16 +106,16 @@ jobs:
             package: deb
             name: fitness_tracker-arm64
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Download full
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: ${{ matrix.name }}
           path: dist
 
       - name: Download pex
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: ${{ matrix.name }}.pex
           path: dist
@@ -143,7 +143,7 @@ jobs:
             data/fitness-tracker.svg=/usr/share/icons/hicolor/scalable/apps/fitness-tracker.svg 
 
       - name: Upload Package
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.name }}.${{ matrix.package }}
           path: |
@@ -161,10 +161,10 @@ jobs:
   pebble:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v7
 
       - name: Install pebble-sdk
         run: |
@@ -183,7 +183,7 @@ jobs:
           cp build/pebble.pbw ../dist/fitness_tracker.pbw
 
       - name: Upload Pebble app
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: fitness_tracker.pbw
           path: |
