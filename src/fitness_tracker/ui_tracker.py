@@ -669,15 +669,17 @@ class TrackerPageUI:
 
     def _update_free_preview_timer_and_cards(self) -> None:
         if self.free_view:
-            self.free_view.set_timer("00:00:00")
+            self.free_view.set_timer("00:00")
 
     def _update_workout_preview_timers(self) -> None:
         if not self.workout_view:
             return
         self.workout_view.set_elapsed_text("00:00")
+
         # remaining = current step full duration
         if self._workout and self._workout.steps:
             dur = int(self._workout.steps[0].duration_s)
+            # Keep the step remaining timer as mm:ss
             self.workout_view.set_step_remaining_text(self._fmt_mmss(dur))
         else:
             self.workout_view.set_step_remaining_text("00:00")
@@ -687,7 +689,7 @@ class TrackerPageUI:
             return
         # elapsed
         self.workout_view.set_elapsed_text(
-            self._fmt_hhmmss(elapsed_s)[-5:],
+            self._fmt_hhmmss(elapsed_s),
         )  # show mm:ss for legibility
 
         # remaining in current step
@@ -704,6 +706,7 @@ class TrackerPageUI:
             acc = nxt
         step_elapsed = min(max(0.0, t_s - step_start), max(1.0, step_dur))
         remaining = int(max(0.0, step_dur - step_elapsed))
+        # Keep the step remaining timer as mm:ss
         self.workout_view.set_step_remaining_text(self._fmt_mmss(remaining))
 
     # ---- test-mode generator
@@ -917,7 +920,7 @@ class TrackerPageUI:
     def _fmt_hhmmss(total_s: int) -> str:
         h, r = divmod(int(total_s), 3600)
         m, s = divmod(r, 60)
-        return f"{h:02d}:{m:02d}:{s:02d}"
+        return f"{h:02d}:{m:02d}:{s:02d}" if h > 0 else f"{m:02d}:{s:02d}"
 
     def redraw(self) -> None:
         if self.free_view and getattr(self.free_view, "fig", None):

@@ -392,19 +392,19 @@ class _TimerBig(Gtk.Box):
         box.set_margin_start(10)
         box.set_margin_end(10)
 
-        self.caption = Gtk.Label(label=title, xalign=0.0)
-        self.caption.add_css_class("dim-label")
+        self.lbl = Gtk.Label(label=title, xalign=0.0)
+        self.lbl.add_css_class("dim-label")
 
         self.value = Gtk.Label(label="00:00", xalign=0.0)
         self.value.add_css_class("title-1")
         self.value.add_css_class("numeric")
 
-        box.append(self.caption)
+        box.append(self.lbl)
         box.append(self.value)
         self.append(box)
 
     def set_text(self, text: str) -> None:
-        self.value.set_text(text or "00:00")
+        self.value.set_text(text)
 
 
 # ---------------- Workout View ---------------- #
