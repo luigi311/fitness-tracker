@@ -4,6 +4,7 @@ from enum import Enum
 from typing import TYPE_CHECKING
 
 import gi
+from workout_parser.main import load_workout
 
 from fitness_tracker.database import SportTypesEnum
 from fitness_tracker.workouts import discover_workouts
@@ -14,6 +15,8 @@ from gi.repository import Adw, Gdk, GLib, Gtk  # noqa: E402  # ty:ignore[unresol
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+    from workout_parser.models import Workout
 
 
 class IndoorOutdoorEnum(Enum):
@@ -29,12 +32,12 @@ class IndoorOutdoorEnum(Enum):
 _ENV_BADGES: dict[SportTypesEnum, dict[str, list[tuple[str, str]]]] = {
     SportTypesEnum.running: {
         "indoor": [("Incline ctrl", "badge-amber")],
-        "outdoor": [], # [("GPS", "badge-success")] GPS is not implemented so dont display it yet
+        "outdoor": [],  # [("GPS", "badge-success")] GPS is not implemented so dont display it yet
         "trainer": [("ERG mode", "badge-info")],
     },
     SportTypesEnum.biking: {
-        "indoor": [], # [("No GPS", "badge-neutral")],
-        "outdoor": [], # [("GPS", "badge-success")] GPS is not implemented so dont display it yet
+        "indoor": [],  # [("No GPS", "badge-neutral")],
+        "outdoor": [],  # [("GPS", "badge-success")] GPS is not implemented so dont display it yet
         "trainer": [("ERG mode", "badge-info")],
     },
 }
@@ -227,7 +230,7 @@ class ModeSelectView(Gtk.Box):
 
     Callbacks:
       on_start_free(sport_type, in_outdoor, trainer)
-      on_start_workout(path, sport_type, in_outdoor, trainer)
+      on_start_workout(workout, sport_type, in_outdoor, trainer)
     """
 
     def __init__(
@@ -347,17 +350,13 @@ class ModeSelectView(Gtk.Box):
 
     def _rebuild_workout_list(self) -> None:
         # Determine entries
-        entries: list[tuple[Path, str]] = []
+        self._entries: list[tuple[Workout, str]] = []
         if self.sport_type == SportTypesEnum.running:
-            for p in discover_workouts(self._workouts_running_dir):
-                entries.append((p, "run"))
+            for workout in discover_workouts(self._workouts_running_dir):
+                self._entries.append((load_workout(workout), "run"))
         elif self.sport_type == SportTypesEnum.biking:
-            for p in discover_workouts(self._workouts_cycling_dir):
-                entries.append((p, "cycle"))
-
-        # Sort by display name (stable)
-        entries.sort(key=lambda t: t[0].stem.lower())
-        self._entries = entries
+            for workout in discover_workouts(self._workouts_cycling_dir):
+                self._entries.append((load_workout(workout), "cycle"))
 
         # clear all rows
         for row in list(self._list):
@@ -372,12 +371,20 @@ class ModeSelectView(Gtk.Box):
             return
 
         # repopulate
-        for p, kind in self._entries:
+        for workout, _ in self._entries:
             row = Adw.ActionRow()
-            row.set_title(p.stem)
+            row.set_title(workout.name)
 
-            suffix_str = p.suffix.lower().lstrip(".").upper()
-            row.set_subtitle(f"{suffix_str}")
+            # Workout information
+            subtitle = ""
+            if workout.workout_date:
+                subtitle += workout.workout_date.isoformat()
+            if workout.total_seconds:
+                if subtitle:
+                    subtitle += " · "
+                mins = workout.total_seconds // 60
+                subtitle += f"{mins} min"
+            row.set_subtitle(subtitle)
 
             in_outdoor, trainer = self._env_to_params()
             env_name = _ENV_LABELS[self._selected_env]
@@ -387,7 +394,7 @@ class ModeSelectView(Gtk.Box):
             btn.connect(
                 "clicked",
                 self._on_row_start_clicked,
-                p,
+                workout,
                 self.sport_type,
                 in_outdoor,
                 trainer,
@@ -417,12 +424,17 @@ class ModeSelectView(Gtk.Box):
     def _on_row_start_clicked(
         self,
         _btn: Gtk.Button,
-        path: Path,
+        workout: Workout,
         sport_type: SportTypesEnum,
         in_outdoor: IndoorOutdoorEnum,
         trainer: bool = False,
     ) -> None:
-        self._on_start_workout(path, sport_type=sport_type, in_outdoor=in_outdoor, trainer=trainer)
+        self._on_start_workout(
+            workout,
+            sport_type=sport_type,
+            in_outdoor=in_outdoor,
+            trainer=trainer,
+        )
 
     def _on_mode_toggled(self, btn: Gtk.ToggleButton, sport_type: SportTypesEnum) -> None:
         # We only react to the button that just became active
