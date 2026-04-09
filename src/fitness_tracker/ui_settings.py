@@ -131,6 +131,7 @@ def fallback_settings(file: Path) -> AppSettings | None:
     )
     if trainer_running_machine_type_str:
         trainer_running_machine_type = MachineType(int(trainer_running_machine_type_str))
+
     trainer_cycling_hr_name = cfg.get("sensors_trainer_cycling", "hr_name", fallback="")
     trainer_cycling_hr_address = cfg.get("sensors_trainer_cycling", "hr_address", fallback="")
     trainer_cycling_name = cfg.get("sensors_trainer_cycling", "trainer_name", fallback="")
@@ -144,6 +145,7 @@ def fallback_settings(file: Path) -> AppSettings | None:
     )
     if trainer_cycling_machine_type_str:
         trainer_cycling_machine_type = MachineType(int(trainer_cycling_machine_type_str))
+
     weight_kg = cfg.getint("personal", "weight_kg", fallback=80)
     resting_hr = cfg.getint("personal", "resting_hr", fallback=60)
     max_hr = cfg.getint("personal", "max_hr", fallback=180)
@@ -513,97 +515,115 @@ class SettingsPageUI:
 
         devices_group.add(sensors_cycling_group)
 
-        # ----- Trainer (FTMS) -----
-        trainer_group = Adw.PreferencesGroup()
-        trainer_group.set_title("")
+        # ----- Running Trainer -----
+        running_trainer_group = Adw.PreferencesGroup()
+        running_trainer_group.set_title("")
 
-        trainer_expander = Adw.ExpanderRow()
-        trainer_expander.set_title("Trainer (FTMS)")
-        trainer_expander.set_subtitle("Smart trainer / indoor bike / treadmill")
-        trainer_expander.set_expanded(False)
-        trainer_group.add(trainer_expander)
+        running_trainer_expander = Adw.ExpanderRow()
+        running_trainer_expander.set_title("Running Trainer")
+        running_trainer_expander.set_subtitle("Treadmill with FTMS support")
+        running_trainer_expander.set_expanded(False)
+        running_trainer_group.add(running_trainer_expander)
 
         # Trainer running selector
         self.trainer_running_row = Adw.ActionRow()
-        self.trainer_running_row.set_title("Trainer (Running)")
+        self.trainer_running_row.set_title("Trainer")
         self.trainer_running_spinner = Gtk.Spinner()
         self.trainer_running_combo = Gtk.ComboBoxText()
         self.trainer_running_combo.set_hexpand(True)
         self.trainer_running_row.add_prefix(self.trainer_running_spinner)
         self.trainer_running_row.add_suffix(self.trainer_running_combo)
-        trainer_expander.add_row(self.trainer_running_row)
+        running_trainer_expander.add_row(self.trainer_running_row)
 
         trainer_running_scan_row = Adw.ActionRow()
         trainer_running_scan_btn = Gtk.Button(label="Scan Trainer")
         trainer_running_scan_btn.get_style_context().add_class("suggested-action")
         trainer_running_scan_btn.connect(
             "clicked",
-            lambda _: threading.Thread(target=self._fill_devices_trainer, daemon=True).start(),
+            lambda _: threading.Thread(
+                target=self._fill_devices_running_trainer, daemon=True
+            ).start(),
         )
         trainer_running_scan_row.add_suffix(trainer_running_scan_btn)
-        trainer_expander.add_row(trainer_running_scan_row)
+        running_trainer_expander.add_row(trainer_running_scan_row)
 
-        # Trainer-running HRM (separate)
+        # Trainer running HRM
         self.trainer_running_hr_row = Adw.ActionRow()
-        self.trainer_running_hr_row.set_title("Trainer HRM (Running)")
+        self.trainer_running_hr_row.set_title("Trainer HRM")
         self.trainer_running_hr_spinner = Gtk.Spinner()
         self.trainer_running_hr_combo = Gtk.ComboBoxText()
         self.trainer_running_hr_combo.set_hexpand(True)
         self.trainer_running_hr_row.add_prefix(self.trainer_running_hr_spinner)
         self.trainer_running_hr_row.add_suffix(self.trainer_running_hr_combo)
-        trainer_expander.add_row(self.trainer_running_hr_row)
+        running_trainer_expander.add_row(self.trainer_running_hr_row)
 
         trainer_running_hr_scan_row = Adw.ActionRow()
         trainer_running_hr_scan_btn = Gtk.Button(label="Scan HRM")
         trainer_running_hr_scan_btn.get_style_context().add_class("suggested-action")
         trainer_running_hr_scan_btn.connect(
             "clicked",
-            lambda _: threading.Thread(target=self._fill_devices_trainer_hr, daemon=True).start(),
+            lambda _: threading.Thread(
+                target=self._fill_devices_running_trainer_hr, daemon=True
+            ).start(),
         )
         trainer_running_hr_scan_row.add_suffix(trainer_running_hr_scan_btn)
-        trainer_expander.add_row(trainer_running_hr_scan_row)
+        running_trainer_expander.add_row(trainer_running_hr_scan_row)
+        devices_group.add(running_trainer_group)
+
+        # ----- Cycling Trainer -----
+        cycling_trainer_group = Adw.PreferencesGroup()
+        cycling_trainer_group.set_title("")
+
+        cycling_trainer_expander = Adw.ExpanderRow()
+        cycling_trainer_expander.set_title("Cycling Trainer")
+        cycling_trainer_expander.set_subtitle("Smart Trainer / Indoor Bike")
+        cycling_trainer_expander.set_expanded(False)
+        cycling_trainer_group.add(cycling_trainer_expander)
 
         # Trainer cycling selector
         self.trainer_cycling_row = Adw.ActionRow()
-        self.trainer_cycling_row.set_title("Trainer (Cycling)")
+        self.trainer_cycling_row.set_title("Trainer")
         self.trainer_cycling_spinner = Gtk.Spinner()
         self.trainer_cycling_combo = Gtk.ComboBoxText()
         self.trainer_cycling_combo.set_hexpand(True)
         self.trainer_cycling_row.add_prefix(self.trainer_cycling_spinner)
         self.trainer_cycling_row.add_suffix(self.trainer_cycling_combo)
-        trainer_expander.add_row(self.trainer_cycling_row)
+        cycling_trainer_expander.add_row(self.trainer_cycling_row)
 
         trainer_cycling_scan_row = Adw.ActionRow()
         trainer_cycling_scan_btn = Gtk.Button(label="Scan Trainer")
         trainer_cycling_scan_btn.get_style_context().add_class("suggested-action")
         trainer_cycling_scan_btn.connect(
             "clicked",
-            lambda _: threading.Thread(target=self._fill_devices_trainer, daemon=True).start(),
+            lambda _: threading.Thread(
+                target=self._fill_devices_cycling_trainer, daemon=True
+            ).start(),
         )
         trainer_cycling_scan_row.add_suffix(trainer_cycling_scan_btn)
-        trainer_expander.add_row(trainer_cycling_scan_row)
+        cycling_trainer_expander.add_row(trainer_cycling_scan_row)
 
-        # Trainer Cycling HRM (separate)
+        # Trainer cycling HRM
         self.trainer_cycling_hr_row = Adw.ActionRow()
-        self.trainer_cycling_hr_row.set_title("Trainer HRM (Cycling)")
+        self.trainer_cycling_hr_row.set_title("Trainer HRM")
         self.trainer_cycling_hr_spinner = Gtk.Spinner()
         self.trainer_cycling_hr_combo = Gtk.ComboBoxText()
         self.trainer_cycling_hr_combo.set_hexpand(True)
         self.trainer_cycling_hr_row.add_prefix(self.trainer_cycling_hr_spinner)
         self.trainer_cycling_hr_row.add_suffix(self.trainer_cycling_hr_combo)
-        trainer_expander.add_row(self.trainer_cycling_hr_row)
+        cycling_trainer_expander.add_row(self.trainer_cycling_hr_row)
 
         trainer_cycling_hr_scan_row = Adw.ActionRow()
         trainer_cycling_hr_scan_btn = Gtk.Button(label="Scan HRM")
         trainer_cycling_hr_scan_btn.get_style_context().add_class("suggested-action")
         trainer_cycling_hr_scan_btn.connect(
             "clicked",
-            lambda _: threading.Thread(target=self._fill_devices_trainer_hr, daemon=True).start(),
+            lambda _: threading.Thread(
+                target=self._fill_devices_cycling_trainer_hr, daemon=True
+            ).start(),
         )
         trainer_cycling_hr_scan_row.add_suffix(trainer_cycling_hr_scan_btn)
-        trainer_expander.add_row(trainer_cycling_hr_scan_row)
-
-        devices_group.add(trainer_group)
+        cycling_trainer_expander.add_row(trainer_cycling_hr_scan_row)
+        devices_group.add(cycling_trainer_group)
 
         # ----- Pebble group -----
         pebble_group = Adw.PreferencesGroup()
@@ -1154,11 +1174,9 @@ class SettingsPageUI:
 
         asyncio.run(_scan())
 
-    def _fill_devices_trainer_hr(self):
-        GLib.idle_add(self.trainer_cycling_hr_spinner.start)
-        GLib.idle_add(self.trainer_cycling_hr_row.set_subtitle, "Scanning for HRM…")
-        GLib.idle_add(self.trainer_running_hr_spinner.start)
-        GLib.idle_add(self.trainer_running_hr_row.set_subtitle, "Scanning for HRM…")
+    def _fill_devices_trainer_hr(self, spinner, row, combo, settings_hr_name, map_attr: str):
+        GLib.idle_add(spinner.start)
+        GLib.idle_add(row.set_subtitle, "Scanning for HRM…")
 
         async def _scan():
             devices = await discover_heart_rate_devices(scan_timeout=5.0)
@@ -1166,35 +1184,36 @@ class SettingsPageUI:
             names = sorted(mapping.keys())
 
             def _apply():
-                # Cycling HRM
-                self.trainer_cycling_hr_spinner.stop()
-                self.trainer_cycling_hr_row.set_subtitle("" if names else "No HRM found")
-                self._combo_set_items_with_none(
-                    self.trainer_cycling_hr_combo,
-                    names,
-                    self.app.app_settings.trainer_cycling.hr_name,
-                )
-                self.trainer_cycling_hr_map = mapping
-
-                # Running HRM
-                self.trainer_running_hr_spinner.stop()
-                self.trainer_running_hr_row.set_subtitle("" if names else "No HRM found")
-                self._combo_set_items_with_none(
-                    self.trainer_running_hr_combo,
-                    names,
-                    self.app.app_settings.trainer_running.hr_name,
-                )
-                self.trainer_running_hr_map = mapping
+                spinner.stop()
+                row.set_subtitle("" if names else "No HRM found")
+                self._combo_set_items_with_none(combo, names, settings_hr_name)
+                setattr(self, map_attr, mapping)
 
             GLib.idle_add(_apply)
 
         asyncio.run(_scan())
 
-    def _fill_devices_trainer(self):
-        GLib.idle_add(self.trainer_running_spinner.start)
-        GLib.idle_add(self.trainer_cycling_spinner.start)
-        GLib.idle_add(self.trainer_running_row.set_subtitle, "Scanning for FTMS trainers…")
-        GLib.idle_add(self.trainer_cycling_row.set_subtitle, "Scanning for FTMS trainers…")
+    def _fill_devices_running_trainer_hr(self):
+        self._fill_devices_trainer_hr(
+            self.trainer_running_hr_spinner,
+            self.trainer_running_hr_row,
+            self.trainer_running_hr_combo,
+            self.app.app_settings.trainer_running.hr_name,
+            "trainer_running_hr_map",
+        )
+
+    def _fill_devices_cycling_trainer_hr(self):
+        self._fill_devices_trainer_hr(
+            self.trainer_cycling_hr_spinner,
+            self.trainer_cycling_hr_row,
+            self.trainer_cycling_hr_combo,
+            self.app.app_settings.trainer_cycling.hr_name,
+            "trainer_cycling_hr_map",
+        )
+
+    def _fill_devices_trainer(self, spinner, row, combo, settings_trainer_name, map_attr: str):
+        GLib.idle_add(spinner.start)
+        GLib.idle_add(row.set_subtitle, "Scanning for FTMS trainers…")
 
         async def _scan():
             found = await discover_ftms_devices(scan_timeout=5.0)
@@ -1204,35 +1223,39 @@ class SettingsPageUI:
             for dev, mtype in found:
                 name = getattr(dev, "name", None) or "(unnamed)"
                 addr = getattr(dev, "address", None) or ""
-                mt = mtype if mtype is not None else ""
                 disp = f"{name} [{addr}]"
-                logger.debug(f"Mapping trainer: {disp} -> {addr} ({mt})")
-                mapping[disp] = {"address": addr, "machine_type": mt}
+                logger.debug(f"Mapping trainer: {disp} -> {addr} ({mtype})")
+                mapping[disp] = {"address": addr, "machine_type": mtype}
 
             names = sorted(mapping.keys())
 
             def _apply():
-                self.trainer_running_spinner.stop()
-                self.trainer_running_row.set_subtitle("" if names else "No FTMS trainers found")
-                self.trainer_cycling_spinner.stop()
-                self.trainer_cycling_row.set_subtitle("" if names else "No FTMS trainers found")
-
-                self._combo_set_items_with_none(
-                    self.trainer_running_combo,
-                    names,
-                    self.app.app_settings.trainer_running.trainer_name,
-                )
-                self._combo_set_items_with_none(
-                    self.trainer_cycling_combo,
-                    names,
-                    self.app.app_settings.trainer_cycling.trainer_name,
-                )
-                self.trainer_running_map = mapping
-                self.trainer_cycling_map = mapping
+                spinner.stop()
+                row.set_subtitle("" if names else "No FTMS trainers found")
+                self._combo_set_items_with_none(combo, names, settings_trainer_name)
+                setattr(self, map_attr, mapping)
 
             GLib.idle_add(_apply)
 
         asyncio.run(_scan())
+
+    def _fill_devices_running_trainer(self):
+        self._fill_devices_trainer(
+            self.trainer_running_spinner,
+            self.trainer_running_row,
+            self.trainer_running_combo,
+            self.app.app_settings.trainer_running.trainer_name,
+            "trainer_running_map",
+        )
+
+    def _fill_devices_cycling_trainer(self):
+        self._fill_devices_trainer(
+            self.trainer_cycling_spinner,
+            self.trainer_cycling_row,
+            self.trainer_cycling_combo,
+            self.app.app_settings.trainer_cycling.trainer_name,
+            "trainer_cycling_map",
+        )
 
     def _fill_devices_pebble(self):
         if not self.pebble_spinner or not self.pebble_row or not self.pebble_combo:
