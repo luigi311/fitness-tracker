@@ -8,6 +8,7 @@ from statistics import median
 from typing import TYPE_CHECKING
 
 import gi
+from bleak import BleakScanner
 from bleaksport import (
     HeartRateMux,
     HeartRateSample,
@@ -28,6 +29,8 @@ from gi.repository import Adw, GLib  # noqa: E402  # ty:ignore[unresolved-import
 
 if TYPE_CHECKING:
     from concurrent.futures import Future
+
+    from bleak.backends.device import BLEDevice
 
 INPROGRESS_RE = re.compile(r"InProgress", re.IGNORECASE)
 
@@ -87,19 +90,24 @@ class Recorder:
         self._erg_applied_watts: int | None = None
 
         # Sensors
-        self.hr_name = hr_name
-        self.hr_address = hr_address
-        self.speed_name = speed_name
-        self.speed_address = speed_address
-        self.cadence_name = cadence_name
-        self.cadence_address = cadence_address
-        self.power_name = power_name
-        self.power_address = power_address
+        self.hr_name: str | None = hr_name
+        self.hr_address: str | None = hr_address
+        self.hr_device: BLEDevice | None = None
+        self.speed_name: str | None = speed_name
+        self.speed_address: str | None = speed_address
+        self.speed_device: BLEDevice | None = None
+        self.cadence_name: str | None = cadence_name
+        self.cadence_address: str | None = cadence_address
+        self.cadence_device: BLEDevice | None = None
+        self.power_name: str | None = power_name
+        self.power_address: str | None = power_address
+        self.power_device: BLEDevice | None = None
 
         # Trainer (FTMS) configuration (separated by sport type upstream)
-        self.trainer_name = trainer_name
-        self.trainer_address = trainer_address
-        self.trainer_machine_type = trainer_machine_type
+        self.trainer_name: str | None = trainer_name
+        self.trainer_address: str | None = trainer_address
+        self.trainer_machine_type: MachineType | None = trainer_machine_type
+        self.trainer_device: BLEDevice | None = None
 
         # Rolling 3 bpm for smoothinng out hr readings
         self._bpm_history: deque[int] = deque(maxlen=3)
@@ -123,6 +131,9 @@ class Recorder:
         self.incline_percent: float | None = None
         self._current_altitude_m: float = 0.0
         self._last_distance_m: float | None = None
+
+        # BLE Discover devices
+        self.devices: list[BLEDevice] = []
 
     def start(self):
         self._thread = threading.Thread(target=self._run, daemon=True)
@@ -336,25 +347,97 @@ class Recorder:
         if self._stop_event._loop is not self.loop:
             self._stop_event = asyncio.Event()
 
+        # Scan for BLE devices upfront, call bleaksport with found devices to speed up connection
+        self.devices = await BleakScanner.discover(
+            timeout=5.0,
+        )
+
+        logger.debug(f"BLE scan complete, found {len(self.devices)} devices")
+        logger.bind(data=self.devices).trace("Discovered BLE devices")
         device_tasks = []
 
-        if self.hr_address or self.hr_name:
-            device_tasks.append(asyncio.create_task(self._hr_loop()))
+        logger.debug("Matching configured devices to scan results")
+        for d in self.devices:
+            if (self.hr_address and d.address == self.hr_address) or (
+                self.hr_name and d.name == self.hr_name
+            ):
+                logger.debug(f"Matched HR device from scan: {d.address} ({d.name})")
+                self.hr_device = d
 
-        logger.debug(f"on_sample callback provided: {self.on_sample is not None}")
+            if (self.speed_address and d.address == self.speed_address) or (
+                self.speed_name and d.name == self.speed_name
+            ):
+                logger.debug(f"Matched speed device from scan: {d.address} ({d.name})")
+                self.speed_device = d
 
-        have_any_sensors = any([self.speed_address, self.cadence_address, self.power_address])
-        logger.debug(f"Sensors configured: {have_any_sensors}")
-        if have_any_sensors and self.on_sample:
-            device_tasks.append(asyncio.create_task(self._running_loop()))
+            if (self.cadence_address and d.address == self.cadence_address) or (
+                self.cadence_name and d.name == self.cadence_name
+            ):
+                logger.debug(f"Matched cadence device from scan: {d.address} ({d.name})")
+                self.cadence_device = d
 
-        have_trainer = bool(self.trainer_address)
-        logger.debug(f"Trainer configured: {have_trainer}")
-        if have_trainer and self.on_sample:
-            device_tasks.append(asyncio.create_task(self._trainer_loop()))
+            if (self.power_address and d.address == self.power_address) or (
+                self.power_name and d.name == self.power_name
+            ):
+                logger.debug(f"Matched power device from scan: {d.address} ({d.name})")
+                self.power_device = d
+
+            if (self.trainer_address and d.address == self.trainer_address) or (
+                self.trainer_name and d.name == self.trainer_name
+            ):
+                logger.debug(f"Matched trainer device from scan: {d.address} ({d.name})")
+                self.trainer_device = d
+
+        logger.debug("Device matching complete, starting loops for found devices")
+
+        hr_started = False
+        running_started = False
+        trainer_started = False
+        # Start loops for found devices first
+        if self.hr_device:
+            logger.debug(
+                f"Starting HR loop with device {self.hr_device.address} ({self.hr_device.name})"
+            )
+            hr_started = True
+            device_tasks.append(self.loop.create_task(self._hr_loop()))
+        if self.speed_device or self.cadence_device or self.power_device:
+            logger.debug(
+                "Starting running loop with devices:"
+                f" speed={self.speed_device.address if self.speed_device else 'none'} ({self.speed_device.name if self.speed_device else 'none'}), "
+                f" cadence={self.cadence_device.address if self.cadence_device else 'none'} ({self.cadence_device.name if self.cadence_device else 'none'}), "
+                f" power={self.power_device.address if self.power_device else 'none'} ({self.power_device.name if self.power_device else 'none'})"
+            )
+            running_started = True
+            device_tasks.append(self.loop.create_task(self._running_loop()))
+        if self.trainer_device:
+            logger.debug(
+                f"Starting trainer loop with device {self.trainer_device.address} ({self.trainer_device.name})"
+            )
+            trainer_started = True
+            device_tasks.append(self.loop.create_task(self._trainer_loop()))
+
+        # Start loops for any remaining configured devices that weren't found in the initial scan (they may still connect if they come online after the scan starts)
+        if not hr_started and (self.hr_address or self.hr_name):
+            logger.debug("Starting HR loop without matched device (will wait for connection)")
+            device_tasks.append(self.loop.create_task(self._hr_loop()))
+        if not running_started and (
+            self.speed_address
+            or self.speed_name
+            or self.cadence_address
+            or self.cadence_name
+            or self.power_address
+            or self.power_name
+        ):
+            logger.debug(
+                "Starting running loop without matched devices (will wait for connections)"
+            )
+            device_tasks.append(self.loop.create_task(self._running_loop()))
+        if not trainer_started and (self.trainer_address or self.trainer_name):
+            logger.debug("Starting trainer loop without matched device (will wait for connection)")
+            device_tasks.append(self.loop.create_task(self._trainer_loop()))
 
         if not device_tasks:
-            logger.debug("No device tasks to run")
+            logger.warning("No device loops started — check configuration and BLE availability")
             return
 
         # Wait for explicit stop only — let each mux's internal loop handle reconnects
@@ -367,9 +450,9 @@ class Recorder:
 
     async def _running_loop(self) -> None:
         mux = RunningMux(
-            speed_addr=self.speed_address or self.cadence_address,
-            cadence_addr=self.cadence_address,
-            power_addr=self.power_address,
+            speed_addr=self.speed_device or self.speed_address,
+            cadence_addr=self.cadence_device or self.cadence_address,
+            power_addr=self.power_device or self.power_address,
             on_sample=self._handle_running_sample,
             on_status=self._on_ble_error,
             on_link=self._on_running_link,
@@ -391,11 +474,8 @@ class Recorder:
         self.power_connected = connected and roles.get("cps", False)
 
     async def _trainer_loop(self) -> None:
-        logger.debug(
-            f"Starting trainer loop with address {self.trainer_address} and machine type {self.trainer_machine_type}"
-        )
         self.trainer_mux = TrainerMux(
-            addr=self.trainer_address,
+            addr=self.trainer_device or self.trainer_address,
             machine_type=self.trainer_machine_type,
             on_sample=self._handle_trainer_sample,
             on_status=self._on_ble_error,
@@ -421,7 +501,7 @@ class Recorder:
     async def _hr_loop(self) -> None:
         """Connect to the HR monitor via HeartRateMux and stream samples."""
         self._hr_mux = HeartRateMux(
-            addr=self.hr_address,
+            addr=self.hr_device or self.hr_address,
             name=self.hr_name,
             on_sample=self._handle_hr_sample,
             on_status=self._on_ble_error,
