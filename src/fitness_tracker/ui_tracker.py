@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 
 import gi
 import numpy as np
-from bleaksport import HeartRateSample, RunningSample, TrainerSample
+from bleaksport import CyclingSample, HeartRateSample, RunningSample, TrainerSample
 from workout_parser.main import load_workout, pretty_workout_name
 
 from fitness_tracker.database import SportTypesEnum
@@ -322,7 +322,10 @@ class TrackerPageUI:
             raise RuntimeError(msg)
 
     # ---- recorder callbacks (public)
-    def on_sample(self, sample: HeartRateSample | RunningSample | TrainerSample) -> None:
+    def on_sample(
+        self,
+        sample: HeartRateSample | RunningSample | CyclingSample | TrainerSample,
+    ) -> None:
         if isinstance(sample, HeartRateSample):
             if sample.heart_rate_bpm is None:
                 return
@@ -339,7 +342,8 @@ class TrackerPageUI:
             )
             cadence_rpm = (
                 sample.cadence_rpm
-                if isinstance(sample, TrainerSample) and sample.cadence_rpm is not None
+                if isinstance(sample, (CyclingSample, TrainerSample))
+                and sample.cadence_rpm is not None
                 else 0
             )
             cadence = cadence_spm or cadence_rpm
@@ -825,6 +829,14 @@ class TrackerPageUI:
                     distance_m=dist_m,
                     power_watts=int(self._last_power),
                     target_power=None,
+                )
+            elif self.free_view and self.free_view.sport_type == SportTypesEnum.biking:
+                sample = CyclingSample(
+                    timestamp_ms=wall_ts_ms,
+                    speed_mps=float(self._last_mph) * 0.44704,
+                    cadence_rpm=self._last_cadence,
+                    distance_m=dist_m,
+                    power_watts=int(self._last_power),
                 )
             else:
                 sample = RunningSample(
