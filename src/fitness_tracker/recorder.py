@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 import gi
 from bleak import BleakScanner
 from bleaksport import (
+    CyclingMux,
     HeartRateMux,
     HeartRateSample,
     MachineType,
@@ -18,6 +19,7 @@ from bleaksport import (
     TrainerMux,
     TrainerSample,
 )
+from bleaksport.models import CyclingSample
 from loguru import logger
 
 from fitness_tracker.activity_stats import StatsCalculator
@@ -54,7 +56,7 @@ class Recorder:
         trainer_machine_type: MachineType | None,
         on_error: Callable[[str], None],
         *,
-        on_sample_update: Callable[[HeartRateSample | RunningSample | TrainerSample], None]
+        on_sample_update: Callable[[CyclingSample | HeartRateSample | RunningSample | TrainerSample], None]
         | None = None,
         test_mode: bool = False,
     ):
@@ -120,7 +122,7 @@ class Recorder:
         self.distance_connected = False
 
         # BLE muxes (only created if corresponding sensors are configured)
-        self._running_mux: RunningMux | None = None
+        self._speed_mux: RunningMux | CyclingMux | None = None
         self.trainer_mux: TrainerMux | None = None
         self._hr_mux: HeartRateMux | None = None
 
@@ -286,6 +288,46 @@ class Recorder:
                 incline_percent=self.incline_percent,
             )
 
+    def _handle_cycling_sample(self, sample: CyclingSample):
+        if not self.on_sample:
+            return
+
+        logger.bind(data=sample).trace("Handling cycling sample")
+
+        if self._start_ms is None:
+            self._start_ms = sample.timestamp_ms
+
+        delta_ms = int(sample.timestamp_ms - self._start_ms)
+
+        adjusted_distance_m = sample.distance_m
+        altitude_m = self._accumulate_altitude(sample.distance_m)
+
+        # Adjust distance by baseline if needed
+        if self._dist0_m is None and sample.distance_m is not None:
+            # If SC reset worked, first distance will be ~0; if not, this becomes our baseline.
+            self._dist0_m = sample.distance_m
+
+        if sample.distance_m is not None and self._dist0_m is not None:
+            adjusted_distance_m = max(0.0, sample.distance_m - self._dist0_m)
+
+        cleaned_sample = sample.model_copy(
+            update={
+                "timestamp_ms": delta_ms,
+                "distance_m": adjusted_distance_m,
+                "altitude_m": altitude_m,
+            },
+        )
+
+        GLib.idle_add(self.on_sample, cleaned_sample)
+
+        # Persist to DB if recording
+        if self._recording and self.activity_id:
+            self.db.insert_cycling_metrics(
+                self.activity_id,
+                cleaned_sample,
+                incline_percent=self.incline_percent,
+            )
+
     def _handle_trainer_sample(self, sample: TrainerSample):
         if not self.on_sample:
             return
@@ -358,30 +400,35 @@ class Recorder:
 
         logger.debug("Matching configured devices to scan results")
         for d in self.devices:
+            # Heart Rate
             if (self.hr_address and d.address == self.hr_address) or (
                 self.hr_name and d.name == self.hr_name
             ):
                 logger.debug(f"Matched HR device from scan: {d.address} ({d.name})")
                 self.hr_device = d
 
+            # Speed
             if (self.speed_address and d.address == self.speed_address) or (
                 self.speed_name and d.name == self.speed_name
             ):
                 logger.debug(f"Matched speed device from scan: {d.address} ({d.name})")
                 self.speed_device = d
 
+            # Cadence
             if (self.cadence_address and d.address == self.cadence_address) or (
                 self.cadence_name and d.name == self.cadence_name
             ):
                 logger.debug(f"Matched cadence device from scan: {d.address} ({d.name})")
                 self.cadence_device = d
 
+            # Power
             if (self.power_address and d.address == self.power_address) or (
                 self.power_name and d.name == self.power_name
             ):
                 logger.debug(f"Matched power device from scan: {d.address} ({d.name})")
                 self.power_device = d
 
+            # Trainer
             if (self.trainer_address and d.address == self.trainer_address) or (
                 self.trainer_name and d.name == self.trainer_name
             ):
@@ -391,7 +438,7 @@ class Recorder:
         logger.debug("Device matching complete, starting loops for found devices")
 
         hr_started = False
-        running_started = False
+        speed_started = False
         trainer_started = False
         # Start loops for found devices first
         if self.hr_device:
@@ -402,13 +449,13 @@ class Recorder:
             device_tasks.append(self.loop.create_task(self._hr_loop()))
         if self.speed_device or self.cadence_device or self.power_device:
             logger.debug(
-                "Starting running loop with devices:"
+                "Starting speed loop with devices:"
                 f" speed={self.speed_device.address if self.speed_device else 'none'} ({self.speed_device.name if self.speed_device else 'none'}), "
                 f" cadence={self.cadence_device.address if self.cadence_device else 'none'} ({self.cadence_device.name if self.cadence_device else 'none'}), "
                 f" power={self.power_device.address if self.power_device else 'none'} ({self.power_device.name if self.power_device else 'none'})"
             )
-            running_started = True
-            device_tasks.append(self.loop.create_task(self._running_loop()))
+            speed_started = True
+            device_tasks.append(self.loop.create_task(self._speed_loop()))
         if self.trainer_device:
             logger.debug(
                 f"Starting trainer loop with device {self.trainer_device.address} ({self.trainer_device.name})"
@@ -420,7 +467,8 @@ class Recorder:
         if not hr_started and (self.hr_address or self.hr_name):
             logger.debug("Starting HR loop without matched device (will wait for connection)")
             device_tasks.append(self.loop.create_task(self._hr_loop()))
-        if not running_started and (
+
+        if not speed_started and (
             self.speed_address
             or self.speed_name
             or self.cadence_address
@@ -429,9 +477,10 @@ class Recorder:
             or self.power_name
         ):
             logger.debug(
-                "Starting running loop without matched devices (will wait for connections)"
+                "Starting speed loop without matched devices (will wait for connections)"
             )
-            device_tasks.append(self.loop.create_task(self._running_loop()))
+            device_tasks.append(self.loop.create_task(self._speed_loop()))
+
         if not trainer_started and (self.trainer_address or self.trainer_name):
             logger.debug("Starting trainer loop without matched device (will wait for connection)")
             device_tasks.append(self.loop.create_task(self._trainer_loop()))
@@ -448,23 +497,42 @@ class Recorder:
             with contextlib.suppress(asyncio.CancelledError):
                 await t
 
-    async def _running_loop(self) -> None:
-        mux = RunningMux(
-            speed_addr=self.speed_device or self.speed_address,
-            cadence_addr=self.cadence_device or self.cadence_address,
-            power_addr=self.power_device or self.power_address,
-            on_sample=self._handle_running_sample,
-            on_status=self._on_ble_error,
-            on_link=self._on_running_link,
-            ble_lock=self._ble_lock,
-        )
-        self._running_mux = mux
+    async def _speed_loop(self) -> None:
+        if self.sport_type == SportTypesEnum.running:
+            mux = RunningMux(
+                speed_addr=self.speed_device or self.speed_address,
+                cadence_addr=self.cadence_device or self.cadence_address,
+                power_addr=self.power_device or self.power_address,
+                on_sample=self._handle_running_sample,
+                on_status=self._on_ble_error,
+                on_link=self._on_running_link,
+                ble_lock=self._ble_lock,
+            )
+        elif self.sport_type == SportTypesEnum.biking:
+            csc_addr = (
+                self.speed_device
+                or self.cadence_device
+                or self.speed_address
+                or self.cadence_address
+            )
+            mux = CyclingMux(
+                csc_addr=csc_addr,
+                cps_addr=self.power_device or self.power_address,
+                on_sample=self._handle_cycling_sample,
+                on_status=self._on_ble_error,
+                on_link=self._on_running_link,  # same link handler for cycling mux
+                ble_lock=self._ble_lock,
+            )
+        else:
+            logger.error(f"Unknown sport type {self.sport_type} for speed loop")
+            return
+        self._speed_mux = mux
         try:
             await mux.start()
         finally:
             with contextlib.suppress(Exception):
                 await mux.stop()
-            self._running_mux = None
+            self._speed_mux = None
 
     def _on_running_link(self, _addr: str, connected: bool, roles: dict[str, bool]) -> None:
         # RSCS drives both speed & cadence cards
@@ -588,11 +656,11 @@ class Recorder:
         # Wait a little for the RSCS link to come up
         t0 = self.loop.time()
         while (self.loop.time() - t0) < wait_s and not self._stop_event.is_set():
-            if self.speed_connected and self._running_mux:
+            if self.speed_connected and self._speed_mux:
                 break
             await asyncio.sleep(0.2)
 
-        mux = self._running_mux
+        mux = self._speed_mux
         if not mux:
             return
 
@@ -625,9 +693,12 @@ class Recorder:
         return self._current_altitude_m
 
     # --- Test-mode injection ---
-    def inject_test_sample(self, sample: "RunningSample | TrainerSample | HeartRateSample") -> None:
+    def inject_test_sample(
+        self,
+        sample: CyclingSample | RunningSample | TrainerSample | HeartRateSample,
+    ) -> None:
         """
-        Directly inject a pre-built RunningSample or TrainerSample into the recorder,
+        Directly inject a pre-built sample into the recorder,
         bypassing BLE. Used exclusively in test_mode to exercise the full recorder pipeline
         (distance baseline, altitude accumulation, DB writes, UI callbacks) from
         simulated data produced by the UI layer.
@@ -643,6 +714,8 @@ class Recorder:
             self._handle_trainer_sample(sample)
         elif isinstance(sample, RunningSample):
             self._handle_running_sample(sample)
+        elif isinstance(sample, CyclingSample):
+            self._handle_cycling_sample(sample)
         elif isinstance(sample, HeartRateSample):
             self._handle_hr_sample(sample)
         else:
