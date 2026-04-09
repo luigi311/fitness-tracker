@@ -98,7 +98,7 @@ class TrackerPageUI:
             workouts_running_dir=self.app.workouts_running_dir,
             workouts_cycling_dir=self.app.workouts_cycling_dir,
             on_start_free=self._show_free_from_mode,
-            on_start_workout=self._start_workout_from_path,
+            on_start_workout=self._start_workout,
         )
         self.mode_page = Adw.NavigationPage.new(self.mode_view, "Choose Activity")
         nav.add(self.mode_page)
@@ -110,16 +110,15 @@ class TrackerPageUI:
         return self.nav
 
     # ---- mode callbacks
-    def _start_workout_from_path(
+    def _start_workout(
         self,
-        path: Path,
+        workout: Workout,
         sport_type: SportTypesEnum,
         in_outdoor: IndoorOutdoorEnum,
         trainer: bool = False,
     ) -> None:
-        w = load_workout(path)
-        self._workout = w if w.steps else None
-        self._workout_path = path
+        self._workout = workout if workout.steps else None
+        self._workout_path = None
         self._manual_offset_s = 0.0
         self._show_workout_page(sport_type=sport_type, in_outdoor=in_outdoor, trainer=trainer)
 
@@ -220,7 +219,7 @@ class TrackerPageUI:
         self._running = False
         self._reset_buffers()
 
-        raw = self._workout_path.stem if self._workout_path else "Workout"
+        raw = self._workout.name if self._workout else "Workout"
         nice = pretty_workout_name(raw)
         self.workout_view = WorkoutView(
             app=self.app,

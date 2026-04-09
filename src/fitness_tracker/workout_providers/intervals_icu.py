@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import base64
 import json
 from dataclasses import dataclass
 from datetime import date
@@ -11,19 +10,19 @@ import requests
 from loguru import logger
 
 from fitness_tracker.database import SportTypesEnum
-
-from .utils import DownloadedWorkout
+from fitness_tracker.workout_providers.utils import DownloadedWorkout
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
 _API_BASE = "https://intervals.icu/api/v1"
 
+
 @dataclass
 class IntervalsICUProvider:
     athlete_id: str
     api_key: str
-    ext: Literal["fit", "zwo", "erg", "mrc", "json"] = "fit"
+    ext: Literal["fit", "zwo", "erg", "mrc", "json"] = "json"
 
     def _auth(self):
         return requests.auth.HTTPBasicAuth("API_KEY", self.api_key)
@@ -50,7 +49,7 @@ class IntervalsICUProvider:
         }
         url = f"{_API_BASE}/athlete/{self.athlete_id}/events"
 
-        # 1) Request & parse (raises on HTTP errors)
+        # Request & parse (raises on HTTP errors)
         r = requests.get(url, params=params, auth=self._auth(), timeout=20)
         r.raise_for_status()
         events = (
@@ -59,8 +58,20 @@ class IntervalsICUProvider:
             else json.loads(r.text)
         )
 
-        # 2) Build the new set of files entirely in-memory first
-        new_payloads: list[tuple[date, str, bytes]] = []
+        if events:
+            # SUCCESSFUL request: clean the folder first (authoritative sync)
+            def _is_workout_file(p: Path) -> bool:
+                return p.is_file() and p.suffix.lower() in (".fit", ".zwo", ".erg", ".mrc", ".json")
+
+            for old in list(out_dir.iterdir()):
+                if _is_workout_file(old):
+                    try:
+                        old.unlink()
+                    except Exception:
+                        logger.warning(f"Failed to delete old workout file {old}, skipping")
+
+        # Build the new set of files
+        written: list[DownloadedWorkout] = []
         for ev in events:
             ev_type = (ev.get("type") or "").strip()
             if sport == SportTypesEnum.running and ev_type != "Run":
@@ -74,39 +85,19 @@ class IntervalsICUProvider:
                 continue
 
             start_date_str = ev.get("start_date_local") or ev.get("start_date")
-            d = date.fromisoformat(start_date_str[:10]) if start_date_str else start
+            start_date = date.fromisoformat(start_date_str[:10]) if start_date_str else start
 
             title = (ev.get("name") or ev.get("title") or Path(wf_name).stem).strip()
             safe_title = "".join(c if c.isalnum() or c in " -_." else "_" for c in title).strip()
 
-            try:
-                payload = base64.b64decode(wf_b64)
-            except Exception:
-                logger.warning(f"Failed to decode workout file for event {ev.get('id')}, skipping")
-                continue
-
-            new_payloads.append((d, safe_title, payload))
-
-        # 3) SUCCESSFUL request: clean the folder first (authoritative sync)
-        #    Even if there are zero events, we still clear old files.
-        def _is_workout_file(p: Path) -> bool:
-            return p.is_file() and p.suffix.lower() in (".fit", ".zwo", ".erg", ".mrc", ".json")
-
-        for old in list(out_dir.iterdir()):
-            if _is_workout_file(old):
-                try:
-                    old.unlink()
-                except Exception:
-                    logger.warning(f"Failed to delete old workout file {old}, skipping")
-
-        # 4) Write the new files
-        written: list[DownloadedWorkout] = []
-        for d, safe_title, payload in new_payloads:
-            out_name = f"{d.isoformat()} {safe_title}.{self.ext}"
+            out_name = f"{start_date.isoformat()} {safe_title}.json"
             out_path = out_dir / out_name
             try:
-                out_path.write_bytes(payload)
-                written.append(DownloadedWorkout(path=out_path, start_date=d, title=safe_title))
+                # Write out the entire ev json
+                out_path.write_text(json.dumps(ev))
+                written.append(
+                    DownloadedWorkout(path=out_path, start_date=start_date, title=safe_title)
+                )
             except Exception:
                 logger.warning(f"Failed to write new workout file {out_path}, skipping")
                 continue
