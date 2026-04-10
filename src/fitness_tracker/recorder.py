@@ -56,7 +56,9 @@ class Recorder:
         trainer_machine_type: MachineType | None,
         on_error: Callable[[str], None],
         *,
-        on_sample_update: Callable[[CyclingSample | HeartRateSample | RunningSample | TrainerSample], None]
+        on_sample_update: Callable[
+            [CyclingSample | HeartRateSample | RunningSample | TrainerSample], None
+        ]
         | None = None,
         test_mode: bool = False,
     ):
@@ -435,7 +437,21 @@ class Recorder:
                 logger.debug(f"Matched trainer device from scan: {d.address} ({d.name})")
                 self.trainer_device = d
 
-        logger.debug("Device matching complete, starting loops for found devices")
+        if not (
+            self.hr_device
+            or self.speed_device
+            or self.cadence_device
+            or self.power_device
+            or self.trainer_device
+        ):
+            logger.debug(
+                "No configured devices found in BLE scan results,"
+                " starting loops without matched devices and wait for connections",
+            )
+        else:
+            logger.debug(
+                "Device matching complete, starting loops for found devices",
+            )
 
         hr_started = False
         speed_started = False
@@ -443,7 +459,7 @@ class Recorder:
         # Start loops for found devices first
         if self.hr_device:
             logger.debug(
-                f"Starting HR loop with device {self.hr_device.address} ({self.hr_device.name})"
+                f"Starting HR loop with device {self.hr_device.address} ({self.hr_device.name})",
             )
             hr_started = True
             device_tasks.append(self.loop.create_task(self._hr_loop()))
@@ -476,9 +492,7 @@ class Recorder:
             or self.power_address
             or self.power_name
         ):
-            logger.debug(
-                "Starting speed loop without matched devices (will wait for connections)"
-            )
+            logger.debug("Starting speed loop without matched devices (will wait for connections)")
             device_tasks.append(self.loop.create_task(self._speed_loop()))
 
         if not trainer_started and (self.trainer_address or self.trainer_name):
