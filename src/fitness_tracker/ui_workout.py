@@ -619,8 +619,19 @@ class WorkoutView(Gtk.Box):
         self.step_progress.set_fraction(max(0.0, min(1.0, float(frac))))
 
     def set_recording(self, recording: bool) -> None:
-        self.btn_start.set_sensitive(not recording)
+        self.btn_start.set_sensitive(True)  # always clickable now
         self.btn_stop.set_sensitive(True)
+        self.btn_start.add_css_class("suggested-action")
+        self.btn_start.set_label("Pause" if recording else "Start")
+
+
+    def set_paused(self, paused: bool) -> None:
+        if paused:
+            self.btn_start.set_label("Resume")
+            self.timer_remaining.set_opacity(0.5)
+        else:
+            self.btn_start.set_label("Pause")
+            self.timer_remaining.set_opacity(1.0)
 
     def _on_incline_change(self, percent: float) -> None:
         if callable(getattr(self, "_incline_cb", None)):

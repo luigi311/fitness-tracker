@@ -81,6 +81,10 @@ class TrackerPageUI:
         self._timer_source_id: int | None = None
         self._elapsed_display_s: int = 0
 
+        # workout pause state
+        self._workout_paused: bool = False
+        self._workout_pause_started_monotonic: float | None = None
+
         # UI pages
         self.nav: Adw.NavigationView | None = None
         self.mode_view: ModeSelectView | None = None
@@ -130,6 +134,33 @@ class TrackerPageUI:
     ) -> None:
         self._show_free_run_page(sport_type=sport_type, in_outdoor=in_outdoor, trainer=trainer)
 
+    def _on_workout_start_pause_clicked(self) -> None:
+        if not self._running:
+            # First press: start the workout
+            self._begin_run_now()
+        elif self._workout_paused:
+            # Currently paused: resume
+            if self._workout_pause_started_monotonic is not None:
+                paused_for = time.monotonic() - self._workout_pause_started_monotonic
+                self._manual_offset_s -= paused_for
+            self._workout_pause_started_monotonic = None
+            self._workout_paused = False
+            # Reset erg throttle so target power re-applies immediately
+            self._erg_last_set_watts = None
+            self._erg_last_set_ts = 0.0
+            if self.workout_view:
+                self.workout_view.set_paused(False)
+        else:
+            # Currently running: pause
+            self._workout_pause_started_monotonic = time.monotonic()
+            self._workout_paused = True
+            # Drop ERG target so user isn't fighting the trainer
+            if self.app.recorder and self.app.recorder.trainer_mux:
+                self.app.recorder.set_target_power(0)
+                self._erg_last_set_watts = None
+            if self.workout_view:
+                self.workout_view.set_paused(True)
+
     def _tick_timer(self) -> bool:
         """
         1 Hz UI timer:
@@ -153,9 +184,13 @@ class TrackerPageUI:
 
         # Workout timers / guidance
         if self.workout_view and self._workout:
-            self._update_workout_guidance(elapsed_s)
-            self._update_workout_running_timers(elapsed_s)
-            self._maybe_complete_workout(elapsed_s)
+            # Elapsed always updates, even while paused
+            self.workout_view.set_elapsed_text(self._fmt_hhmmss(elapsed_s))
+
+            if not self._workout_paused:
+                self._update_workout_guidance(elapsed_s)
+                self._update_workout_running_timers(elapsed_s)
+                self._maybe_complete_workout(elapsed_s)
 
         return True
 
@@ -228,10 +263,12 @@ class TrackerPageUI:
             on_prev=lambda: self._skip_step(-1),
             on_next=lambda: self._skip_step(+1),
             on_stop=self._stop_run_and_back,
-            on_start_record=self._begin_run_now,
+            on_start_record=self._on_workout_start_pause_clicked,
             in_outdoor=in_outdoor,
             trainer=trainer,
         )
+        self._workout_paused = False
+        self._workout_pause_started_monotonic = None
         self._push(self.workout_view, nice)
         self._active_step_index = -1
 
@@ -690,10 +727,6 @@ class TrackerPageUI:
     def _update_workout_running_timers(self, elapsed_s: int) -> None:
         if not (self.workout_view and self._workout):
             return
-        # elapsed
-        self.workout_view.set_elapsed_text(
-            self._fmt_hhmmss(elapsed_s),
-        )  # show mm:ss for legibility
 
         # remaining in current step
         t_s = max(0.0, float(elapsed_s) + self._manual_offset_s)
