@@ -1,0 +1,40 @@
+app-id: io.luigi311.fitness-tracker
+runtime: org.gnome.Platform
+runtime-version: '50'
+sdk: org.gnome.Sdk
+
+command: fitness-tracker.pex
+finish-args:
+  - --share=ipc
+  - --socket=fallback-x11
+  - --socket=wayland
+  - --device=dri
+  - --share=network
+  # Enable bluetooth
+  - --allow=bluetooth
+  - --system-talk-name=org.bluez
+  - --filesystem=xdg-data:create
+  - --filesystem=xdg-config:create
+  - --env=PEX_ROOT=/var/data/pex-cache
+  - --own-name=io.luigi311.fitness-tracker
+  - --talk-name=io.luigi311.fitness-tracker
+modules:
+  - name: fitness-tracker
+    buildsystem: simple
+    build-commands:
+      - mkdir -p /app/bin
+      - mv fitness-tracker.pex /app/bin/fitness-tracker.pex
+      - install -Dm644 fitness-tracker.svg /app/share/icons/hicolor/scalable/apps/io.luigi311.fitness-tracker.svg
+      # Update the .desktop file to use the correct icon name and install it
+      - desktop-file-edit fitness-tracker.desktop --set-icon=io.luigi311.fitness-tracker
+      - install -Dm644 fitness-tracker.desktop /app/share/applications/io.luigi311.fitness-tracker.desktop
+    sources:
+      - type: file
+        path: ./dist/fitness_tracker.pex
+        dest-filename: fitness-tracker.pex
+      - type: file
+        path: ./data/fitness-tracker.svg
+        dest-filename: fitness-tracker.svg
+      - type: file
+        path: ./data/fitness-tracker.desktop
+        dest-filename: fitness-tracker.desktop

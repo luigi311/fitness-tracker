@@ -1,3 +1,7 @@
+build-dir
+repo
+
+
 **.db
 *.sh
 *.lock-*
