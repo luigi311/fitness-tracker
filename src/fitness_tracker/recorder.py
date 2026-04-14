@@ -507,13 +507,17 @@ class Recorder:
 
         # Wait for explicit stop only — let each mux's internal loop handle reconnects
         await self._stop_event.wait()
+        logger.debug(f"Stop event received, cancelling {len(device_tasks)} device tasks")
+
+        for t in device_tasks:
+            t.cancel()
 
         # Wait with a timeout so a stuck mux can't hang shutdown
         for t in device_tasks:
             try:
                 await asyncio.wait_for(asyncio.shield(t), timeout=10.0)
                 logger.debug(f"Task {t.get_name()} finished cleanly")
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 logger.warning(f"Task {t.get_name()} did not finish within 10s after cancel")
             except asyncio.CancelledError:
                 logger.debug(f"Task {t.get_name()} cancelled")

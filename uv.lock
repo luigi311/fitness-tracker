@@ -82,10 +82,11 @@ wheels = [
 [[package]]
 name = "bleaksport"
 version = "0.3.0"
-source = { git = "https://github.com/luigi311/bleaksport?branch=main#4718ed3e14b87c3a225c8eb7e4dc10c85f0bc976" }
+source = { git = "https://github.com/luigi311/bleaksport?branch=main#bd6d30e424f561ce2b724332566afc0a4b7d1709" }
 dependencies = [
     { name = "bleak" },
     { name = "bleakheart" },
+    { name = "dbus-next" },
     { name = "loguru" },
     { name = "pydantic" },
     { name = "pyftms" },
@@ -296,6 +297,15 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/82/3d/a033cc655a3a32ee145f575cd05066cf5bed71e24238947d77fb9597c905/dbus_fast-4.0.4-cp314-cp314t-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:5843c3e543ac1d48cafff67394ada9e568f20d122b44408e378ae43402b785ca", size = 1610602, upload-time = "2026-04-02T04:50:32.146Z" },
     { url = "https://files.pythonhosted.org/packages/4a/46/2834b825da3f6ef206f5bc55363bc8751addcfc03fa34c639f72006f6a3e/dbus_fast-4.0.4-cp314-cp314t-musllinux_1_2_aarch64.whl", hash = "sha256:7ebb845f2e15ef19f4a99cb879dfbcb1c7028a97d5aaba93b36f65cfd938a022", size = 1550136, upload-time = "2026-04-02T04:50:34.311Z" },
     { url = "https://files.pythonhosted.org/packages/9e/01/894b2f6954d12c5c527232906d67272b59f0f12f386cd2d394d5e5eac7fc/dbus_fast-4.0.4-cp314-cp314t-musllinux_1_2_x86_64.whl", hash = "sha256:698fe83128150dd49aaa7deb5493523309f0a9749c3c075730a6981851607455", size = 1627660, upload-time = "2026-04-02T04:50:36.5Z" },
+]
+
+[[package]]
+name = "dbus-next"
+version = "0.2.3"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/ce/45/6a40fbe886d60a8c26f480e7d12535502b5ba123814b3b9a0b002ebca198/dbus_next-0.2.3.tar.gz", hash = "sha256:f4eae26909332ada528c0a3549dda8d4f088f9b365153952a408e28023a626a5", size = 71112, upload-time = "2021-07-25T22:11:28.398Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/d2/fc/c0a3f4c4eaa5a22fbef91713474666e13d0ea2a69c84532579490a9f2cc8/dbus_next-0.2.3-py3-none-any.whl", hash = "sha256:58948f9aff9db08316734c0be2a120f6dc502124d9642f55e90ac82ffb16a18b", size = 57885, upload-time = "2021-07-25T22:11:25.466Z" },
 ]
 
 [[package]]
