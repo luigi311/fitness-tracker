@@ -144,7 +144,9 @@ class Recorder:
         self._thread.start()
 
     def shutdown(self):
+        logger.debug("Recorder.shutdown called")
         if not self.loop.is_running():
+            logger.debug("Loop not running, returning")
             return
 
         def _stop():
@@ -155,7 +157,7 @@ class Recorder:
 
         self.loop.call_soon_threadsafe(_stop)
         if self._thread:
-            self._thread.join(timeout=3)
+            self._thread.join(timeout=10)
 
     def start_recording(self):
         if not self._recording:
@@ -506,10 +508,19 @@ class Recorder:
         # Wait for explicit stop only — let each mux's internal loop handle reconnects
         await self._stop_event.wait()
 
+        # Wait with a timeout so a stuck mux can't hang shutdown
         for t in device_tasks:
-            t.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await t
+            try:
+                await asyncio.wait_for(asyncio.shield(t), timeout=10.0)
+                logger.debug(f"Task {t.get_name()} finished cleanly")
+            except asyncio.TimeoutError:
+                logger.warning(f"Task {t.get_name()} did not finish within 10s after cancel")
+            except asyncio.CancelledError:
+                logger.debug(f"Task {t.get_name()} cancelled")
+            except Exception as e:
+                logger.warning(f"Task {t.get_name()} raised on shutdown: {e}")
+
+        logger.debug("Workflow exiting")
 
     async def _speed_loop(self) -> None:
         if self.sport_type == SportTypesEnum.running:
@@ -544,8 +555,8 @@ class Recorder:
         try:
             await mux.start()
         finally:
-            with contextlib.suppress(Exception):
-                await mux.stop()
+            logger.debug("Cleaning up speed connections")
+            await mux.stop()
             self._speed_mux = None
 
     def _on_running_link(self, _addr: str, connected: bool, roles: dict[str, bool]) -> None:
@@ -566,6 +577,7 @@ class Recorder:
         try:
             await self.trainer_mux.start()
         finally:
+            logger.debug("Cleaning up trainer connections")
             with contextlib.suppress(Exception):
                 await self.trainer_mux.stop()
             self.trainer_mux = None
@@ -593,6 +605,7 @@ class Recorder:
         try:
             await self._hr_mux.start()
         finally:
+            logger.debug("Cleaning up hr connections")
             with contextlib.suppress(Exception):
                 await self._hr_mux.stop()
             self._hr_mux = None

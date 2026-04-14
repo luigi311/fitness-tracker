@@ -52,6 +52,7 @@ class FitnessAppUI(Adw.Application):
     def __init__(self, test_mode: bool = False):
         Adw.init()
         super().__init__(application_id="io.luigi311.fitness-tracker")
+        self.connect("shutdown", self._on_shutdown)
         self.test_mode = test_mode
         self._is_dark = Adw.StyleManager.get_default().get_dark()
 
@@ -119,6 +120,21 @@ class FitnessAppUI(Adw.Application):
             # Remove old .ini file after successful migration
             with contextlib.suppress(Exception):
                 self.fall_back_config_file.unlink()
+
+    def _on_shutdown(self, _app):
+        logger.debug("shutdown signal fired")
+        if self.recorder:
+            with contextlib.suppress(Exception):
+                self.recorder.stop_recording()
+            self.recorder.shutdown()
+        if self.pebble_bridge:
+            with contextlib.suppress(Exception):
+                self.pebble_bridge.stop()
+
+    def _on_close_request(self, *_a):
+        logger.debug("close-request fired")
+        self.quit()
+        return False
 
     def show_toast(self, message: str) -> None:
         print(message)
@@ -329,7 +345,7 @@ class FitnessAppUI(Adw.Application):
             Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION,
         )
         self.window = Adw.ApplicationWindow(application=self)
-        self.window.connect("close-request", lambda *a: (self.quit(), False)[1])
+        self.window.connect("close-request", self._on_close_request)
         self.window.set_title("Fitness Tracker")
         self.window.set_default_size(720, 1280)
         self.window.set_resizable(True)
@@ -410,18 +426,3 @@ class FitnessAppUI(Adw.Application):
         alpha = 0.25
         for (_, (low, high)), color in zip(zones.items(), colors, strict=True):
             ax.axhspan(low, high, facecolor=color, alpha=alpha)
-
-    def do_shutdown(self):
-        # Cleanly stop recorder/BLE loop before app teardown
-        try:
-            if self.recorder:
-                with contextlib.suppress(Exception):
-                    self.recorder.stop_recording()
-                self.recorder.shutdown()
-
-            if self.pebble_bridge:
-                with contextlib.suppress(Exception):
-                    self.pebble_bridge.stop()
-        finally:
-            # IMPORTANT: chain up by calling the base class with self
-            Adw.Application.do_shutdown(self)
