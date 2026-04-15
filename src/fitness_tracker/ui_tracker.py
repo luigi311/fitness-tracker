@@ -193,6 +193,26 @@ class TrackerPageUI:
     # -------------------------
     #  Page show / run control
     # -------------------------
+    def _make_free_view(
+        self,
+        sport_type: SportTypesEnum,
+        in_outdoor: IndoorOutdoorEnum,
+        trainer: bool,
+    ) -> FreeRunView:
+        """Construct a FreeRunView with stop/start buttons and incline wired up."""
+        view = FreeRunView(
+            self.app,
+            sport_type=sport_type,
+            in_outdoor=in_outdoor,
+            trainer=trainer,
+        )
+        view.btn_stop.connect("clicked", lambda *_: self._stop_run_and_back())
+        view.btn_start.connect("clicked", lambda *_: self._begin_run_now())
+        view.set_incline_callback(self._on_incline_changed)
+        if self.app.recorder and self.app.recorder.incline_percent is not None:
+            view.incline_control.set_value(self.app.recorder.incline_percent)
+        return view
+
     def _show_free_run_page(
         self,
         sport_type: SportTypesEnum = SportTypesEnum.running,
@@ -209,21 +229,9 @@ class TrackerPageUI:
         self._running = False
         self._reset_buffers()
 
-        self.free_view = FreeRunView(
-            self.app, sport_type=sport_type, in_outdoor=in_outdoor, trainer=trainer
-        )
-        # Wire start/stop controls
-        self.free_view.btn_stop.connect("clicked", lambda *_: self._stop_run_and_back())
-        self.free_view.btn_start.connect("clicked", lambda *_: self._begin_run_now())
-
+        self.free_view = self._make_free_view(sport_type, in_outdoor, trainer)
         title = "Free Ride" if sport_type == SportTypesEnum.biking else "Free Run"
         self._push(self.free_view, title)
-
-        # Wire incline control → recorder
-        self.free_view.set_incline_callback(self._on_incline_changed)
-        # Restore last known incline if recorder exists
-        if self.app.recorder and self.app.recorder.incline_percent is not None:
-            self.free_view.incline_control.set_value(self.app.recorder.incline_percent)
 
         # initial statuses & preview values
         self.update_metric_statuses()
@@ -590,13 +598,8 @@ class TrackerPageUI:
                 self.workout_view.in_outdoor if self.workout_view else IndoorOutdoorEnum.indoor
             )
             trainer = self.workout_view.trainer if self.workout_view else False
-            self.free_view = FreeRunView(
-                self.app,
-                sport_type=sport_type,
-                in_outdoor=in_outdoor,
-                trainer=trainer,
-            )
-            self.free_view.btn_stop.connect("clicked", lambda *_: self._stop_run_and_back())
+
+            self.free_view = self._make_free_view(sport_type, in_outdoor, trainer)
 
             # Replace the top page: pop workout, push free-run
             if self.nav:
