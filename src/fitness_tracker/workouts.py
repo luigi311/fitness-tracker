@@ -5,7 +5,6 @@ from pathlib import Path
 # Discovery
 # -----------------------
 
-SUPPORTED_EXTS = (".fit", ".json")
 AUTO_SUBDIRS = ("intervals_icu",)
 
 

@@ -276,9 +276,6 @@ class FreeRunView(Gtk.Box):
         """Register a callable(percent: float) to fire on every incline change."""
         self._incline_cb = cb
 
-    def get_incline(self) -> float:
-        return self.incline_control.get_value()
-
     # ---- style helpers
     def _style_hr_axis(self) -> None:
         zones = self.app.calculate_hr_zones()

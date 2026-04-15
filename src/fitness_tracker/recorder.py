@@ -1,6 +1,5 @@
 import asyncio
 import contextlib
-import re
 import threading
 from collections import deque
 from collections.abc import Callable
@@ -33,8 +32,6 @@ if TYPE_CHECKING:
     from concurrent.futures import Future
 
     from bleak.backends.device import BLEDevice
-
-INPROGRESS_RE = re.compile(r"InProgress", re.IGNORECASE)
 
 
 class Recorder:
@@ -84,7 +81,6 @@ class Recorder:
         self.db = DatabaseManager(database_url=database_url)
         self.stat_calc = StatsCalculator(self.db)
         self.loop = asyncio.new_event_loop()
-        self.queue: asyncio.Queue = asyncio.Queue()
         self._stop_event = asyncio.Event()
         self._recording = False
         self.activity_id = None
@@ -128,7 +124,6 @@ class Recorder:
         self.trainer_mux: TrainerMux | None = None
         self._hr_mux: HeartRateMux | None = None
 
-        self.is_trainer = bool(trainer_address)
         self._dist0_m = None  # Fallback if sensor doesn't support reset
 
         # Current manually-set incline (percent), persisted into each metric row
@@ -210,6 +205,8 @@ class Recorder:
         )
         GLib.idle_add(self.on_sample, cleaned_sample)
 
+        logger.bind(data=cleaned_sample).trace("Processed heart rate sample")
+
         # Persist to the DB if recording
         if self._recording and self.activity_id:
             self.db.insert_heart_rate(
@@ -284,6 +281,8 @@ class Recorder:
 
         GLib.idle_add(self.on_sample, cleaned_sample)
 
+        logger.bind(data=cleaned_sample).trace("Processed running sample")
+
         # Persist to DB if recording
         if self._recording and self.activity_id:
             self.db.insert_running_metrics(
@@ -323,6 +322,8 @@ class Recorder:
         )
 
         GLib.idle_add(self.on_sample, cleaned_sample)
+
+        logger.bind(data=cleaned_sample).trace("Processed cycling sample")
 
         # Persist to DB if recording
         if self._recording and self.activity_id:
@@ -369,6 +370,8 @@ class Recorder:
 
         # Update UI
         GLib.idle_add(self.on_sample, cleaned_sample)
+
+        logger.bind(data=cleaned_sample).trace("Processed trainer sample")
 
         # Persist to DB if recording
         if self._recording and self.activity_id:

@@ -87,9 +87,6 @@ class InclineControl(Gtk.Frame):
         self._btn_down.set_sensitive(self._value > self.MIN_PCT)
         self._btn_up.set_sensitive(self._value < self.MAX_PCT)
 
-    def get_value(self) -> float:
-        return self._value
-
     def set_value(self, v: float) -> None:
         self._value = max(self.MIN_PCT, min(self.MAX_PCT, float(v)))
         self._refresh()
@@ -111,9 +108,7 @@ class TargetGauge(Gtk.DrawingArea):
         self.set_content_height(200)
         self.add_css_class("frame")
         # State
-        self._kind = "POWER"  # or "PACE"
         self._value = 0.0
-        self._units = "W"
         self._headline = "—"
         self._subline = "Target: —"
 
@@ -145,9 +140,7 @@ class TargetGauge(Gtk.DrawingArea):
     def set_state(
         self,
         *,
-        kind: str,
         value: float,
-        units: str,
         target_lo: float,
         target_mid: float,
         target_hi: float,
@@ -165,9 +158,7 @@ class TargetGauge(Gtk.DrawingArea):
         """
         pad = max(0.1, float(domain_pad))
 
-        self._kind = "PACE" if (kind or "").lower().startswith("pace") else "POWER"
         self._value = float(value)
-        self._units = units or ""
         self._tgt_lo = target_lo
         self._tgt_hi = target_hi
         self._tgt_mid = target_mid
@@ -640,9 +631,6 @@ class WorkoutView(Gtk.Box):
     def set_incline_callback(self, cb) -> None:
         self._incline_cb = cb
 
-    def get_incline(self) -> float:
-        return self.incline_control.get_value()
-
     # Timers (optional helpers)
     def set_elapsed_text(self, text: str) -> None:
         self.timer_elapsed.set_text(text)
@@ -715,9 +703,7 @@ class WorkoutView(Gtk.Box):
         subline = f"Target: {target_w_mid} W"
 
         self.gauge.set_state(
-            kind="power",
             value=current_w,
-            units="W",
             target_lo=target_w_lo,
             target_mid=target_w_mid,
             target_hi=target_w_hi,
@@ -745,9 +731,7 @@ class WorkoutView(Gtk.Box):
         headline = f"{current_pace_text} /mi"
         subline = f"Target: {target_pace_text} /mi"
         self.gauge.set_state(
-            kind="pace",
             value=current_mps,
-            units="min/mi",
             target_lo=target_mps_lo,
             target_mid=target_mps_mid,
             target_hi=target_mps_hi,
