@@ -212,6 +212,10 @@ class HistoryPageUI:
         self.stack = Adw.ViewStack()
         self.stack.set_vexpand(True)
 
+        # Hide top controls + summary on the Compare tab
+        self._top_controls = ctrl_wrap
+        self.stack.connect("notify::visible-child-name", self._on_stack_page_changed)
+
         # Activities tab
         activities_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         scroller = Gtk.ScrolledWindow()
@@ -275,6 +279,11 @@ class HistoryPageUI:
         # Initial load
         GLib.idle_add(self._reload_everything)
         return outer
+
+    def _on_stack_page_changed(self, stack, _pspec) -> None:
+        is_compare = stack.get_visible_child_name() == "compare"
+        self._top_controls.set_visible(not is_compare)
+        self.summary_box.set_visible(not is_compare)
 
     # ---- Summary header (totals) ----
     def _build_summary_header(self) -> Gtk.Widget:
