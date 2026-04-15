@@ -33,6 +33,28 @@ def _format_hms(seconds: int) -> str:
     return f"{h:d}:{m:02d}:{s:02d}" if h else f"{m:d}:{s:02d}"
 
 
+def _rolling(ys: list[float | None], window: int, use_median: bool = False) -> list[float | None]:
+    """Rolling mean/median over `window` samples, ignoring None values.
+
+    Returns a list the same length as `ys`. Bins with no valid samples stay None.
+    """
+    if window <= 1 or not ys:
+        return ys
+    arr = np.array([np.nan if v is None else float(v) for v in ys], dtype=float)
+    n = len(arr)
+    half = window // 2
+    out: list[float | None] = [None] * n
+    for i in range(n):
+        lo = max(0, i - half)
+        hi = min(n, i + half + 1)
+        seg = arr[lo:hi]
+        seg = seg[~np.isnan(seg)]
+        if seg.size == 0:
+            continue
+        out[i] = float(np.median(seg) if use_median else np.mean(seg))
+    return out
+
+
 def _format_pace_from_mps(mps: float) -> str:
     if mps <= 0.01:
         return "—"
@@ -190,6 +212,10 @@ class HistoryPageUI:
         self.stack = Adw.ViewStack()
         self.stack.set_vexpand(True)
 
+        # Hide top controls + summary on the Compare tab
+        self._top_controls = ctrl_wrap
+        self.stack.connect("notify::visible-child-name", self._on_stack_page_changed)
+
         # Activities tab
         activities_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         scroller = Gtk.ScrolledWindow()
@@ -253,6 +279,11 @@ class HistoryPageUI:
         # Initial load
         GLib.idle_add(self._reload_everything)
         return outer
+
+    def _on_stack_page_changed(self, stack, _pspec) -> None:
+        is_compare = stack.get_visible_child_name() == "compare"
+        self._top_controls.set_visible(not is_compare)
+        self.summary_box.set_visible(not is_compare)
 
     # ---- Summary header (totals) ----
     def _build_summary_header(self) -> Gtk.Widget:
@@ -679,6 +710,18 @@ class HistoryPageUI:
                             ]
                     else:
                         ys = []
+
+                # Smooth: pace is spiky, use median; others use mean.
+                # ~15s window for HR/power/cadence/speed/pace.
+                # Estimate sample rate from xs to convert seconds -> samples.
+                if len(xs) >= 2:
+                    dt = (xs[-1] - xs[0]) / max(1, len(xs) - 1)
+                    sample_hz = 1.0 / dt if dt > 0 else 1.0
+                else:
+                    sample_hz = 1.0
+
+                window = max(3, int(round(15 * sample_hz)))
+                ys = _rolling(ys, window, use_median=False)
 
                 any_series = True
                 if xs:
