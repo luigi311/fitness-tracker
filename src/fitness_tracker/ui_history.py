@@ -1,11 +1,11 @@
 import datetime
 import math
 import statistics
+import threading
 from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Literal, Optional
 from zoneinfo import ZoneInfo
-import threading
 
 import gi
 import numpy as np
@@ -198,8 +198,6 @@ class HistoryPageUI:
         scroller.set_vexpand(True)
         self._listbox = Gtk.ListBox()
         self._listbox.set_selection_mode(Gtk.SelectionMode.NONE)
-        self._listbox.set_activate_on_single_click(True)
-        self._listbox.connect("row-activated", self._on_row_activated)
         scroller.set_child(self._listbox)
         activities_box.append(scroller)
 
@@ -239,8 +237,11 @@ class HistoryPageUI:
         cmp_frame.set_child(self._cmp_canvas)
         compare_box.append(cmp_frame)
 
-        self.stack.add_titled(activities_box, "activities", "Activities")
-        self.stack.add_titled(compare_box, "compare", "Compare")
+        page = self.stack.add_titled(activities_box, "activities", "Activities")
+        page.set_icon_name("view-list-symbolic")
+
+        page = self.stack.add_titled(compare_box, "compare", "Compare")
+        page.set_icon_name("media-playlist-consecutive-symbolic")
 
         # Switcher for small screens
         switch = Adw.ViewSwitcherBar()
@@ -293,12 +294,6 @@ class HistoryPageUI:
     def _on_sort_changed(self, combo: Gtk.ComboBoxText) -> None:
         self.sort_id = combo.get_active_id()
         GLib.idle_add(self._resort_and_rebind)
-
-    def _on_row_activated(self, _lb: Gtk.ListBox, row: Gtk.ListBoxRow) -> None:
-        # row child holds an attribute with the activity id
-        act_id = getattr(row, "_activity_id", None)
-        if act_id:
-            self._open_details_dialog(act_id)
 
     def _on_cmp_metric_changed(self, combo: Gtk.ComboBoxText) -> None:
         self._cmp_metric_id = combo.get_active_id()
@@ -459,7 +454,8 @@ class HistoryPageUI:
         export_btn.set_has_frame(False)
         export_btn.set_tooltip_text("Export this activity to a TCX file")
         export_btn.connect(
-            "clicked", lambda _b, aid=stats.activity_id: self._on_export_clicked(aid)
+            "clicked",
+            lambda _b, aid=stats.activity_id: self._on_export_clicked(aid),
         )
         head.append(export_btn)
 
@@ -473,47 +469,68 @@ class HistoryPageUI:
         head.append(chk)
         box.append(head)
 
-        # Metrics line (wrap on small screens)
-        flow = Gtk.FlowBox()
-        flow.set_selection_mode(Gtk.SelectionMode.NONE)
-        flow.set_max_children_per_line(12)
+        # Add a click gesture to the whole row box
+        gesture = Gtk.GestureClick.new()
+        gesture.connect(
+            "released",
+            lambda _g, _n, _x, _y, aid=stats.activity_id, cb=chk: cb.set_active(
+                not cb.get_active(),
+            ),
+        )
+        box.add_controller(gesture)
 
-        def chip(text: str) -> Gtk.FlowBoxChild:
+        # Metrics
+        metrics_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        metrics_box.set_can_focus(False)
+
+        def add_chip(text: str) -> None:
             lbl = Gtk.Label(label=text)
             lbl.add_css_class("dim-label")
-            c = Gtk.FlowBoxChild()
-            c.set_child(lbl)
-            return c
+            lbl.set_can_focus(False)
+            lbl.set_focusable(False)
+            lbl.set_selectable(False)
+            metrics_box.append(lbl)
 
-        flow.insert(chip(_format_hms(stats.duration_s or 0)), -1)
-        flow.insert(chip(_format_distance_m(stats.distance_m)), -1)
+        add_chip(_format_hms(stats.duration_s or 0))
+        add_chip(_format_distance_m(stats.distance_m))
+
+        parts = [_format_hms(stats.duration_s or 0), _format_distance_m(stats.distance_m)]
 
         if sport == SportTypesEnum.running and stats.avg_speed_mps:
-            flow.insert(chip(_format_pace_from_mps(stats.avg_speed_mps)), -1)
+            parts.append(_format_pace_from_mps(stats.avg_speed_mps))
         elif sport == SportTypesEnum.biking and stats.avg_speed_mps:
             mph = stats.avg_speed_mps * 2.23693629
-            flow.insert(chip(f"{mph:.1f} mph"), -1)
+            parts.append(f"{mph:.1f} mph")
 
-        flow.insert(chip(f"Avg {_format_float(stats.avg_bpm, 'bpm', 0)}"), -1)
+        parts.append(f"Avg {_format_float(stats.avg_bpm, 'bpm', 0)}")
 
         if stats.max_bpm is not None:
-            flow.insert(chip(f"Max {stats.max_bpm} bpm"), -1)
+            parts.append(f"Max {stats.max_bpm} bpm")
 
         if stats.avg_cadence is not None:
             unit = "spm" if sport == SportTypesEnum.running else "rpm"
-            flow.insert(chip(f"{round(stats.avg_cadence)} {unit}"), -1)
+            parts.append(f"{round(stats.avg_cadence)} {unit}")
 
         if stats.avg_power_watts is not None:
-            flow.insert(chip(f"{round(stats.avg_power_watts)} W"), -1)
+            parts.append(f"{round(stats.avg_power_watts)} W")
 
         if stats.total_energy_kj and stats.total_energy_kj > 0:
-            flow.insert(chip(f"{stats.total_energy_kj:.1f} kJ"), -1)
+            parts.append(f"{stats.total_energy_kj:.1f} kJ")
 
         if stats.total_ascent_m:
-            flow.insert(chip(f"↑ {stats.total_ascent_m:.0f} m"), -1)
+            parts.append(f"↑ {stats.total_ascent_m:.0f} m")
 
-        flow.insert(chip(sport.name), -1)
-        box.append(flow)
+        parts.append(sport.name)
+
+        metrics_lbl = Gtk.Label(label="  ·  ".join(parts))
+        metrics_lbl.add_css_class("dim-label")
+        metrics_lbl.set_wrap(True)
+        metrics_lbl.set_wrap_mode(0)
+        metrics_lbl.set_xalign(0)
+        metrics_lbl.set_can_focus(False)
+        metrics_lbl.set_focusable(False)
+        metrics_lbl.set_selectable(False)
+        box.append(metrics_lbl)
 
         # Tiny sparkline (HR)
         spark = self._build_sparkline(stats.activity_id)
@@ -698,285 +715,6 @@ class HistoryPageUI:
             ax.invert_yaxis()
 
         self._cmp_canvas.draw_idle()
-
-    # ---- Details dialog ----
-    def _open_details_dialog(self, act_id: int) -> None:
-        def mmss(x, _pos):
-            m, s = divmod(int(max(0, x)), 60)
-            return f"{m:d}:{s:02d}"
-
-        if not self.app.recorder:
-            return
-
-        # All raw data fetched in one session, only for this one activity.
-        with self.app.recorder.db.Session() as session:
-            act = session.get(Activity, act_id)
-            if not act:
-                return
-            stats = session.query(ActivityStats).filter_by(activity_id=act_id).one_or_none()
-
-            st = _tz_aware_localize(act.start_time)
-            et = (
-                _tz_aware_localize(act.end_time)
-                if act.end_time
-                else datetime.datetime.now().astimezone()
-            )
-
-            hrs = (
-                session.query(HeartRate)
-                .filter_by(activity_id=act_id)
-                .order_by(HeartRate.timestamp_ms)
-                .all()
-            )
-            runs = (
-                session.query(RunningMetrics)
-                .filter_by(activity_id=act_id)
-                .order_by(RunningMetrics.timestamp_ms)
-                .all()
-            )
-            cycles = (
-                session.query(CyclingMetrics)
-                .filter_by(activity_id=act_id)
-                .order_by(CyclingMetrics.timestamp_ms)
-                .all()
-            )
-
-        dur_s = stats.duration_s if stats else max(0, int((et - st).total_seconds()))
-
-        # ---- Dialog skeleton ----
-        dlg = Adw.Dialog()
-        dlg.set_title("Activity Details")
-        content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
-        for m in ("top", "bottom", "start", "end"):
-            getattr(content, f"set_margin_{m}")(12)
-
-        # Header
-        hdr = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
-        title_lbl = Gtk.Label(label=st.strftime("%A, %B %d • %I:%M %p"))
-        title_lbl.add_css_class("title-2")
-        title_lbl.set_xalign(0)
-        hdr.append(title_lbl)
-
-        chips = Gtk.FlowBox()
-        chips.set_selection_mode(Gtk.SelectionMode.NONE)
-
-        def chip(text: str) -> Gtk.FlowBoxChild:
-            lbl = Gtk.Label(label=text)
-            lbl.add_css_class("dim-label")
-            c = Gtk.FlowBoxChild()
-            c.set_child(lbl)
-            return c
-
-        # Prefer pre-computed stats where available; fall back to inline
-        # computation only for the detail dialog (these numbers may differ
-        # slightly if stats were computed mid-workout and not yet recomputed).
-        if stats:
-            distance_m = stats.distance_m
-            avg_bpm = stats.avg_bpm
-            max_bpm = stats.max_bpm
-            total_kj = stats.total_energy_kj
-            avg_cad = stats.avg_cadence
-            avg_pow = stats.avg_power_watts
-            sport = SportTypesEnum(stats.sport_type_id)
-        else:
-            # Fallback: compute inline (only ever hits for brand-new activities
-            # that haven't been through StatsCalculator yet).
-            if hrs:
-                bpms = [h.bpm for h in hrs]
-                avg_bpm = sum(bpms) / len(bpms)
-                max_bpm = max(bpms)
-                total_kj = sum(h.energy_kj or 0.0 for h in hrs)
-            else:
-                avg_bpm = max_bpm = None
-                total_kj = 0.0
-            if runs:
-                dists = [r.total_distance_m for r in runs if r.total_distance_m is not None]
-                distance_m = dists[-1] if dists else None
-                avg_cad = _safe_avg([float(r.cadence_spm) for r in runs if r.cadence_spm is not None])
-                avg_pow = _safe_avg([float(r.power_watts) for r in runs if r.power_watts is not None])
-            elif cycles:
-                dists = [c.total_distance_m for c in cycles if c.total_distance_m is not None]
-                distance_m = dists[-1] if dists else None
-                avg_cad = _safe_avg([float(c.cadence_rpm) for c in cycles if c.cadence_rpm is not None])
-                avg_pow = _safe_avg([float(c.power_watts) for c in cycles if c.power_watts is not None])
-            else:
-                distance_m = avg_cad = avg_pow = None
-            sport = infer_sport(hrs, runs, cycles, act_id)
-
-        chips.insert(chip(_format_hms(dur_s)), -1)
-        chips.insert(chip(_format_distance_m(distance_m)), -1)
-        if distance_m and dur_s:
-            mps = distance_m / max(1, dur_s)
-            if runs:
-                chips.insert(chip(_format_pace_from_mps(mps)), -1)
-            elif cycles:
-                chips.insert(chip(f"{mps * 2.23693629:.1f} mph"), -1)
-        chips.insert(chip(f"Avg {_format_float(avg_bpm, 'bpm', 0)}"), -1)
-        if max_bpm is not None:
-            chips.insert(chip(f"Max {max_bpm} bpm"), -1)
-        if avg_cad is not None:
-            unit = "spm" if runs else "rpm"
-            chips.insert(chip(f"{int(round(avg_cad))} {unit}"), -1)
-        if avg_pow is not None:
-            chips.insert(chip(f"{int(round(avg_pow))} W"), -1)
-        if total_kj and total_kj > 0:
-            chips.insert(chip(f"{total_kj:.1f} kJ"), -1)
-        if stats and stats.total_ascent_m:
-            chips.insert(chip(f"↑ {stats.total_ascent_m:.0f} m"), -1)
-        if stats and stats.total_descent_m:
-            chips.insert(chip(f"↓ {stats.total_descent_m:.0f} m"), -1)
-
-        hdr.append(chips)
-        content.append(hdr)
-
-        # Charts list (stack vertically, no overflow)
-        charts_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
-        sc = Gtk.ScrolledWindow()
-        sc.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
-        sc.set_vexpand(True)
-        sc.set_child(charts_box)
-
-        # HR chart
-        if hrs:
-            t0 = hrs[0].timestamp_ms
-            xs = np.array([(h.timestamp_ms - t0) / 1000.0 for h in hrs])
-            ys = np.array([h.bpm for h in hrs])
-
-            fig = Figure(figsize=(6, 2.8), dpi=96)
-            ax = fig.add_subplot(111)
-            self._apply_chart_style(ax)
-            ax.plot(xs, ys, lw=2)
-            ax.set_xlabel("Time (s)", color=self.app.DARK_FG)
-            ax.set_ylabel("BPM", color=self.app.DARK_FG)
-
-            ax.xaxis.set_major_formatter(FuncFormatter(mmss))
-
-            canvas = FigureCanvas(fig)
-            frm = Gtk.Frame(label="Heart Rate")
-            frm.set_child(canvas)
-            charts_box.append(frm)
-
-        # Speed/Pace chart
-        if runs:
-            t0 = runs[0].timestamp_ms
-            xs = np.array([(r.timestamp_ms - t0) / 1000.0 for r in runs])
-            speed = np.array([float(r.speed_mps) for r in runs])
-
-            # Pace
-            def pace_from_speed(mps: float) -> float:
-                if mps <= 0.01:
-                    return math.inf
-                return 60.0 / (mps * 2.23693629)
-
-            paces = np.array([pace_from_speed(s) for s in speed])
-            fig2 = Figure(figsize=(6, 2.6), dpi=96)
-            ax2 = fig2.add_subplot(111)
-            self._apply_chart_style(ax2, draw_hr_zones=False)
-            ax2.plot(xs, paces, lw=2)
-            ax2.set_ylabel("Pace (min/mi)", color=self.app.DARK_FG)
-            ax2.xaxis.set_major_formatter(FuncFormatter(mmss))
-            charts_box.append(Gtk.Frame(label="Pace"))
-            charts_box.get_last_child().set_child(FigureCanvas(fig2))
-
-            # Power
-            pw = [r.power_watts for r in runs if r.power_watts is not None]
-            if pw:
-                pw_full = np.array([float(r.power_watts or 0.0) for r in runs])
-                fig3 = Figure(figsize=(6, 2.4), dpi=96)
-                ax3 = fig3.add_subplot(111)
-                self._apply_chart_style(ax3, draw_hr_zones=False)
-                ax3.plot(xs, pw_full, lw=2)
-                ax3.set_ylabel("Watts", color=self.app.DARK_FG)
-                ax3.xaxis.set_major_formatter(FuncFormatter(mmss))
-                charts_box.append(Gtk.Frame(label="Power"))
-                charts_box.get_last_child().set_child(FigureCanvas(fig3))
-
-            # Cadence
-            cad = np.array([float(r.cadence_spm) for r in runs])
-            fig4 = Figure(figsize=(6, 2.2), dpi=96)
-            ax4 = fig4.add_subplot(111)
-            self._apply_chart_style(ax4, draw_hr_zones=False)
-            ax4.plot(xs, cad, lw=2)
-            ax4.set_ylabel("Cadence (spm)", color=self.app.DARK_FG)
-            ax4.xaxis.set_major_formatter(FuncFormatter(mmss))
-            charts_box.append(Gtk.Frame(label="Cadence"))
-            charts_box.get_last_child().set_child(FigureCanvas(fig4))
-
-            # Splits
-            dists = [r.total_distance_m for r in runs if r.total_distance_m is not None]
-            if dists and dists[-1] and dists[-1] > 0:
-                mile_markers = [i * 1609.344 for i in range(1, int(dists[-1] // 1609.344) + 1)]
-                last_mark = 0.0
-                last_t = runs[0].timestamp_ms
-                mm_list: list[str] = []
-                for mark in mile_markers:
-                    for r in runs:
-                        if r.total_distance_m is not None and r.total_distance_m >= mark:
-                            dt_s = (r.timestamp_ms - last_t) / 1000.0
-                            seg_m = r.total_distance_m - last_mark
-                            mm_list.append(_format_pace_from_mps(seg_m / max(dt_s, 1)))
-                            last_mark = r.total_distance_m
-                            last_t = r.timestamp_ms
-                            break
-                if mm_list:
-                    splits_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
-                    for i, p in enumerate(mm_list, start=1):
-                        splits_box.append(Gtk.Label(label=f"Mile {i}: {p}", xalign=0))
-                    frm_sp = Gtk.Frame(label="Splits")
-                    frm_sp.set_child(splits_box)
-                    charts_box.append(frm_sp)
-
-        if cycles:
-            t0 = cycles[0].timestamp_ms
-            xs = np.array([(c.timestamp_ms - t0) / 1000.0 for c in cycles])
-            mph = np.array([float(c.speed_mps) * 2.23693629 for c in cycles])
-
-            fig2 = Figure(figsize=(6, 2.6), dpi=96)
-            ax2 = fig2.add_subplot(111)
-            self._apply_chart_style(ax2, draw_hr_zones=False)
-            ax2.plot(xs, mph, lw=2)
-            ax2.set_ylabel("Speed (mph)", color=self.app.DARK_FG)
-            ax2.xaxis.set_major_formatter(FuncFormatter(mmss))
-
-            charts_box.append(Gtk.Frame(label="Speed"))
-            charts_box.get_last_child().set_child(FigureCanvas(fig2))
-
-            # cadence rpm chart
-            cad_vals = [c.cadence_rpm for c in cycles if c.cadence_rpm is not None]
-            if cad_vals:
-                cad = np.array([float(c.cadence_rpm or 0.0) for c in cycles])
-                fig4 = Figure(figsize=(6, 2.2), dpi=96)
-                ax4 = fig4.add_subplot(111)
-                self._apply_chart_style(ax4, draw_hr_zones=False)
-                ax4.plot(xs, cad, lw=2)
-                ax4.set_ylabel("Cadence (rpm)", color=self.app.DARK_FG)
-                ax4.xaxis.set_major_formatter(FuncFormatter(mmss))
-                charts_box.append(Gtk.Frame(label="Cadence"))
-                charts_box.get_last_child().set_child(FigureCanvas(fig4))
-
-            # Power
-            pw = [c.power_watts for c in cycles if c.power_watts is not None]
-            if pw:
-                pw_full = np.array([float(c.power_watts or 0.0) for c in cycles])
-                fig3 = Figure(figsize=(6, 2.4), dpi=96)
-                ax3 = fig3.add_subplot(111)
-                self._apply_chart_style(ax3, draw_hr_zones=False)
-                ax3.plot(xs, pw_full, lw=2)
-                ax3.set_ylabel("Watts", color=self.app.DARK_FG)
-                ax3.xaxis.set_major_formatter(FuncFormatter(mmss))
-                charts_box.append(Gtk.Frame(label="Power"))
-                charts_box.get_last_child().set_child(FigureCanvas(fig3))
-
-        # Put charts into dialog
-        content.append(sc)
-
-        # Close button
-        btn = Gtk.Button(label="Close")
-        btn.connect("clicked", lambda _b: dlg.close())
-        content.append(btn)
-
-        dlg.set_child(content)
-        dlg.present(parent=self.app.window)
 
     # Export
     def _on_export_clicked(self, act_id: int) -> None:
