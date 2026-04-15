@@ -77,12 +77,6 @@ class FitnessAppUI(Adw.Application):
         self.recorder: Recorder | None = None
         self._times: list[float] = []
         self._bpms: list[int] = []
-        self._line = None
-
-        # keep track of which activities the user has ticked
-        self.selected_activities: set[int] = set()
-        # store each activity’s start-time so we can label the legend
-        self.activity_start_times: dict[int, datetime.datetime] = {}
 
         self.history_filter = "week"
 

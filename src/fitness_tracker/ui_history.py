@@ -4,7 +4,6 @@ import statistics
 import threading
 from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Literal, Optional
 from zoneinfo import ZoneInfo
 
 import gi

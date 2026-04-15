@@ -47,8 +47,6 @@ class TrackerPageUI:
         self._armed = False  # page is visible (preview) but not running yet
 
         # stats
-        self._bpm_sum = 0.0
-        self._bpm_n = 0
         self._bpm_max = 0
         self._last_bpm = 0
 
@@ -70,7 +68,6 @@ class TrackerPageUI:
 
         # workout state
         self._workout: Workout | None = None
-        self._workout_path: Path | None = None
         self._active_step_index: int = -1
         self._manual_offset_s: float = 0.0
         self._sim_target_mph: float | None = None
@@ -121,8 +118,7 @@ class TrackerPageUI:
         in_outdoor: IndoorOutdoorEnum,
         trainer: bool = False,
     ) -> None:
-        self._workout = workout if workout.steps else None
-        self._workout_path = None
+        self._workout: Workout | None = workout if workout.steps else None
         self._manual_offset_s = 0.0
         self._show_workout_page(sport_type=sport_type, in_outdoor=in_outdoor, trainer=trainer)
 
@@ -405,8 +401,6 @@ class TrackerPageUI:
         t_ms = self._last_ms if self._last_ms is not None else int(time.monotonic() * 1000)
         watts = self._rt_watts
 
-        self._bpm_sum += bpm
-        self._bpm_n += 1
         self._bpm_max = max(self._bpm_max, bpm)
 
         cutoff = t_ms - self.window_ms
@@ -585,7 +579,6 @@ class TrackerPageUI:
 
         if t_s >= total:
             self._workout = None
-            self._workout_path = None
             self._active_step_index = -1
             self._manual_offset_s = 0.0
 
@@ -917,8 +910,6 @@ class TrackerPageUI:
         self._bpms.clear()
         self._powers.clear()
         self._last_ms = None
-        self._bpm_sum = 0.0
-        self._bpm_n = 0
         self._bpm_max = 0
         # freeze integrated distance until running
         if hasattr(self, "_integrated_distance_miles"):

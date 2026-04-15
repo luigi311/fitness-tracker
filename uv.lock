@@ -335,6 +335,7 @@ dev = [
     { name = "pytest" },
     { name = "ruff" },
     { name = "ty" },
+    { name = "vulture" },
 ]
 
 [package.metadata]
@@ -361,6 +362,7 @@ dev = [
     { name = "pytest", specifier = ">=9.0.3" },
     { name = "ruff", specifier = ">=0.11.13" },
     { name = "ty", specifier = ">=0.0.14" },
+    { name = "vulture", specifier = ">=2.16" },
 ]
 
 [[package]]
@@ -1271,6 +1273,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/25/48/dbe6c4c559950ebebd413e8c40a8a60bfd47ddd79cb61b598a5987e03aad/usb_devices-0.4.5.tar.gz", hash = "sha256:9b5c7606df2bc791c6c45b7f76244a0cbed83cb6fa4c68791a143c03345e195d", size = 5421, upload-time = "2023-12-16T19:59:53.295Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/e1/c9/26171ae5b78d72dd006bbc51ca9baa2cbb889ae8e91608910207482108fd/usb_devices-0.4.5-py3-none-any.whl", hash = "sha256:8a415219ef1395e25aa0bddcad484c88edf9673acdeae8a07223ca7222a01dcf", size = 5349, upload-time = "2023-12-16T19:59:51.604Z" },
+]
+
+[[package]]
+name = "vulture"
+version = "2.16"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/66/3e/4d08c5903b2c0c70cad583c170cc4a663fc6a61e2ad00b711fcda61358cd/vulture-2.16.tar.gz", hash = "sha256:f8d9f6e2af03011664a3c6c240c9765b3f392917d3135fddca6d6a68d359f717", size = 52680, upload-time = "2026-03-25T14:41:27.141Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/f5/be/f935130312330614811dae2ea9df3f395f6d63889eb6c2e68c14507152ee/vulture-2.16-py3-none-any.whl", hash = "sha256:6e0f1c312cef1c87856957e5c2ca9608834a7c794c2180477f30bf0e4cc58eee", size = 26993, upload-time = "2026-03-25T14:41:26.21Z" },
 ]
 
 [[package]]
