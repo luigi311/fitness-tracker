@@ -4,7 +4,7 @@ import threading
 from collections import deque
 from collections.abc import Callable
 from statistics import median
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 import gi
 from bleak import BleakScanner
@@ -85,9 +85,15 @@ class Recorder:
         self._recording = False
         self.activity_id = None
         self._start_ms = None
-        self._pending_erg_watts: int | None = None
+        self._pending_trainer_target: int | float | None = None
         self._erg_retry_task: Future | None = None
-        self._erg_applied_watts: int | None = None
+        self._erg_applied_target: int | float | None = None
+
+        # Information for disabling erg mode to prevent death spiral
+        self._power_history: deque[tuple[int, int | None]] = deque()
+        self._erg_disabled: bool = True
+        self._erg_safeguard_saved_watts: int | None = None
+        self.starting_resistance: float = 2.0
 
         # Sensors
         self.hr_name: str | None = hr_name
@@ -345,17 +351,18 @@ class Recorder:
         delta_ms = int(sample.timestamp_ms - self._start_ms)
         adjusted_distance_m = sample.distance_m
 
+        self._update_erg_safeguard(sample.timestamp_ms, sample.power_watts)
+
         if (
             sample.target_power is not None
-            and self._pending_erg_watts is None
-            and self._erg_applied_watts != sample.target_power
+            and self._pending_trainer_target is None
+            and self._erg_applied_target != sample.target_power
         ):
             logger.debug(
-                f"Trainer target power {sample.target_power} watts differs from applied {self._erg_applied_watts} watts, scheduling update"
+                f"Trainer target power {sample.target_power} watts differs from applied {self._erg_applied_target} watts, scheduling update"
             )
-            self._pending_erg_watts = sample.target_power
-            if not self.test_mode:
-                self._ensure_erg_retry_loop()
+            self._pending_trainer_target = sample.target_power
+            self._ensure_erg_retry_loop("Power")
 
         # Adjust distance by baseline if needed
         if self._dist0_m is None and sample.distance_m is not None:
@@ -597,7 +604,7 @@ class Recorder:
 
         if not connected:
             # reset erg watts on disconnect so it applies immediately on reconnect
-            self._erg_applied_watts = None
+            self._erg_applied_target = None
 
     async def _hr_loop(self) -> None:
         """Connect to the HR monitor via HeartRateMux and stream samples."""
@@ -636,51 +643,125 @@ class Recorder:
         """Set target power on the trainer if supported."""
         logger.debug(f"Trying to set target power to {watts} watts")
 
-        watts = int(watts)
+        if self._erg_disabled:
+            # Safeguard active — stash for when it lifts
+            logger.debug(f"Erg is currently disabled, stashing {watts} target")
+            self._erg_safeguard_saved_watts: int = watts
+            return
+
         # Store intent
-        self._pending_erg_watts = watts
+        self._pending_trainer_target = watts
 
         # Reset applied marker so retry loop knows this needs applying
-        if self._erg_applied_watts != watts:
-            self._erg_applied_watts = None
+        if self._erg_applied_target != watts:
+            self._erg_applied_target = None
 
-        if not self.test_mode:
-            self._ensure_erg_retry_loop()
+        self._ensure_erg_retry_loop("Power")
 
-    def _ensure_erg_retry_loop(self) -> None:
+    def set_target_resistance(self, resistance: float) -> None:
+        """Set target resistance on the trainer if supported."""
+        logger.debug(f"Trying to set target resistance to {resistance} watts")
+
+        # Store intent
+        self._pending_trainer_target = resistance
+
+        # Reset applied marker so retry loop knows this needs applying
+        if self._erg_applied_target != resistance:
+            self._erg_applied_target = None
+
+        self._ensure_erg_retry_loop("Resistance")
+
+    def _ensure_erg_retry_loop(self, target_mode: Literal["Power", "Resistance"]) -> None:
+        if self.test_mode:
+            return
+
         if self._erg_retry_task and not self._erg_retry_task.done():
             return  # already running
 
         self._erg_retry_task = asyncio.run_coroutine_threadsafe(
-            self._erg_retry_loop(),
+            self._erg_retry_loop(target_mode),
             self.loop,
         )
 
-    async def _erg_retry_loop(self) -> None:
+    async def _erg_retry_loop(self, target_mode: Literal["Power", "Resistance"]) -> None:
+        retry_interval = 2.0
         while True:
             # Read the current pending target at the start of each iteration.
-            target = self._pending_erg_watts
+            target = self._pending_trainer_target
             if target is None:
                 # Nothing pending anymore.
                 return
+
+            if self._erg_disabled and target_mode == "Power":
+                # Skip if erg should be disabled
+                logger.debug("Erg mode is currently disabled, skipping setting")
+                await asyncio.sleep(retry_interval)
+                continue
 
             mux = self.trainer_mux
 
             if mux and mux.is_connected:
                 try:
-                    result = await mux.set_target_power(target)
-                    # Only clear the pending value if it wasn't updated
-                    # while the await was in-flight.
-                    if self._pending_erg_watts == result:
-                        self._pending_erg_watts = None
-                        self._erg_applied_watts = result
+                    if target_mode == "Power":
+                        result = await mux.set_target_power(int(target))
+                        # Only clear the pending value if it wasn't updated
+                        # while the await was in-flight.
+                        if self._pending_trainer_target == result:
+                            self._pending_trainer_target = None
+                            self._erg_applied_target = result
 
-                        return
+                            return
+                    elif target_mode == "Resistance":
+                        result = await mux.set_target_resistance(float(target))
+                        # Only clear the pending value if it wasn't updated
+                        # while the await was in-flight.
+                        if self._pending_trainer_target == result:
+                            self._pending_trainer_target = None
+                            self._erg_applied_target = result
+
+                            return
 
                 except Exception as e:
                     self._on_ble_error(f"ERG set failed, retrying: {e}")
 
-            await asyncio.sleep(2.0)  # retry interval
+            await asyncio.sleep(retry_interval)
+
+    def _update_erg_safeguard(self, timestamp_ms: int, power_watts: int | None):
+        window = 3000
+        power_threshold = 60
+
+        self._power_history.append((timestamp_ms, power_watts))
+
+        logger.trace(self._power_history)
+
+        # Need enough history to make a decision
+        if (timestamp_ms - self._power_history[0][0]) < window:
+            return
+
+        # Prune old entries
+        cutoff = timestamp_ms - window
+        while self._power_history and self._power_history[0][0] < cutoff:
+            self._power_history.popleft()
+
+        all_below = all((pw or 0) < power_threshold for _, pw in self._power_history)
+        all_above = all((pw or 0) > power_threshold for _, pw in self._power_history)
+
+        if all_below and not self._erg_disabled:
+            self._erg_disabled = True
+            logger.warning("ERG safeguard: power too low, disabling ERG")
+            # Set low resistance to let the rider recover
+            if self._pending_trainer_target:
+                self._erg_safeguard_saved_watts = int(self._pending_trainer_target)
+                if not self.test_mode:
+                    self.set_target_resistance(5)
+
+        elif all_above and self._erg_disabled:
+            self._erg_disabled = False
+            logger.success("ERG safeguard: power recovered, re-enabling ERG")
+            # Re-apply the saved target if one exists
+            if self._erg_safeguard_saved_watts is not None:
+                self.set_target_power(self._erg_safeguard_saved_watts)
+                self._erg_safeguard_saved_watts = None
 
     async def _reset_distance_workflow(self, *, wait_s: float = 6.0) -> None:
         """
