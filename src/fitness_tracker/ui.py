@@ -51,7 +51,7 @@ class SensorProfile:
 class FitnessAppUI(Adw.Application):
     def __init__(self, test_mode: bool = False):
         Adw.init()
-        super().__init__(application_id="io.luigi311.fitness-tracker")
+        super().__init__(application_id="com.luigi311.fitness-tracker")
         self.connect("shutdown", self._on_shutdown)
         self.test_mode = test_mode
         self._is_dark = Adw.StyleManager.get_default().get_dark()
