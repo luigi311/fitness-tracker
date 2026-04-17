@@ -22,9 +22,7 @@ An open-source application for tracking sensor data from Bluetooth Low Energy (B
 
 ## Validated Devices
 
-* [Heart Rate](https://github.com/luigi311/fitness-tracker-validated-hardware/tree/main/devices/heart-rate-monitors)
-* [Foot Pods](https://github.com/luigi311/fitness-tracker-validated-hardware/tree/main/devices/foot-pods)
-* [Bike Trainers](https://github.com/luigi311/fitness-tracker-validated-hardware/tree/main/devices/bike-trainers)
+https://fitness-tracker.luigi311.com/devices/
 
 ## Configuration
 
