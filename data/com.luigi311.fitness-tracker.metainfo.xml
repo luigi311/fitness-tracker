@@ -1,0 +1,116 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+    <id>com.luigi311.fitness-tracker</id>
+    <name>Fitness Tracker</name>
+    <summary>Open source fitness tracker</summary>
+    <metadata_license>CC0-1.0</metadata_license>
+    <project_license>GPL-3.0</project_license>
+    <supports>
+        <control>keyboard</control>
+        <control>pointing</control>
+        <control>touch</control>
+    </supports>
+    <requires>
+        <display_length side="shortest" compare="ge">250</display_length>
+        <display_length side="longest" compare="ge">400</display_length>
+    </requires>
+    <developer id="com.luigi311">
+        <name>
+            Luigi311
+        </name>
+    </developer>
+    <url type="homepage">https://github.com/luigi311/fitness-tracker</url>
+    <url type="vcs-browser">https://github.com/luigi311/fitness-tracker</url>
+    <url type="bugtracker">https://github.com/luigi311/fitness-tracker/issues</url>
+    <description>
+        <p>An open-source application for tracking sensor data from Bluetooth Low Energy (BLE)
+            devices in real time, recording sessions, and visualizing your workout history.</p>
+    </description>
+    <screenshots>
+        <screenshot type="default">
+            <image
+                type="source"
+            >
+                https://raw.githubusercontent.com/luigi311/fitness-tracker/refs/tags/v3.0.0/docs/screenshots/tracker.png</image>
+            <caption>Tracker View</caption>
+        </screenshot>
+        <screenshot type="default">
+            <image
+                type="source"
+            >
+                https://raw.githubusercontent.com/luigi311/fitness-tracker/refs/tags/v3.0.0/docs/screenshots/freerun_running.png</image>
+            <caption>Running indoor freerun</caption>
+        </screenshot>
+        <screenshot type="default">
+            <image
+                type="source"
+            >
+                https://raw.githubusercontent.com/luigi311/fitness-tracker/refs/tags/v3.0.0/docs/screenshots/workout_running.png</image>
+            <caption>Running indoor workout</caption>
+        </screenshot>
+        <screenshot type="default">
+            <image
+                type="source"
+            >
+                https://raw.githubusercontent.com/luigi311/fitness-tracker/refs/tags/v3.0.0/docs/screenshots/workout_trainer.png</image>
+            <caption>Cycling trainer workout</caption>
+        </screenshot>
+        <screenshot type="default">
+            <image
+                type="source"
+            >
+                https://raw.githubusercontent.com/luigi311/fitness-tracker/refs/tags/v3.0.0/docs/screenshots/history_average.png</image>
+            <caption>History activies</caption>
+        </screenshot>
+        <screenshot type="default">
+            <image
+                type="source"
+            >
+                https://raw.githubusercontent.com/luigi311/fitness-tracker/refs/tags/v3.0.0/docs/screenshots/history_comparison.png</image>
+            <caption>History comparison</caption>
+        </screenshot>
+    </screenshots>
+    <launchable type="desktop-id">com.luigi311.fitness-tracker.desktop</launchable>
+    <releases>
+        <release version="3.0.1" date="2026-04-20">
+            <url
+                type="details"
+            >https://github.com/luigi311/fitness-tracker/releases/tag/v3.0.1</url>
+            <description>
+                <p>
+                    New Features
+                </p>
+                <ul>
+                    <li>Add flathub build</li>
+                </ul>
+            </description>
+        </release>
+        <release version="3.0.0" date="2026-04-17">
+            <url
+                type="details"
+            >https://github.com/luigi311/fitness-tracker/releases/tag/v3.0.0</url>
+            <description>
+                <p>
+                    New Features
+                </p>
+                <ul>
+                    <li>Add Trainers with erg mode</li>
+                    <li>Add incline control when indoor</li>
+                    <li>Add cycling (Untested)</li>
+                </ul>
+                <p>
+                    Bug Fixes
+                </p>
+                <ul>
+                    <li>Speedup connections</li>
+                </ul>
+            </description>
+        </release>
+    </releases>
+    <content_rating type="oars-1.1" />
+    <update_contact>git@luigi311.com</update_contact>
+    <branding>
+        <color type="primary" scheme_preference="light">#ccf2ff</color>
+        <color type="primary" scheme_preference="dark">#00394d</color>
+    </branding>
+</component>
