@@ -23,8 +23,12 @@
     <url type="vcs-browser">https://github.com/luigi311/fitness-tracker</url>
     <url type="bugtracker">https://github.com/luigi311/fitness-tracker/issues</url>
     <description>
-        <p>An open-source application for tracking sensor data from Bluetooth Low Energy (BLE)
-            devices in real time, recording sessions, and visualizing your workout history.</p>
+        <p>
+            An open-source application for tracking sensor data from Bluetooth Low Energy (BLE)
+            devices in real time, recording sessions, visualizing your workout history and uploading to intervals.icu.
+            <br></br>
+            Validated sensors https://fitness-tracker.luigi311.com/devices/
+        </p>
     </description>
     <screenshots>
         <screenshot type="default">
