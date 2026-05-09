@@ -38,7 +38,7 @@ sed -E "s/ ;.*$//" \
 
 
 # Inject build tools as some deps require them
-{ 
+{
     echo "hatchling==1.29.0"
 } > builder-requirements.txt
 
@@ -54,7 +54,7 @@ OUT_PIP="${DIR}/pip-sources.json"
     --output="$OUT_BUILDERS"
 
 # Match target platforms to python version in the gnome sdk
-req2flatpak --requirements-file requirements.txt --target-platforms 313-x86_64 313-aarch64 > "$OUT_PIP"
+.venv/bin/python -m req2flatpak --requirements-file requirements.txt --target-platforms 313-x86_64 313-aarch64 > "$OUT_PIP"
 
 # Notify that files were written
 echo "Wrote $OUT_BUILDERS"

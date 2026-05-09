@@ -15,11 +15,11 @@ dependencies = [
     "fitparse>=1.2.0",
     "libpebble2>=0.1.0",
     "loguru>=0.7.3",
-    "matplotlib>=3.10.8",
-    "psycopg2-binary>=2.9.11",
+    "matplotlib>=3.10.9",
+    "psycopg2-binary>=2.9.12",
     "pydantic-file-settings>=0.1.0",
-    "pydantic-settings>=2.13.1",
-    "pygobject>=3.52.3",
+    "pydantic-settings>=2.14.1",
+    "pygobject>=3.56.3",
     "requests>=2.32.5",
     "sqlalchemy>=2.0.48",
     "workout-parser>=0.1.0",
@@ -29,13 +29,13 @@ dependencies = [
 [dependency-groups]
 dev = [
     "pytest>=9.0.3",
-    "ruff>=0.15.11",
-    "ty>=0.0.14",
+    "ruff>=0.15.12",
+    "ty>=0.0.34",
     "vulture>=2.16",
 ]
 flatpak = [
     "flatpak-pip-generator>=26.4.13",
-    "req2flatpak>=0.2.0", # Stuck on 0.2.0 until 0.3.2
+    "req2flatpak>=0.3.1",
     "setuptools>=82.0.1",
 ]
 
@@ -78,3 +78,5 @@ ignore = [
 libpebble2 = { git = "https://github.com/luigi311/libpebble2", branch = "modern" }
 bleaksport = { git = "https://github.com/luigi311/bleaksport", branch = "main" }
 workout-parser = { git = "https://github.com/luigi311/workout_parser", branch = "main" }
+# Pin to rev as there is no new release that fixes packaging
+req2flatpak = { git = "https://github.com/johannesjh/req2flatpak", rev = "ad1484bbcd57fcdad88b015d15e6a2d5765b832d" }
