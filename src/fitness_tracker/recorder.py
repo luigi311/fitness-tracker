@@ -786,10 +786,10 @@ class Recorder:
                 self._dist0_m = 0.0
             else:
                 # Not supported / timed out — baseline logic will take over
-                print("Sensor didn't accept distance reset; using baseline")
+                logger.warning("Sensor didn't accept distance reset; using baseline")
         except Exception as e:
             # Don’t fail the session; just fall back
-            print(f"SC Control Point reset failed: {e}")
+            logger.error(f"SC Control Point reset failed: {e}")
 
     def set_incline(self, percent: float | None) -> None:
         """Set the current incline percentage (None = flat / unknown)."""
