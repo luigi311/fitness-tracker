@@ -131,7 +131,7 @@ class FitnessAppUI(Adw.Application):
         return False
 
     def show_toast(self, message: str) -> None:
-        print(message)
+        logger.info(message)
         # Create and display a toast on our overlay
         toast = Adw.Toast.new(message)
         self.toast_overlay.add_toast(toast)
@@ -151,7 +151,7 @@ class FitnessAppUI(Adw.Application):
         self.pebble_bridge = None
 
         if not self.app_settings.pebble.enable:
-            print("Pebble Disabled")
+            logger.debug("Pebble Disabled")
             return
 
         try:
@@ -162,7 +162,7 @@ class FitnessAppUI(Adw.Application):
                 self.app_settings.pebble.address = None
 
                 msg = "No Bluetooth support in Python socket module"
-                print(msg)
+                logger.error(msg)
                 self.show_toast(msg)
                 return
 
@@ -177,7 +177,7 @@ class FitnessAppUI(Adw.Application):
             self.pebble_bridge.start()
         except Exception as e:
             self.pebble_bridge = None
-            print(e)
+            logger.error(e)
 
     def _profile_from_sport_type(
         self, sport_type: SportTypesEnum, trainer: bool = False
@@ -281,7 +281,7 @@ class FitnessAppUI(Adw.Application):
                 with contextlib.suppress(Exception):
                     self.recorder.shutdown()
         except Exception as e:
-            print(e)
+            logger.error(e)
 
         # Build recorder with sensors
         logger.debug(f"Applying sensor settings for profile '{sport_type}': {desired}")
