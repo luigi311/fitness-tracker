@@ -149,8 +149,11 @@ class HistoryPageUI:
 
     def build_page(self) -> Gtk.Widget:
         outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
-        for m in ("top", "bottom", "start", "end"):
+        for m in ("top", "bottom"):
             getattr(outer, f"set_margin_{m}")(12)
+
+        for m in ("start", "end"):
+            getattr(outer, f"set_margin_{m}")(4)
 
         # Top controls (filter + sort), grouped so they wrap as pairs
         self.filter_combo = Gtk.ComboBoxText()
@@ -197,7 +200,7 @@ class HistoryPageUI:
         ctrl_wrap.set_selection_mode(Gtk.SelectionMode.NONE)
         ctrl_wrap.set_max_children_per_line(2)  # 2 pairs per row when there’s room
         ctrl_wrap.set_row_spacing(8)
-        ctrl_wrap.set_column_spacing(12)
+        ctrl_wrap.set_column_spacing(4)
 
         ctrl_wrap.insert(control_pair("Show", self.filter_combo), -1)
         ctrl_wrap.insert(control_pair("Sort", self.sort_combo), -1)

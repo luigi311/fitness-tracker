@@ -87,10 +87,12 @@ class _EnvCard(Gtk.Box):
 
         # Inner box holds the actual content with padding
         inner = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
-        inner.set_margin_top(16)
-        inner.set_margin_bottom(14)
-        inner.set_margin_start(10)
-        inner.set_margin_end(10)
+        for m in ("top", "bottom"):
+            getattr(inner, f"set_margin_{m}")(12)
+
+        for m in ("start", "end"):
+            getattr(inner, f"set_margin_{m}")(4)
+
         inner.set_halign(Gtk.Align.CENTER)
         self.append(inner)
 
@@ -242,8 +244,11 @@ class ModeSelectView(Gtk.Box):
     ) -> None:
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=12)
         _ensure_css()
-        for m in ("top", "bottom", "start", "end"):
+        for m in ("top", "bottom"):
             getattr(self, f"set_margin_{m}")(12)
+
+        for m in ("start", "end"):
+            getattr(self, f"set_margin_{m}")(4)
 
         self._workouts_running_dir = workouts_running_dir
         self._workouts_cycling_dir = workouts_cycling_dir
@@ -280,7 +285,7 @@ class ModeSelectView(Gtk.Box):
         env_label.set_xalign(0)
         self.append(env_label)
 
-        card_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        card_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
         card_row.set_halign(Gtk.Align.FILL)
 
         self._env_cards: dict[str, _EnvCard] = {}
