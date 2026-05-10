@@ -17,12 +17,14 @@ uv sync --dev --frozen --group flatpak
 #    --no-emit-project     : skip fitness-tracker itself
 #    --no-hashes           : flatpak-pip-generator adds its own sha256
 #    --no-dev              : skip pytest/ruff/ty/vulture
+#    --no-group            : skip flatpak group
 #    --no-emit-package X   : skip packages we handle elsewhere
 uv export \
     --format requirements-txt \
     --no-hashes \
     --no-emit-project \
     --no-dev \
+    --no-group flatpak \
     --no-emit-package pygobject \
     --no-emit-package bleaksport \
     --no-emit-package libpebble2 \
