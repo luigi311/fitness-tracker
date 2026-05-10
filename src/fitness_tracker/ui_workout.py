@@ -323,10 +323,11 @@ class _MetricPill(Gtk.Box):
             self.set_halign(Gtk.Align.FILL)
 
         inner = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        inner.set_margin_top(8)
-        inner.set_margin_bottom(8)
-        inner.set_margin_start(10)
-        inner.set_margin_end(10)
+        for m in ("top", "bottom"):
+            getattr(inner, f"set_margin_{m}")(4)
+
+        for m in ("start", "end"):
+            getattr(inner, f"set_margin_{m}")(8)
 
         vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         self.value = Gtk.Label()
@@ -378,10 +379,11 @@ class _TimerBig(Gtk.Box):
         self.add_css_class("card")
 
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
-        box.set_margin_top(8)
-        box.set_margin_bottom(8)
-        box.set_margin_start(10)
-        box.set_margin_end(10)
+        for m in ("top", "bottom"):
+            getattr(box, f"set_margin_{m}")(8)
+
+        for m in ("start", "end"):
+            getattr(box, f"set_margin_{m}")(4)
 
         self.lbl = Gtk.Label(label=title, xalign=0.0)
         self.lbl.add_css_class("dim-label")
@@ -430,8 +432,11 @@ class WorkoutView(Gtk.Box):
         self.in_outdoor = in_outdoor
         self.trainer = trainer
 
-        for m in ("top", "bottom", "start", "end"):
+        for m in ("top", "bottom"):
             getattr(self, f"set_margin_{m}")(12)
+
+        for m in ("start", "end"):
+            getattr(self, f"set_margin_{m}")(4)
 
         clamp = Adw.Clamp(maximum_size=820, tightening_threshold=680)
         self.append(clamp)
@@ -614,7 +619,6 @@ class WorkoutView(Gtk.Box):
         self.btn_stop.set_sensitive(True)
         self.btn_start.add_css_class("suggested-action")
         self.btn_start.set_label("Pause" if recording else "Start")
-
 
     def set_paused(self, paused: bool) -> None:
         if paused:

@@ -22,8 +22,11 @@ class _MetricCard(Gtk.Frame):
         super().__init__()
         self.set_hexpand(True)
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
-        for m in ("top", "bottom", "start", "end"):
+        for m in ("top", "bottom"):
             getattr(box, f"set_margin_{m}")(12)
+
+        for m in ("start", "end"):
+            getattr(box, f"set_margin_{m}")(4)
 
         header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         self.title = Gtk.Label(label=title)
@@ -105,8 +108,11 @@ class FreeRunView(Gtk.Box):
         self.sport_type = sport_type
         self.in_outdoor = in_outdoor
         self.trainer = trainer
-        for m in ("top", "bottom", "start", "end"):
+        for m in ("top", "bottom"):
             getattr(self, f"set_margin_{m}")(12)
+
+        for m in ("start", "end"):
+            getattr(self, f"set_margin_{m}")(4)
 
         # Start/Stop row
         row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)

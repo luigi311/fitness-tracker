@@ -807,10 +807,11 @@ class SettingsPageUI:
 
         # Layout container
         container = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
-        container.set_margin_top(12)
-        container.set_margin_bottom(12)
-        container.set_margin_start(12)
-        container.set_margin_end(12)
+        for m in ("top", "bottom"):
+            getattr(container, f"set_margin_{m}")(12)
+
+        for m in ("start", "end"):
+            getattr(container, f"set_margin_{m}")(4)
 
         container.append(personal_group)
         container.append(devices_group)
@@ -1255,7 +1256,6 @@ class SettingsPageUI:
             "trainer_cycling_map",
         )
 
-
     def _fill_devices_pebble(self):
         if not self.pebble_spinner or not self.pebble_row or not self.pebble_combo:
             return
@@ -1264,8 +1264,8 @@ class SettingsPageUI:
         GLib.idle_add(self.pebble_row.set_subtitle, "Scanning for Pebble…")
 
         async def _scan() -> dict[str, str]:
-            from dbus_next.aio import MessageBus
             from dbus_next import BusType
+            from dbus_next.aio import MessageBus
 
             mapping: dict[str, str] = {}
             bus = await MessageBus(bus_type=BusType.SYSTEM).connect()
