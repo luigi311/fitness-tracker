@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="UTF-8"?>
+<?xml version="1.0" encoding="UTF-8" ?>
 <component type="desktop-application">
     <id>com.luigi311.fitness-tracker</id>
     <name>Fitness Tracker</name>
@@ -19,63 +19,67 @@
             Luigi311
         </name>
     </developer>
-    <url type="homepage">https://github.com/luigi311/fitness-tracker</url>
+    <url type="homepage">https://fitness-tracker.luigi311.com</url>
     <url type="vcs-browser">https://github.com/luigi311/fitness-tracker</url>
-    <url type="bugtracker">https://github.com/luigi311/fitness-tracker/issues</url>
+    <url
+        type="bugtracker"
+    >https://github.com/luigi311/fitness-tracker/issues</url>
     <description>
         <p>
             An open-source application for tracking sensor data from Bluetooth Low Energy (BLE)
             devices in real time, recording sessions, visualizing your workout history and uploading to intervals.icu.
-            <br></br>
-            Validated sensors https://fitness-tracker.luigi311.com/devices/
         </p>
     </description>
     <screenshots>
         <screenshot type="default">
-            <image
-                type="source"
-            >
+            <image type="source">
                 https://raw.githubusercontent.com/luigi311/fitness-tracker/refs/tags/v3.0.0/docs/screenshots/tracker.png</image>
             <caption>Tracker View</caption>
         </screenshot>
         <screenshot type="default">
-            <image
-                type="source"
-            >
+            <image type="source">
                 https://raw.githubusercontent.com/luigi311/fitness-tracker/refs/tags/v3.0.0/docs/screenshots/freerun_running.png</image>
             <caption>Running indoor freerun</caption>
         </screenshot>
         <screenshot type="default">
-            <image
-                type="source"
-            >
+            <image type="source">
                 https://raw.githubusercontent.com/luigi311/fitness-tracker/refs/tags/v3.0.0/docs/screenshots/workout_running.png</image>
             <caption>Running indoor workout</caption>
         </screenshot>
         <screenshot type="default">
-            <image
-                type="source"
-            >
+            <image type="source">
                 https://raw.githubusercontent.com/luigi311/fitness-tracker/refs/tags/v3.0.0/docs/screenshots/workout_trainer.png</image>
             <caption>Cycling trainer workout</caption>
         </screenshot>
         <screenshot type="default">
-            <image
-                type="source"
-            >
+            <image type="source">
                 https://raw.githubusercontent.com/luigi311/fitness-tracker/refs/tags/v3.0.0/docs/screenshots/history_average.png</image>
             <caption>History activies</caption>
         </screenshot>
         <screenshot type="default">
-            <image
-                type="source"
-            >
+            <image type="source">
                 https://raw.githubusercontent.com/luigi311/fitness-tracker/refs/tags/v3.0.0/docs/screenshots/history_comparison.png</image>
             <caption>History comparison</caption>
         </screenshot>
     </screenshots>
-    <launchable type="desktop-id">com.luigi311.fitness-tracker.desktop</launchable>
+    <launchable
+        type="desktop-id"
+    >com.luigi311.fitness-tracker.desktop</launchable>
     <releases>
+        <release version="3.0.2" date="2026-05-10">
+            <url
+                type="details"
+            >https://github.com/luigi311/fitness-tracker/releases/tag/v3.0.2</url>
+            <description>
+                <p>
+                    Bug Fixes
+                </p>
+                <ul>
+                    <li>Fix pebble scan</li>
+                    <li>Adjust margins to fit mobile better</li>
+                </ul>
+            </description>
+        </release>
         <release version="3.0.1" date="2026-04-20">
             <url
                 type="details"
