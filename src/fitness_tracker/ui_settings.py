@@ -1,6 +1,4 @@
 import asyncio
-import contextlib
-import subprocess
 import threading
 from configparser import ConfigParser
 from datetime import datetime, timedelta
@@ -1257,6 +1255,7 @@ class SettingsPageUI:
             "trainer_cycling_map",
         )
 
+
     def _fill_devices_pebble(self):
         if not self.pebble_spinner or not self.pebble_row or not self.pebble_combo:
             return
@@ -1264,28 +1263,30 @@ class SettingsPageUI:
         GLib.idle_add(self.pebble_spinner.start)
         GLib.idle_add(self.pebble_row.set_subtitle, "Scanning for Pebble…")
 
-        def _scan_cli() -> dict[str, str]:
-            """
-            Use 'bluetoothctl devices' to list
-            known/paired BT Classic devices, filter those with 'Pebble' in the name.
-            Returns {name: mac}.
-            """
-            mapping: dict[str, str] = {}
-            outputs = []
-            with contextlib.suppress(Exception):
-                outputs.append(
-                    subprocess.check_output(["bluetoothctl", "devices"], text=True),
-                )
+        async def _scan() -> dict[str, str]:
+            from dbus_next.aio import MessageBus
+            from dbus_next import BusType
 
-            for out in outputs:
-                for line in out.splitlines():
-                    # Format: "Device AA:BB:CC:DD:EE:FF Some Name"
-                    parts = line.strip().split(" ", 2)
-                    if len(parts) >= 3 and parts[0] in ("Device", "dev"):
-                        mac = parts[1].strip()
-                        name = parts[2].strip()
-                        if "pebble" in name.lower():
-                            mapping[name] = mac
+            mapping: dict[str, str] = {}
+            bus = await MessageBus(bus_type=BusType.SYSTEM).connect()
+            try:
+                introspection = await bus.introspect("org.bluez", "/")
+                proxy = bus.get_proxy_object("org.bluez", "/", introspection)
+                obj_manager = proxy.get_interface("org.freedesktop.DBus.ObjectManager")
+                managed_objects = await obj_manager.call_get_managed_objects()
+                for _path, interfaces in managed_objects.items():
+                    device_iface = interfaces.get("org.bluez.Device1")
+                    if not device_iface:
+                        continue
+                    name_v = device_iface.get("Name")
+                    addr_v = device_iface.get("Address")
+                    if not name_v or not addr_v:
+                        continue
+                    name, mac = name_v.value, addr_v.value
+                    if "pebble" in name.lower():
+                        mapping[name] = mac
+            finally:
+                bus.disconnect()
             return mapping
 
         def _uniq_display_names(name_to_mac: dict[str, str]) -> dict[str, str]:
@@ -1313,7 +1314,7 @@ class SettingsPageUI:
                 return
 
             try:
-                name_to_mac = _scan_cli()
+                name_to_mac = asyncio.run(_scan())
             except Exception as e:
                 name_to_mac = {}
                 GLib.idle_add(self.pebble_row.set_subtitle, f"Scan failed: {e}")

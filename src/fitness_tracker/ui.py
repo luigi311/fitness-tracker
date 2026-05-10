@@ -175,8 +175,6 @@ class FitnessAppUI(Adw.Application):
             )
 
             self.pebble_bridge.start()
-            mode = "Emulator" if self.app_settings.pebble.use_emulator else "Watch"
-            print(f"Pebble bridge started ({mode})")
         except Exception as e:
             self.pebble_bridge = None
             print(e)

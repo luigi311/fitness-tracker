@@ -8,6 +8,7 @@ from libpebble2.communication.transports.qemu import QemuTransport
 from libpebble2.communication.transports.serial import SerialTransport
 from libpebble2.communication.transports.websocket import WebsocketTransport
 from libpebble2.services.appmessage import AppMessageService, Uint8, Uint16, Uint32
+from loguru import logger
 
 KEY_HR = 1
 KEY_SPEED = 2
@@ -17,8 +18,8 @@ KEY_STATUS = 5
 KEY_UNITS = 6
 KEY_POWER = 7
 KEY_TGT_KIND = 8
-KEY_TGT_LO   = 9
-KEY_TGT_HI   = 10
+KEY_TGT_LO = 9
+KEY_TGT_HI = 10
 
 
 class PebbleBridge:
@@ -47,6 +48,8 @@ class PebbleBridge:
 
     def start(self) -> None:
         """Start the background thread to send updates."""
+        mode = "Emulator" if self.use_emulator else "Watch"
+        logger.debug(f"Starging pebble bridge ({mode})")
         self._running = True
         self._t = threading.Thread(target=self._loop, daemon=True)
         self._t.start()
@@ -60,7 +63,7 @@ class PebbleBridge:
             if self._conn:
                 self._conn.close()
         except Exception as e:
-            print("PebbleBridge close error:", repr(e))
+            logger.error(f"PebbleBridge close error: {e!r}")
 
     def update(
         self,
@@ -97,17 +100,19 @@ class PebbleBridge:
                 self._state[KEY_TGT_KIND] = int(tgt_kind)
             if tgt_lo is not None:
                 # power in W as-is, pace in m/s * 100
-                val = int(round(tgt_lo if tgt_kind == 1 else (tgt_lo * 100.0)))
+                val = round(tgt_lo if tgt_kind == 1 else (tgt_lo * 100.0))
                 self._state[KEY_TGT_LO] = val
             if tgt_hi is not None:
-                val = int(round(tgt_hi if tgt_kind == 1 else (tgt_hi * 100.0)))
+                val = round(tgt_hi if tgt_kind == 1 else (tgt_hi * 100.0))
                 self._state[KEY_TGT_HI] = val
 
     # --- internal ---
     def _connect(self) -> None:
         if self._conn:
+            logger.debug("Already connected")
             return
         if self.use_emulator:
+            logger.debug("Connecting via emulator")
             # Try WS first (pypkjs), then fall back to QEMU
             try:
                 self._conn = PebbleConnection(WebsocketTransport(f"ws://127.0.0.1:{self.port}/"))
@@ -117,14 +122,16 @@ class PebbleBridge:
             if not self.mac:
                 msg = "Invalid MAC address for real Pebble"
                 raise ValueError(msg)
-
-            self._conn = PebbleConnection(SerialTransport(device=None, mac=self.mac))
+            logger.debug(f"Connecting via mac: {self.mac}")
+            self._conn = PebbleConnection(SerialTransport(self.mac))
 
         self._conn.connect()
         self._conn.run_async()
 
         if self._conn.connected:
-            print("Connected to Pebble.")
+            logger.success("Connected to Pebble")
+        else:
+            logger.error("Failed to connect to Pebble")
 
         self._appmsg = AppMessageService(self._conn)
 
@@ -174,12 +181,12 @@ class PebbleBridge:
                 full_after_reconnect = False
                 time.sleep(self.period)
             except Exception as e:
-                print("PebbleBridge error:", repr(e))
+                logger.error(f"PebbleBridge error: {e!r}")
                 try:
                     if self._conn:
                         self._conn.close()
                 except Exception as ee:
-                    print("PebbleBridge close error:", repr(ee))
+                    logger.error(f"PebbleBridge close error: {ee!r}")
                 self._conn = None
                 self._appmsg = None
                 time.sleep(backoff)
