@@ -21,7 +21,7 @@ dependencies = [
     "pydantic-settings>=2.14.1",
     "pygobject>=3.56.3",
     "requests>=2.32.5",
-    "sqlalchemy>=2.0.48",
+    "sqlalchemy>=2.0.50",
     "workout-parser>=0.1.0",
     "xdg-base-dirs>=6.0.2",
 ]
