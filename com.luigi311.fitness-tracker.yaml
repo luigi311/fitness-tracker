@@ -73,6 +73,18 @@ modules:
         disable-submodules: true
         disable-shallow-clone: true
 
+  - name: python3-libpebble-ble
+    buildsystem: simple
+    build-commands:
+      - pip3 install --verbose --no-index --no-deps --no-build-isolation
+        --prefix=${FLATPAK_DEST} .
+    sources:
+      - type: git
+        url: https://github.com/luigi311/libpebble-ble
+        commit: 0a0686e07dc83c3b258ce55191582643d18d1350
+        disable-submodules: true
+        disable-shallow-clone: true
+
   - name: python3-workout-parser
     buildsystem: simple
     build-commands:
