@@ -89,9 +89,11 @@ class _BleBackend:
         self._thread = threading.Thread(target=self._run_loop, name="pebble-ble-loop", daemon=True)
         self._thread.start()
         try:
-            # connect() itself enforces its own timeout; pad ours so the
-            # outer .result() doesn't fire first and orphan the coroutine.
-            self._call(self._async_connect(), timeout=self._connect_timeout + 15.0)
+            # Pebble.connect() internally retries transient link failures
+            # (3 attempts with growing delays); pad our outer timeout so the
+            # blocking .result() can't fire mid-retry and orphan the coroutine.
+            outer = self._connect_timeout * 3 + 30.0
+            self._call(self._async_connect(), timeout=outer)
         except BaseException:
             self.close()
             raise
@@ -119,7 +121,6 @@ class _BleBackend:
         if self._pebble is None or self._loop is None:
             msg = "BLE backend not connected"
             raise RuntimeError(msg)
-
         self._call(
             self._pebble.send_app_message(self._app_uuid, data),
             timeout=self._send_timeout,
