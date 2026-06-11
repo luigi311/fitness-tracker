@@ -623,7 +623,7 @@ wheels = [
 [[package]]
 name = "libpebble-ble"
 version = "0.1.0"
-source = { git = "https://github.com/luigi311/libpebble-ble?branch=main#0a0686e07dc83c3b258ce55191582643d18d1350" }
+source = { git = "https://github.com/luigi311/libpebble-ble?branch=main#27254b06cc483fd63ffbff6d03b5855a3b739cb4" }
 dependencies = [
     { name = "bleak" },
     { name = "dbus-fast" },

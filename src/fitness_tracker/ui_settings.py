@@ -15,6 +15,8 @@ from bleaksport import (
     discover_power_devices,
     discover_speed_cadence_devices,
 )
+from dbus_next import BusType
+from dbus_next.aio import MessageBus
 from loguru import logger
 from pydantic import BaseModel
 from pydantic_file_settings import FileSettings
@@ -1264,9 +1266,6 @@ class SettingsPageUI:
         GLib.idle_add(self.pebble_row.set_subtitle, "Scanning for Pebble…")
 
         async def _scan() -> dict[str, str]:
-            from dbus_next import BusType
-            from dbus_next.aio import MessageBus
-
             mapping: dict[str, str] = {}
             bus = await MessageBus(bus_type=BusType.SYSTEM).connect()
             try:

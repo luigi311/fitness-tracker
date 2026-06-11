@@ -81,7 +81,7 @@ modules:
     sources:
       - type: git
         url: https://github.com/luigi311/libpebble-ble
-        commit: 0a0686e07dc83c3b258ce55191582643d18d1350
+        commit: 27254b06cc483fd63ffbff6d03b5855a3b739cb4
         disable-submodules: true
         disable-shallow-clone: true
 
