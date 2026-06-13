@@ -28,6 +28,7 @@ uv export \
     --no-emit-package pygobject \
     --no-emit-package bleaksport \
     --no-emit-package libpebble2 \
+    --no-emit-package libpebble-ble \
     --no-emit-package pyftms \
     --no-emit-package workout-parser \
     > requirements.raw.txt
