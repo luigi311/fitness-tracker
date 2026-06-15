@@ -12,6 +12,21 @@ from libpebble2.communication.transports.websocket import WebsocketTransport
 from libpebble2.services.appmessage import AppMessageService, Uint8, Uint16, Uint32
 from loguru import logger
 
+# pebble_le_client talks to the long-lived pebble-led daemon over D-Bus. It has
+# no BLE/BlueZ requirement itself (the daemon owns the radio), but it is still
+# Linux/D-Bus oriented and may not be installed; degrade gracefully if so.
+try:
+    from pebble_le_client import DaemonNotRunningError
+    from pebble_le_client import PebbleClient as _PebbleClient
+    from pebble_le_client import u8 as _dae_u8
+    from pebble_le_client import u16 as _dae_u16
+    from pebble_le_client import u32 as _dae_u32
+
+    HAVE_DAEMON = True
+except (ImportError, RuntimeError) as _e:  # pragma: no cover - platform dependent
+    HAVE_DAEMON = False
+    _DAEMON_UNAVAILABLE_REASON = repr(_e)
+
 # libpebble_ble raises RuntimeError at import time on non-Linux platforms (its
 # GATT-server role needs BlueZ), and may simply not be installed. Either way
 # we degrade to the serial fallback rather than failing the import of this
@@ -39,7 +54,7 @@ KEY_TGT_LO = 9
 KEY_TGT_HI = 10
 
 # The EXACT widths the watchapp's C handler reads each key as
-# (t->value->uint8/uint16/uint32). Both backends pin to these so the watch
+# (t->value->uint8/uint16/uint32). Every backend pins to these so the watch
 # decodes correctly regardless of transport.
 _KEY_WIDTH = {
     KEY_HR: 16,
@@ -53,6 +68,107 @@ _KEY_WIDTH = {
     KEY_TGT_LO: 16,
     KEY_TGT_HI: 16,
 }
+
+
+class _DaemonBackend:
+    """pebble_le_client transport: send via the shared pebble-led daemon.
+
+    Preferred path. The daemon already owns one BLE link to the watch, so this
+    backend never touches the radio — it just proxies AppMessages over D-Bus.
+    That also means multiple processes can drive the watch at once (the whole
+    reason the daemon exists).
+
+    Like _BleBackend this is a blocking facade over a dedicated asyncio loop
+    thread, because PebbleClient is fully async and the bridge's sender thread
+    calls connect()/send()/close() synchronously.
+    """
+
+    name = "daemon"
+
+    def __init__(
+        self,
+        app_uuid: str,
+        connect_timeout: float = 10.0,
+        send_timeout: float = 10.0,
+    ) -> None:
+        self._app_uuid = app_uuid
+        self._connect_timeout = connect_timeout
+        self._send_timeout = send_timeout
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._thread: threading.Thread | None = None
+        self._client = None
+        # Width -> wrapper. These are the CLIENT's wrappers (pebble_le_client
+        # re-exports them); the client encodes them through the proto codec so
+        # the width pin survives the D-Bus hop to the daemon.
+        self.int_types = {8: _dae_u8, 16: _dae_u16, 32: _dae_u32}
+
+    def connect(self) -> None:
+        self._loop = asyncio.new_event_loop()
+        self._thread = threading.Thread(
+            target=self._run_loop, name="pebble-daemon-loop", daemon=True
+        )
+        self._thread.start()
+        try:
+            self._call(self._async_connect(), timeout=self._connect_timeout + 10.0)
+        except BaseException:
+            self.close()
+            raise
+
+    def _run_loop(self) -> None:
+        asyncio.set_event_loop(self._loop)
+        self._loop.run_forever()
+
+    def _call(self, coro, timeout: float):
+        return asyncio.run_coroutine_threadsafe(coro, self._loop).result(timeout)
+
+    async def _async_connect(self) -> None:
+        client = _PebbleClient()
+        # require_daemon=True makes connect() raise DaemonNotRunningError
+        # immediately if the daemon's bus name has no owner, instead of
+        # blocking — that exception is our signal to fall through to the next
+        # backend.
+        await client.connect(require_daemon=True)
+        self._client = client
+        # Bring the watchapp to the foreground; an app that isn't running just
+        # NACKs every AppMessage. Best-effort: it may already be open.
+        try:
+            await self._client.launch_app(self._app_uuid)
+            await asyncio.sleep(1.0)
+        except Exception as e:
+            logger.debug(f"daemon launch_app failed (app may already be open): {e!r}")
+
+    def send(self, data: dict) -> None:
+        if self._client is None or self._loop is None:
+            msg = "daemon backend not connected"
+            raise RuntimeError(msg)
+        # wait_ack=True blocks until the watch ACKs THIS message. Now that the
+        # 0xff/0x7f ACK encoding is recognized, this actually resolves, so the
+        # bridge self-throttles to the watch's real drain rate: at most one
+        # message in flight, so the multi-second backlog can't build and the
+        # watch shows fresh data (one round-trip of latency) instead of lagging
+        # several seconds behind. Latest-wins is preserved because _send_once
+        # always sends the current state snapshot.
+        self._call(
+            self._client.send_app_message(self._app_uuid, data, wait_ack=True),
+            timeout=self._send_timeout,
+        )
+
+    def close(self) -> None:
+        loop, self._loop = self._loop, None
+        if loop is None:
+            return
+        if self._client is not None:
+            try:
+                asyncio.run_coroutine_threadsafe(self._client.close(), loop).result(10.0)
+            except Exception as e:
+                logger.debug(f"daemon close error: {e!r}")
+            self._client = None
+        loop.call_soon_threadsafe(loop.stop)
+        if self._thread:
+            self._thread.join(timeout=5.0)
+            self._thread = None
+        if not loop.is_running():
+            loop.close()
 
 
 class _BleBackend:
@@ -122,7 +238,7 @@ class _BleBackend:
             msg = "BLE backend not connected"
             raise RuntimeError(msg)
         self._call(
-            self._pebble.send_app_message(self._app_uuid, data),
+            self._pebble.send_app_message(self._app_uuid, data, wait_ack=True),
             timeout=self._send_timeout,
         )
 
@@ -206,35 +322,36 @@ class _Libpebble2Backend:
 class PebbleBridge:
     """Bridge to a Pebble smartwatch (or emulator) via AppMessage.
 
-    Real watch: tries the libpebble_ble BLE stack first, falls back to
-    libpebble2 Bluetooth serial. Emulator: libpebble2 WS/QEMU as before.
+    Real watch, in fallback order:
+      1. pebble-led daemon (pebble_le_client over D-Bus) — preferred, shares
+         the daemon's single BLE link so multiple processes can coexist.
+      2. libpebble_ble — sets up its OWN BLE connection when no daemon is
+         running on the host.
+      3. libpebble2 Bluetooth serial — legacy fallback.
+    Emulator: libpebble2 WS/QEMU as before.
     """
 
     def __init__(
         self,
         app_uuid: str,
         mac: str | None = None,
-        send_hz: float = 1.0,
         *,
         use_emulator: bool = False,
         port: int = 47527,
-        prefer_ble: bool = True,
         ble_adapter: str = "hci0",
         ble_connect_timeout: float = 30.0,
     ) -> None:
         self.mac = mac
         self.app_uuid = app_uuid
-        self.period = max(0.1, 1.0 / send_hz)
         self.use_emulator = use_emulator
         self.port = port
-        self.prefer_ble = prefer_ble
         self.ble_adapter = ble_adapter
         self.ble_connect_timeout = ble_connect_timeout
         self._lock = threading.Lock()
         self._state = {}  # latest metrics, key -> plain int
         self._running = False
         self._t: threading.Thread | None = None
-        self._backend: _BleBackend | _Libpebble2Backend | None = None
+        self._backend: _DaemonBackend | _BleBackend | _Libpebble2Backend | None = None
 
     def start(self) -> None:
         """Start the background thread to send updates."""
@@ -311,8 +428,32 @@ class PebbleBridge:
             msg = "Invalid MAC address for real Pebble"
             raise ValueError(msg)
 
-        # Real watch: BLE first ...
-        if self.prefer_ble and HAVE_BLE:
+        # Real watch, fallback order: daemon -> own BLE -> serial.
+
+        # 1. Shared daemon (pebble_le_client). Preferred when one is running.
+        if HAVE_DAEMON:
+            backend = _DaemonBackend(self.app_uuid)
+            try:
+                backend.connect()
+            except DaemonNotRunningError as e:
+                logger.debug(f"no pebble-led daemon running ({e!r}); trying own BLE link")
+                backend.close()
+
+            except Exception as e:
+                logger.warning(f"daemon connect failed ({e!r}); falling back to own BLE link")
+                backend.close()
+
+            else:
+                self._backend = backend
+                logger.success("Connected to Pebble via pebble-led daemon")
+                return
+        else:
+            logger.debug(
+                f"pebble_le_client unavailable ({_DAEMON_UNAVAILABLE_REASON}); trying own BLE link",
+            )
+
+        # 2. Own BLE link (libpebble_ble). Used when no daemon is present.
+        if HAVE_BLE:
             backend = _BleBackend(
                 self.mac,
                 self.app_uuid,
@@ -323,22 +464,20 @@ class PebbleBridge:
                 backend.connect()
             except Exception as e:
                 logger.warning(
-                    f"BLE connect to {self.mac} failed ({e!r}); falling back to Bluetooth serial"
+                    f"BLE connect to {self.mac} failed ({e!r}); falling back to Bluetooth serial",
                 )
-                try:
-                    backend.close()
-                except Exception:
-                    pass
+                backend.close()
+
             else:
                 self._backend = backend
                 logger.success("Connected to Pebble over BLE")
                 return
-        elif self.prefer_ble and not HAVE_BLE:
+        else:
             logger.debug(
-                f"libpebble_ble unavailable ({_BLE_UNAVAILABLE_REASON}); using Bluetooth serial"
+                f"libpebble_ble unavailable ({_BLE_UNAVAILABLE_REASON}); using Bluetooth serial",
             )
 
-        # ... serial fallback.
+        # 3. Serial fallback (libpebble2).
         backend = _Libpebble2Backend(self.app_uuid, mac=self.mac)
         backend.connect()
         self._backend = backend
@@ -377,9 +516,13 @@ class PebbleBridge:
                     self._connect()
                     full_after_reconnect = True
                     backoff = 1.0
+                # Re-check after a (possibly slow) connect: if stop() fired
+                # while we were connecting, don't push a final stale frame.
+                if not self._running:
+                    break
                 self._send_once(full=full_after_reconnect)
                 full_after_reconnect = False
-                time.sleep(self.period)
+                time.sleep(0.5)
             except Exception as e:
                 logger.error(f"PebbleBridge error: {e!r}")
                 self._close_backend()
