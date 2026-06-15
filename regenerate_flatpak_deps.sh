@@ -29,6 +29,8 @@ uv export \
     --no-emit-package bleaksport \
     --no-emit-package libpebble2 \
     --no-emit-package libpebble-ble \
+    --no-emit-package pebble-le-client \
+    --no-emit-package pebble-le-proto \
     --no-emit-package pyftms \
     --no-emit-package workout-parser \
     > requirements.raw.txt

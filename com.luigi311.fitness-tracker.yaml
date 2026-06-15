@@ -21,6 +21,9 @@ finish-args:
   - --own-name=com.luigi311.fitness-tracker
   - --talk-name=com.luigi311.fitness-tracker
 
+  # Talk to the pebble-led daemon where available
+  - --talk-name=org.pebble_le.Daemon
+
 cleanup:
   - /include
   - /lib/pkgconfig
@@ -77,11 +80,36 @@ modules:
     buildsystem: simple
     build-commands:
       - pip3 install --verbose --no-index --no-deps --no-build-isolation
-        --prefix=${FLATPAK_DEST} .
+        --prefix=${FLATPAK_DEST} packages/libpebble-ble
     sources:
       - type: git
         url: https://github.com/luigi311/libpebble-ble
-        commit: fd3a5096c16ad781bba64f9b0dd9013660fd4cc2
+        branch: daemon
+        commit: f6dcc99fe99ec0089cceb5d1bb3d5491e45d8cf0
+        disable-submodules: true
+        disable-shallow-clone: true
+  - name: python3-pebble-le-proto
+    buildsystem: simple
+    build-commands:
+      - pip3 install --verbose --no-index --no-deps --no-build-isolation
+        --prefix=${FLATPAK_DEST} packages/pebble-le-proto
+    sources:
+      - type: git
+        url: https://github.com/luigi311/libpebble-ble
+        branch: daemon
+        commit: f6dcc99fe99ec0089cceb5d1bb3d5491e45d8cf0
+        disable-submodules: true
+        disable-shallow-clone: true
+  - name: python3-pebble-le-client
+    buildsystem: simple
+    build-commands:
+      - pip3 install --verbose --no-index --no-deps --no-build-isolation
+        --prefix=${FLATPAK_DEST} packages/pebble-le-client
+    sources:
+      - type: git
+        url: https://github.com/luigi311/libpebble-ble
+        branch: daemon
+        commit: f6dcc99fe99ec0089cceb5d1bb3d5491e45d8cf0
         disable-submodules: true
         disable-shallow-clone: true
 

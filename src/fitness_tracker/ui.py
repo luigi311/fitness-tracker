@@ -169,7 +169,6 @@ class FitnessAppUI(Adw.Application):
             self.pebble_bridge = PebbleBridge(
                 app_uuid=self.app_settings.pebble.uuid,
                 mac=self.app_settings.pebble.address,
-                send_hz=2.0,
                 use_emulator=self.app_settings.pebble.use_emulator,
                 port=self.app_settings.pebble.port,
             )
