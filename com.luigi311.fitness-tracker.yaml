@@ -84,8 +84,7 @@ modules:
     sources:
       - type: git
         url: https://github.com/luigi311/libpebble-ble
-        branch: daemon
-        commit: f6dcc99fe99ec0089cceb5d1bb3d5491e45d8cf0
+        commit: ef14965395f9b09bce8e9f3ce9cb7c75584365e8
         disable-submodules: true
         disable-shallow-clone: true
   - name: python3-pebble-le-proto
@@ -96,8 +95,7 @@ modules:
     sources:
       - type: git
         url: https://github.com/luigi311/libpebble-ble
-        branch: daemon
-        commit: f6dcc99fe99ec0089cceb5d1bb3d5491e45d8cf0
+        commit: ef14965395f9b09bce8e9f3ce9cb7c75584365e8
         disable-submodules: true
         disable-shallow-clone: true
   - name: python3-pebble-le-client
@@ -108,8 +106,7 @@ modules:
     sources:
       - type: git
         url: https://github.com/luigi311/libpebble-ble
-        branch: daemon
-        commit: f6dcc99fe99ec0089cceb5d1bb3d5491e45d8cf0
+        commit: ef14965395f9b09bce8e9f3ce9cb7c75584365e8
         disable-submodules: true
         disable-shallow-clone: true
 

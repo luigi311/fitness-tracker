@@ -78,8 +78,8 @@ ignore = [
 
 [tool.uv.sources]
 libpebble2 = { git = "https://github.com/luigi311/libpebble2", branch = "modern" }
-libpebble-ble = { git = "https://github.com/luigi311/libpebble-ble", branch = "daemon", subdirectory = "packages/libpebble-ble" }
-pebble-le-client = { git = "https://github.com/luigi311/libpebble-ble", branch = "daemon", subdirectory = "packages/pebble-le-client" }
+libpebble-ble = { git = "https://github.com/luigi311/libpebble-ble", branch = "main", subdirectory = "packages/libpebble-ble" }
+pebble-le-client = { git = "https://github.com/luigi311/libpebble-ble", branch = "main", subdirectory = "packages/pebble-le-client" }
 bleaksport = { git = "https://github.com/luigi311/bleaksport", branch = "main" }
 workout-parser = { git = "https://github.com/luigi311/workout_parser", branch = "main" }
 # Pin to rev as there is no new release that fixes packaging
