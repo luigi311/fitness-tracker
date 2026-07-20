@@ -24,7 +24,7 @@ if TYPE_CHECKING:
     from workout_parser.models import Workout
 
 # Pebble bridge workout constants
-TGT_NONE, TGT_POWER, TGT_PACE = 0, 1, 2
+TGT_NONE, TGT_POWER, TGT_PACE, TGT_HR = 0, 1, 2, 3
 
 
 class TrackerPageUI:
@@ -479,6 +479,50 @@ class TrackerPageUI:
             return current, current, current
         return None
 
+    def _hr_target_values(
+        self,
+        step: WorkoutStep,
+        progress: float = 0.0,
+    ) -> tuple[float, float, float] | None:
+        """Resolve a step's preferred HR target to an absolute BPM band."""
+        absolute = self._target_values(step.heart_rate_bpm, progress)
+        if absolute:
+            return absolute
+
+        percent_max = self._target_values(step.heart_rate_percent_max, progress)
+        if percent_max:
+            factor = self.app.app_settings.personal.max_hr / 100.0
+            return tuple(value * factor for value in percent_max)
+
+        lthr_bpm = self.app.app_settings.personal.lthr_bpm
+        percent_lthr = self._target_values(step.heart_rate_percent_lthr, progress)
+        if percent_lthr and lthr_bpm:
+            factor = lthr_bpm / 100.0
+            return tuple(value * factor for value in percent_lthr)
+
+        zone_target = step.heart_rate_zone
+        if zone_target is None:
+            return None
+
+        zones = list(self.app.calculate_hr_zones().values())
+
+        def zone_bounds(value: float) -> tuple[float, float]:
+            index = min(len(zones), max(1, round(value))) - 1
+            low, high = zones[index]
+            return float(low), float(high)
+
+        if isinstance(zone_target, PointTarget):
+            low, high = zone_bounds(float(zone_target.value))
+        elif isinstance(zone_target, RangeTarget):
+            low = zone_bounds(float(zone_target.low))[0]
+            high = zone_bounds(float(zone_target.high))[1]
+        else:
+            zone = float(zone_target.start) + (
+                float(zone_target.end) - float(zone_target.start)
+            ) * min(1.0, max(0.0, progress))
+            low, high = zone_bounds(zone)
+        return low, (low + high) / 2.0, high
+
     def _update_workout_guidance(self, elapsed_s: int) -> None:
         """Compute target for a given elapsed_s (caller decides whether running or preview)."""
         if not self.workout_view or not self._workout:
@@ -495,6 +539,7 @@ class TrackerPageUI:
         step_progress = (t_s - step_start) / max(1.0, step_dur)
         power = self._target_values(step.power_watts, step_progress)
         speed = self._target_values(step.speed_mps, step_progress)
+        heart_rate = self._hr_target_values(step, step_progress)
 
         self._active_step_index = idx
 
@@ -508,6 +553,8 @@ class TrackerPageUI:
             a = self._pace_from_mph(speed[0] * 2.23694)
             b = self._pace_from_mph(speed[2] * 2.23694)
             tgt_txt = f"Target: {b} - {a} /mi"
+        elif heart_rate:
+            tgt_txt = f"Target: {round(heart_rate[0])} - {round(heart_rate[2])} bpm"
 
         # next preview
         nxt_text = "Next: —"
@@ -515,6 +562,7 @@ class TrackerPageUI:
             next_step = self._workout_steps[idx + 1]
             next_power = self._target_values(next_step.power_watts)
             next_speed = self._target_values(next_step.speed_mps)
+            next_hr = self._hr_target_values(next_step)
             next_duration_s = int(next_step.duration_s or 0)
 
             if next_power:
@@ -525,6 +573,9 @@ class TrackerPageUI:
                 a = self._pace_from_mph(next_speed[0] * 2.23694)
                 b = self._pace_from_mph(next_speed[2] * 2.23694)
                 nxt_text = f"Next: {b} - {a} /mi for {next_duration_s} s"
+            elif next_hr:
+                a, _, b = next_hr
+                nxt_text = f"Next: {round(a)} - {round(b)} bpm for {next_duration_s} s"
 
         self.workout_view.set_target_text(tgt_txt)
         self.workout_view.set_next_text(nxt_text)
@@ -577,6 +628,20 @@ class TrackerPageUI:
                     tgt_kind=TGT_PACE,
                     tgt_lo=speed_lo,
                     tgt_hi=speed_hi,
+                )
+        elif heart_rate:
+            hr_lo, hr_mid, hr_hi = heart_rate
+            self.workout_view.set_gauge_hr(
+                current_bpm=self._last_bpm,
+                target_bpm_lo=hr_lo,
+                target_bpm_mid=hr_mid,
+                target_bpm_hi=hr_hi,
+            )
+            if self.app.pebble_bridge:
+                self.app.pebble_bridge.update(
+                    tgt_kind=TGT_HR,
+                    tgt_lo=hr_lo,
+                    tgt_hi=hr_hi,
                 )
         elif self.app.pebble_bridge:
             self.app.pebble_bridge.update(tgt_kind=TGT_NONE)
@@ -763,6 +828,7 @@ class TrackerPageUI:
 
         # ---- power / speed target resolution ----
         target_power = getattr(self, "_last_power", 250.0)
+        target_hr: float | None = None
         self._sim_target_mph = None
 
         if self._workout:
@@ -772,13 +838,18 @@ class TrackerPageUI:
                 return True
 
             step = self._workout_steps[idx]
-            power = self._target_values(step.power_watts)
-            speed = self._target_values(step.speed_mps)
+            step_start = sum(float(item.duration_s or 0) for item in self._workout_steps[:idx])
+            step_progress = (t_s - step_start) / max(1.0, float(step.duration_s or 0))
+            power = self._target_values(step.power_watts, step_progress)
+            speed = self._target_values(step.speed_mps, step_progress)
+            heart_rate = self._hr_target_values(step, step_progress)
             if power:
                 target_power = power[1]
             elif speed:
                 self._sim_target_mph = speed[1] * 2.23694
                 target_power = max(80.0, 18.0 * self._sim_target_mph)
+            if heart_rate:
+                target_hr = heart_rate[1]
         else:
             # free-run sinusoidal power wave
             t_min = max(0.0, t_ms / 60000.0)
@@ -799,7 +870,10 @@ class TrackerPageUI:
         # ---- HR simulation ----
         zones = self.app.calculate_hr_zones()
         z2_lo, _ = zones["Zone 3"]
-        if target_power > 300:
+        if target_hr is not None:
+            hr_target = target_hr
+            tau = 20.0
+        elif target_power > 300:
             hr_target = self.app.app_settings.personal.max_hr - random.uniform(0, 3)
             tau = 10.0
         else:

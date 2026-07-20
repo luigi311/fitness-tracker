@@ -295,11 +295,11 @@ class PebbleBridge:
                 # 0 none, 1 power, 2 pace
                 self._state[KEY_TGT_KIND] = int(tgt_kind)
             if tgt_lo is not None:
-                # power in W as-is, pace in m/s * 100
-                val = round(tgt_lo if tgt_kind == 1 else (tgt_lo * 100.0))
+                # Power/HR use whole units; pace uses m/s * 100.
+                val = round(tgt_lo if tgt_kind in (1, 3) else (tgt_lo * 100.0))
                 self._state[KEY_TGT_LO] = val
             if tgt_hi is not None:
-                val = round(tgt_hi if tgt_kind == 1 else (tgt_hi * 100.0))
+                val = round(tgt_hi if tgt_kind in (1, 3) else (tgt_hi * 100.0))
                 self._state[KEY_TGT_HI] = val
 
     # --- internal ---

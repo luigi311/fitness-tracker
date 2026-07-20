@@ -13,9 +13,9 @@ enum {
   KEY_POWER    = 7, // watts
 
   // Workout targeting (new)
-  KEY_TGT_KIND = 8,  // 0=none, 1=power(W), 2=pace (speed m/s)
-  KEY_TGT_LO   = 9,  // uint16: W or (m/s * 100)
-  KEY_TGT_HI   = 10, // uint16: W or (m/s * 100)
+  KEY_TGT_KIND = 8,  // 0=none, 1=power(W), 2=pace (speed m/s), 3=HR(bpm)
+  KEY_TGT_LO   = 9,  // uint16: W, bpm, or (m/s * 100)
+  KEY_TGT_HI   = 10, // uint16: W, bpm, or (m/s * 100)
 };
 
 typedef enum { UNITS_METRIC = 0, UNITS_IMPERIAL = 1 } Units;
@@ -30,7 +30,7 @@ typedef enum { HERO_HR = 0, HERO_PACE = 1, HERO_POWER = 2 } HeroMetric;
 typedef enum { FOCUS_GRID = 0, FOCUS_HERO_ONLY = 1 } FocusMode;
 
 // Workout targeting
-typedef enum { TGT_NONE = 0, TGT_POWER = 1, TGT_PACE = 2 } TargetKind;
+typedef enum { TGT_NONE = 0, TGT_POWER = 1, TGT_PACE = 2, TGT_HR = 3 } TargetKind;
 
 // View mode: free run vs workout gauge
 typedef enum { VIEW_FREE = 0, VIEW_WORKOUT = 1 } ViewMode;
@@ -221,8 +221,14 @@ static float current_value_for_kind(void) {
   } else if (s_tgt_kind == TGT_PACE) {
     // We treat "Pace target" as speed m/s (higher is faster)
     return s_have_pace ? (float)s_last_pace_x100 / 100.0f : 0.f;
+  } else if (s_tgt_kind == TGT_HR) {
+    return s_have_hr ? (float)s_last_hr : 0.f;
   }
   return 0.f;
+}
+
+static float target_value(uint16_t value) {
+  return (s_tgt_kind == TGT_PACE) ? (float)value / 100.0f : (float)value;
 }
 
 static void gauge_texts(char *curline, size_t cn, char *tgtline, size_t tn, char *hrline, size_t hn) {
@@ -235,6 +241,9 @@ static void gauge_texts(char *curline, size_t cn, char *tgtline, size_t tn, char
     if (s_have_pace) format_pace_value_only(cur_pace, sizeof(cur_pace));
     else snprintf(cur_pace, sizeof(cur_pace), "-");
     snprintf(curline, cn, "%s %s", cur_pace, (s_units==UNITS_METRIC) ? "/km" : "/mi");
+  } else if (s_tgt_kind == TGT_HR) {
+    int cur = s_have_hr ? (int)s_last_hr : 0;
+    snprintf(curline, cn, "%d bpm", cur);
   } else {
     snprintf(curline, cn, "—");
   }
@@ -252,12 +261,17 @@ static void gauge_texts(char *curline, size_t cn, char *tgtline, size_t tn, char
     format_pace_from_ms_value_only(hi_txt, sizeof(hi_txt), hi_ms);
     snprintf(tgtline, tn, "Target: %s–%s %s",
              lo_txt, hi_txt, (s_units==UNITS_METRIC) ? "/km" : "/mi");
+  } else if (s_tgt_kind == TGT_HR) {
+    int lo = (int)s_tgt_lo, hi = (int)s_tgt_hi;
+    if (hi < lo) { int t = lo; lo = hi; hi = t; }
+    snprintf(tgtline, tn, "Target: %d–%d bpm", lo, hi);
   } else {
     snprintf(tgtline, tn, "Target: —");
   }
 
   // HR
-  if (s_have_hr) snprintf(hrline, hn, "HR: %u bpm", (unsigned)s_last_hr);
+  if (s_tgt_kind == TGT_HR) hrline[0] = '\0';
+  else if (s_have_hr) snprintf(hrline, hn, "HR: %u bpm", (unsigned)s_last_hr);
   else snprintf(hrline, hn, "HR: —");
 }
 
@@ -288,8 +302,8 @@ static void gauge_update_proc(Layer *layer, GContext *ctx) {
 #endif
 
   // Domain mapping around target center ±50%
-  float lo = (s_tgt_kind == TGT_POWER) ? (float)s_tgt_lo : (float)s_tgt_lo / 100.0f;
-  float hi = (s_tgt_kind == TGT_POWER) ? (float)s_tgt_hi : (float)s_tgt_hi / 100.0f;
+  float lo = target_value(s_tgt_lo);
+  float hi = target_value(s_tgt_hi);
   if (hi < lo) { float tmp = lo; lo = hi; hi = tmp; }
   float ctr = 0.5f * (lo + hi);
   float dmin = ctr * 0.5f;
@@ -359,8 +373,8 @@ static void gauge_update_proc(Layer *layer, GContext *ctx) {
 // ---------- Zone helpers ----------
 static GColor zone_color(void) {
   if (s_tgt_kind == TGT_NONE) return GColorWhite;
-  float lo = (s_tgt_kind==TGT_POWER)? s_tgt_lo : s_tgt_lo/100.f;
-  float hi = (s_tgt_kind==TGT_POWER)? s_tgt_hi : s_tgt_hi/100.f;
+  float lo = target_value(s_tgt_lo);
+  float hi = target_value(s_tgt_hi);
   if (hi < lo) { float t=lo; lo=hi; hi=t; }
   float ctr = 0.5f*(lo+hi);
   float cur = current_value_for_kind();
@@ -385,8 +399,8 @@ static const char* zone_word(GColor zc){
   // On B/W we can't color; keep the same wording
   (void)zc;
   // Rough heuristic using current vs target:
-  float lo = (s_tgt_kind==TGT_POWER)? s_tgt_lo : s_tgt_lo/100.f;
-  float hi = (s_tgt_kind==TGT_POWER)? s_tgt_hi : s_tgt_hi/100.f;
+  float lo = target_value(s_tgt_lo);
+  float hi = target_value(s_tgt_hi);
   if (hi < lo) { float t=lo; lo=hi; hi=t; }
   float cur = current_value_for_kind();
   if (cur >= lo && cur <= hi) return "IN";
@@ -399,8 +413,8 @@ static const char* zone_word(GColor zc){
 
 static void maybe_haptic_transition(void) {
   if (s_tgt_kind == TGT_NONE) return;
-  float lo = (s_tgt_kind==TGT_POWER)? s_tgt_lo : s_tgt_lo/100.f;
-  float hi = (s_tgt_kind==TGT_POWER)? s_tgt_hi : s_tgt_hi/100.f;
+  float lo = target_value(s_tgt_lo);
+  float hi = target_value(s_tgt_hi);
   if (hi < lo) { float t=lo; lo=hi; hi=t; }
 
   float cur = current_value_for_kind();
@@ -667,6 +681,9 @@ static void render_all(void) {
       else snprintf(s_big, sizeof(s_big), "—");
     } else if (s_tgt_kind == TGT_PACE) {
       format_pace_value_only(s_big, sizeof(s_big)); // m:ss
+    } else if (s_tgt_kind == TGT_HR) {
+      if (s_have_hr) snprintf(s_big, sizeof(s_big), "%u", (unsigned)s_last_hr);
+      else snprintf(s_big, sizeof(s_big), "—");
     } else {
       snprintf(s_big, sizeof(s_big), "—");
     }
@@ -783,8 +800,8 @@ static void render_all(void) {
 static void underbar_update_proc(Layer *layer, GContext *ctx) {
   if (s_tgt_kind == TGT_NONE) return;
   GRect r = layer_get_bounds(layer);
-  float lo = (s_tgt_kind==TGT_POWER)? s_tgt_lo : s_tgt_lo/100.f;
-  float hi = (s_tgt_kind==TGT_POWER)? s_tgt_hi : s_tgt_hi/100.f;
+  float lo = target_value(s_tgt_lo);
+  float hi = target_value(s_tgt_hi);
   if (hi < lo) { float t=lo; lo=hi; hi=t; }
 
   float ctr = 0.5f*(lo+hi);
