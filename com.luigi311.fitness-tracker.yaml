@@ -96,7 +96,7 @@ modules:
     sources:
       - type: git
         url: https://github.com/luigi311/workout_parser
-        commit: 631d57b79e34633d71e2cbfb3b07337a77fa90a8
+        commit: 417be9cdfe0e3e21e20ca3b0b488ec06dc25ffc3
         disable-submodules: true
         disable-shallow-clone: true
 

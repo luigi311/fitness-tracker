@@ -9,7 +9,8 @@ from typing import TYPE_CHECKING
 import gi
 import numpy as np
 from bleaksport import CyclingSample, HeartRateSample, RunningSample, TrainerSample
-from workout_parser.main import load_workout, pretty_workout_name
+from workout_parser import PointTarget, RampTarget, RangeTarget, WorkoutStep
+from workout_parser.main import pretty_workout_name
 
 from fitness_tracker.database import SportTypesEnum
 from fitness_tracker.ui_free_run import FreeRunView
@@ -20,8 +21,6 @@ gi.require_versions({"Gtk": "4.0", "Adw": "1"})
 from gi.repository import Adw, GLib  # noqa: E402  # ty:ignore[unresolved-import]
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
     from workout_parser.models import Workout
 
 # Pebble bridge workout constants
@@ -68,6 +67,7 @@ class TrackerPageUI:
 
         # workout state
         self._workout: Workout | None = None
+        self._workout_steps: list[WorkoutStep] = []
         self._active_step_index: int = -1
         self._manual_offset_s: float = 0.0
         self._sim_target_mph: float | None = None
@@ -118,7 +118,17 @@ class TrackerPageUI:
         in_outdoor: IndoorOutdoorEnum,
         trainer: bool = False,
     ) -> None:
-        self._workout: Workout | None = workout if workout.steps else None
+        steps = workout.expanded_steps()
+        if not steps:
+            self.app.show_toast("Workout has no executable steps")
+            return
+        if any(step.duration_s is None for step in steps):
+            self.app.show_toast("Distance and open-ended workout steps are not supported yet")
+            return
+
+        ftp_watts = self.app.app_settings.personal.ftp_watts
+        self._workout_steps = [step.resolve_power_targets(ftp_watts) for step in steps]
+        self._workout = workout
         self._manual_offset_s = 0.0
         self._show_workout_page(sport_type=sport_type, in_outdoor=in_outdoor, trainer=trainer)
 
@@ -452,6 +462,23 @@ class TrackerPageUI:
             )
 
     # ---- workout guidance
+    @staticmethod
+    def _target_values(
+        target: PointTarget | RangeTarget | RampTarget | None,
+        progress: float = 0.0,
+    ) -> tuple[float, float, float] | None:
+        """Return low/current/high values suitable for the existing gauges."""
+        if isinstance(target, PointTarget):
+            value = float(target.value)
+            return value, value, value
+        if isinstance(target, RangeTarget):
+            return float(target.low), float(target.mid), float(target.high)
+        if isinstance(target, RampTarget):
+            progress = min(1.0, max(0.0, progress))
+            current = float(target.start) + (float(target.end) - float(target.start)) * progress
+            return current, current, current
+        return None
+
     def _update_workout_guidance(self, elapsed_s: int) -> None:
         """Compute target for a given elapsed_s (caller decides whether running or preview)."""
         if not self.workout_view or not self._workout:
@@ -459,121 +486,103 @@ class TrackerPageUI:
 
         t_s = max(0.0, float(elapsed_s) + self._manual_offset_s)
         idx, step = self._workout.get_step_at(t_s)
-        if not step or idx is None:
+        if step is None or idx is None:
             return
 
-        if step.watts_mid is None and step.speed_mps_mid is None:
-            # Only generate absolute targets if they are not already defined
-            # to avoid overwriting any watt/pace targets set by the workout author
-            step.generate_absolute_power_targets_from_percent(
-                self.app.app_settings.personal.ftp_watts
-            )
-            # step.generate_pace_targets_from_percent(self.app.threshold_speed_mps)
+        step = self._workout_steps[idx]
+        step_start = sum(float(s.duration_s or 0) for s in self._workout_steps[:idx])
+        step_dur = float(step.duration_s or 0)
+        step_progress = (t_s - step_start) / max(1.0, step_dur)
+        power = self._target_values(step.power_watts, step_progress)
+        speed = self._target_values(step.speed_mps, step_progress)
 
         self._active_step_index = idx
 
         # target text
         tgt_txt = "Target: —"
-        # lo and hi are guaranteed if any are present due to pydantic validators.
-        if step.watts_lo is not None and step.watts_hi is not None:
-            a = round(step.watts_lo)
-            b = round(step.watts_hi)
+        if power:
+            a = round(power[0])
+            b = round(power[2])
             tgt_txt = f"Target: {a} - {b} W"
-        elif step.speed_mph_lo is not None and step.speed_mph_hi is not None:
-            a = self._pace_from_mph(step.speed_mph_lo)
-            b = self._pace_from_mph(step.speed_mph_hi)
+        elif speed:
+            a = self._pace_from_mph(speed[0] * 2.23694)
+            b = self._pace_from_mph(speed[2] * 2.23694)
             tgt_txt = f"Target: {b} - {a} /mi"
 
         # next preview
         nxt_text = "Next: —"
-        if 0 <= idx + 1 < len(self._workout.steps):
-            next_step = self._workout.steps[idx + 1]
+        if 0 <= idx + 1 < len(self._workout_steps):
+            next_step = self._workout_steps[idx + 1]
+            next_power = self._target_values(next_step.power_watts)
+            next_speed = self._target_values(next_step.speed_mps)
+            next_duration_s = int(next_step.duration_s or 0)
 
-            if next_step.watts_mid is None and next_step.speed_mps_mid is None:
-                next_step.generate_absolute_power_targets_from_percent(
-                    self.app.app_settings.personal.ftp_watts
-                )
-                # next_step.generate_pace_targets_from_percent(self.app.threshold_speed_mps)
-
-            if next_step.watts_lo is not None and next_step.watts_hi is not None:
-                a = round(next_step.watts_lo)
-                b = round(next_step.watts_hi)
-                nxt_text = f"Next: {a} - {b} W for {int(next_step.duration_s)} s"
-            elif next_step.speed_mph_lo is not None and next_step.speed_mph_hi is not None:
-                a = self._pace_from_mph(next_step.speed_mph_lo)
-                b = self._pace_from_mph(next_step.speed_mph_hi)
-                nxt_text = f"Next: {b} - {a} /mi for {int(next_step.duration_s)} s"
+            if next_power:
+                a = round(next_power[0])
+                b = round(next_power[2])
+                nxt_text = f"Next: {a} - {b} W for {next_duration_s} s"
+            elif next_speed:
+                a = self._pace_from_mph(next_speed[0] * 2.23694)
+                b = self._pace_from_mph(next_speed[2] * 2.23694)
+                nxt_text = f"Next: {b} - {a} /mi for {next_duration_s} s"
 
         self.workout_view.set_target_text(tgt_txt)
         self.workout_view.set_next_text(nxt_text)
 
         # gauge update (choose power vs pace)
-        if step.watts_lo is not None and step.watts_hi is not None and step.watts_mid is not None:
+        if power:
+            power_lo, power_mid, power_hi = power
             self.workout_view.set_gauge_power(
                 current_w=self._rt_watts,
-                target_w_mid=step.watts_mid,
-                target_w_lo=step.watts_lo,
-                target_w_hi=step.watts_hi,
+                target_w_mid=power_mid,
+                target_w_lo=power_lo,
+                target_w_hi=power_hi,
             )
             if self.app.pebble_bridge:
                 self.app.pebble_bridge.update(
                     tgt_kind=TGT_POWER,
-                    tgt_lo=step.watts_lo,
-                    tgt_hi=step.watts_hi,
+                    tgt_lo=power_lo,
+                    tgt_hi=power_hi,
                 )
 
             # ERG Mode controls
             if self.app.recorder and self.app.recorder.trainer_mux:
                 now = time.monotonic()
-                # Limit erg commands to 1 every 2 seconds to avoid overwhelming the trainer or BLE connection
+                # Limit ERG commands to avoid overwhelming the trainer or BLE connection.
                 # Require a change of at least 3 watts to avoid sending redundant commands
                 watt_diff = 3
                 time_diff = 2.0
                 if self._erg_last_set_watts is None or (
-                    abs(self._erg_last_set_watts - step.watts_mid) >= watt_diff
+                    abs(self._erg_last_set_watts - power_mid) >= watt_diff
                     and now - self._erg_last_set_ts > time_diff
                 ):
-                    self.app.recorder.set_target_power(step.watts_mid)
-                    self._erg_last_set_watts = step.watts_mid
+                    self.app.recorder.set_target_power(power_mid)
+                    self._erg_last_set_watts = round(power_mid)
                     self._erg_last_set_ts = now
 
         # If a single speed target is defined
         # all of them are guaranteed to be defined due to pydantic validators
-        elif (
-            step.speed_mps_mid is not None
-            and step.speed_mph_mid is not None
-            and step.speed_mps_lo is not None
-            and step.speed_mps_hi is not None
-        ):
+        elif speed:
+            speed_lo, speed_mid, speed_hi = speed
             self.workout_view.set_gauge_pace(
                 current_mps=self._rt_mps,
                 current_pace_text=self._pace_from_mph(self._rt_mph),
-                target_pace_text=self._pace_from_mph(step.speed_mph_mid),
-                target_mps_lo=step.speed_mps_lo,
-                target_mps_mid=step.speed_mps_mid,
-                target_mps_hi=step.speed_mps_hi,
+                target_pace_text=self._pace_from_mph(speed_mid * 2.23694),
+                target_mps_lo=speed_lo,
+                target_mps_mid=speed_mid,
+                target_mps_hi=speed_hi,
             )
             if self.app.pebble_bridge:
                 self.app.pebble_bridge.update(
                     tgt_kind=TGT_PACE,
-                    tgt_lo=step.speed_mps_lo,
-                    tgt_hi=step.speed_mps_hi,
+                    tgt_lo=speed_lo,
+                    tgt_hi=speed_hi,
                 )
         elif self.app.pebble_bridge:
             self.app.pebble_bridge.update(tgt_kind=TGT_NONE)
 
         # step progress — ONLY advance when running
         if self._running:
-            acc = 0.0
-            step_start = 0.0
-            step_dur = 1.0
-            for i, s in enumerate(self._workout.steps):
-                nxt = acc + s.duration_s
-                if i == idx:
-                    step_start = acc
-                    step_dur = max(1.0, s.duration_s)
-                    break
-                acc = nxt
             step_elapsed = min(max(0.0, t_s - step_start), step_dur)
             frac = step_elapsed / step_dur
             self.workout_view.set_progress(float(frac))
@@ -583,7 +592,7 @@ class TrackerPageUI:
         if not (self._running and self._workout):
             return
         t_s = max(0.0, float(elapsed_s) + self._manual_offset_s)
-        total = float(self._workout.total_seconds)
+        total = sum(float(step.duration_s or 0) for step in self._workout_steps)
 
         if t_s >= total:
             self._workout = None
@@ -619,15 +628,15 @@ class TrackerPageUI:
             return
 
         starts = [0.0]
-        for s in self._workout.steps:
-            starts.append(starts[-1] + s.duration_s)
+        for step in self._workout_steps:
+            starts.append(starts[-1] + float(step.duration_s or 0))
 
         current_elapsed = float(self._elapsed_display_s if self._running else 0.0)
         t_s = max(0.0, current_elapsed + self._manual_offset_s)
 
         target_idx = min(
             max(0, self._active_step_index + (1 if direction > 0 else -1)),
-            len(self._workout.steps) - 1,
+            len(self._workout_steps) - 1,
         )
         target_start = starts[target_idx]
 
@@ -660,13 +669,8 @@ class TrackerPageUI:
             # pick center card domain based on whether there is an active power target
             is_power = False
             if self._workout and self._active_step_index >= 0:
-                s = self._workout.steps[self._active_step_index]
-                is_power = (
-                    (s.watts_mid is not None)
-                    or (s.percent_watts_mid is not None)
-                    or (s.watts_hi is not None)
-                    or (s.percent_watts_hi is not None)
-                )
+                step = self._workout_steps[self._active_step_index]
+                is_power = step.power_watts is not None or step.power_percent_ftp is not None
             self.workout_view.set_metrics(
                 bpm=bpm,
                 pace=pace_str,
@@ -713,8 +717,8 @@ class TrackerPageUI:
         self.workout_view.set_elapsed_text("00:00")
 
         # remaining = current step full duration
-        if self._workout and self._workout.steps:
-            dur = int(self._workout.steps[0].duration_s)
+        if self._workout and self._workout_steps:
+            dur = int(self._workout_steps[0].duration_s or 0)
             # Keep the step remaining timer as mm:ss
             self.workout_view.set_step_remaining_text(self._fmt_mmss(dur))
         else:
@@ -729,11 +733,12 @@ class TrackerPageUI:
         acc = 0.0
         step_start = 0.0
         step_dur = 0.0
-        for s in self._workout.steps:
-            nxt = acc + s.duration_s
+        for step in self._workout_steps:
+            duration_s = float(step.duration_s or 0)
+            nxt = acc + duration_s
             if t_s < nxt + 1e-6:
                 step_start = acc
-                step_dur = s.duration_s
+                step_dur = duration_s
                 break
             acc = nxt
         step_elapsed = min(max(0.0, t_s - step_start), max(1.0, step_dur))
@@ -766,12 +771,14 @@ class TrackerPageUI:
             if not step or idx is None:
                 return True
 
-            w, v_mph = step.watts_mid, step.speed_mph_mid
-            if w is not None:
-                target_power = float(w)
-            elif v_mph is not None:
-                self._sim_target_mph = v_mph
-                target_power = max(80.0, 18.0 * v_mph)
+            step = self._workout_steps[idx]
+            power = self._target_values(step.power_watts)
+            speed = self._target_values(step.speed_mps)
+            if power:
+                target_power = power[1]
+            elif speed:
+                self._sim_target_mph = speed[1] * 2.23694
+                target_power = max(80.0, 18.0 * self._sim_target_mph)
         else:
             # free-run sinusoidal power wave
             t_min = max(0.0, t_ms / 60000.0)
