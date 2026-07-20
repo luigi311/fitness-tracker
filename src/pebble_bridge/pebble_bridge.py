@@ -37,6 +37,8 @@ KEY_POWER = 7
 KEY_TGT_KIND = 8
 KEY_TGT_LO = 9
 KEY_TGT_HI = 10
+KEY_WORKOUT_OUTDOOR = 11
+KEY_WORKOUT_STEP = 12
 
 # The EXACT widths the watchapp's C handler reads each key as
 # (t->value->uint8/uint16/uint32). Every backend pins to these so the watch
@@ -52,6 +54,8 @@ _KEY_WIDTH = {
     KEY_TGT_KIND: 8,
     KEY_TGT_LO: 16,
     KEY_TGT_HI: 16,
+    KEY_WORKOUT_OUTDOOR: 8,
+    KEY_WORKOUT_STEP: 16,
 }
 
 
@@ -273,6 +277,8 @@ class PebbleBridge:
         tgt_kind: int | None = None,
         tgt_lo: float | None = None,
         tgt_hi: float | None = None,
+        workout_outdoor: bool | None = None,
+        workout_step: int | None = None,
     ) -> None:
         """Update the latest metrics (None = no change)."""
         with self._lock:
@@ -301,6 +307,10 @@ class PebbleBridge:
             if tgt_hi is not None:
                 val = round(tgt_hi if tgt_kind in (1, 3) else (tgt_hi * 100.0))
                 self._state[KEY_TGT_HI] = val
+            if workout_outdoor is not None:
+                self._state[KEY_WORKOUT_OUTDOOR] = int(workout_outdoor)
+            if workout_step is not None:
+                self._state[KEY_WORKOUT_STEP] = int(workout_step)
 
     # --- internal ---
     def _connect(self) -> None:

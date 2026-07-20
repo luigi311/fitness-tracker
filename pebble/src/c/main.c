@@ -16,6 +16,8 @@ enum {
   KEY_TGT_KIND = 8,  // 0=none, 1=power(W), 2=pace (speed m/s), 3=HR(bpm)
   KEY_TGT_LO   = 9,  // uint16: W, bpm, or (m/s * 100)
   KEY_TGT_HI   = 10, // uint16: W, bpm, or (m/s * 100)
+  KEY_WORKOUT_OUTDOOR = 11, // uint8: target-band haptics enabled
+  KEY_WORKOUT_STEP = 12,    // uint16: expanded workout step index
 };
 
 typedef enum { UNITS_METRIC = 0, UNITS_IMPERIAL = 1 } Units;
@@ -51,6 +53,9 @@ static uint32_t s_last_dist_m;
 static TargetKind s_tgt_kind = TGT_NONE;
 static uint16_t   s_tgt_lo = 0;   // W or m/s*100 depending on kind
 static uint16_t   s_tgt_hi = 0;
+static bool       s_workout_outdoor = false;
+static bool       s_have_workout_step = false;
+static uint16_t   s_workout_step = 0;
 
 // ---------- UI: hero + grid ----------
 static TextLayer *s_hero_value;
@@ -412,7 +417,7 @@ static const char* zone_word(GColor zc){
 }
 
 static void maybe_haptic_transition(void) {
-  if (s_tgt_kind == TGT_NONE) return;
+  if (s_tgt_kind == TGT_NONE || !s_workout_outdoor) return;
   float lo = target_value(s_tgt_lo);
   float hi = target_value(s_tgt_hi);
   if (hi < lo) { float t=lo; lo=hi; hi=t; }
@@ -842,10 +847,24 @@ static void inbox_received(DictionaryIterator *iter, void *ctx) {
   bool target_changed = false;
   if ((t = dict_find(iter, KEY_TGT_KIND))) {
     s_tgt_kind = (TargetKind)t->value->uint8;
+    if (s_tgt_kind == TGT_NONE) s_have_workout_step = false;
     target_changed = true;
   }
   if ((t = dict_find(iter, KEY_TGT_LO))) { s_tgt_lo = t->value->uint16; target_changed = true; }
   if ((t = dict_find(iter, KEY_TGT_HI))) { s_tgt_hi = t->value->uint16; target_changed = true; }
+  if ((t = dict_find(iter, KEY_WORKOUT_OUTDOOR))) {
+    s_workout_outdoor = t->value->uint8 == 1;
+  }
+  if ((t = dict_find(iter, KEY_WORKOUT_STEP))) {
+    uint16_t next_step = t->value->uint16;
+    if (s_tgt_kind != TGT_NONE) {
+      if (s_have_workout_step && next_step != s_workout_step) vibes_short_pulse();
+      s_workout_step = next_step;
+      s_have_workout_step = true;
+    } else {
+      s_have_workout_step = false;
+    }
+  }
 
   if (target_changed) {
     s_view = (s_tgt_kind == TGT_NONE) ? VIEW_FREE : VIEW_WORKOUT;
