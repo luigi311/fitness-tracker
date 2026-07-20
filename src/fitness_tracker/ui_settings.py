@@ -35,6 +35,7 @@ class PersonalSettings(BaseModel):
     weight_kg: float = 80.0
     resting_hr: int = 60
     max_hr: int = 200
+    lthr_bpm: int | None = None
     ftp_watts: int = 150
 
 
@@ -149,6 +150,7 @@ def fallback_settings(file: Path) -> AppSettings | None:
     weight_kg = cfg.getint("personal", "weight_kg", fallback=80)
     resting_hr = cfg.getint("personal", "resting_hr", fallback=60)
     max_hr = cfg.getint("personal", "max_hr", fallback=180)
+    lthr_bpm = cfg.getint("personal", "lthr_bpm", fallback=None)
     ftp_watts = cfg.getint("personal", "ftp_watts", fallback=150)
 
     # Pebble device
@@ -175,6 +177,7 @@ def fallback_settings(file: Path) -> AppSettings | None:
             weight_kg=weight_kg,
             resting_hr=resting_hr,
             max_hr=max_hr,
+            lthr_bpm=lthr_bpm,
             ftp_watts=ftp_watts,
         ),
         running_sensors=SensorSettings(
@@ -310,6 +313,15 @@ class SettingsPageUI:
         self.max_spin.set_value(self.app.app_settings.personal.max_hr)
         max_row.add_suffix(self.max_spin)
         personal_group.add(max_row)
+
+        # Lactate-threshold HR (for relative workout targets)
+        lthr_row = Adw.ActionRow()
+        lthr_row.set_title("Lactate Threshold HR")
+        lthr_row.set_subtitle("Used for %LTHR workout targets; 0 disables")
+        self.lthr_spin = Gtk.SpinButton.new_with_range(0, 250, 1)
+        self.lthr_spin.set_value(self.app.app_settings.personal.lthr_bpm or 0)
+        lthr_row.add_suffix(self.lthr_spin)
+        personal_group.add(lthr_row)
 
         # FTP (for workouts)
         ftp_row = Adw.ActionRow()
@@ -1505,6 +1517,8 @@ class SettingsPageUI:
         self.app.app_settings.personal.weight_kg = self.weight_spin.get_value_as_int()
         self.app.app_settings.personal.resting_hr = self.rest_spin.get_value_as_int()
         self.app.app_settings.personal.max_hr = self.max_spin.get_value_as_int()
+        lthr_bpm = self.lthr_spin.get_value_as_int()
+        self.app.app_settings.personal.lthr_bpm = lthr_bpm or None
         self.app.app_settings.personal.ftp_watts = self.ftp_spin.get_value_as_int()
 
         self.app.app_settings.icu.athlete_id = (

@@ -21,8 +21,8 @@ finish-args:
   - --own-name=com.luigi311.fitness-tracker
   - --talk-name=com.luigi311.fitness-tracker
 
-  # Talk to the pebble-led daemon where available
-  - --talk-name=org.pebble_le.Daemon
+  # Talk to the cobble daemon where available
+  - --talk-name=org.cobble.Daemon
 
 cleanup:
   - /include
@@ -76,37 +76,15 @@ modules:
         disable-submodules: true
         disable-shallow-clone: true
 
-  - name: python3-libpebble-ble
+  - name: python3-cobble-client
     buildsystem: simple
     build-commands:
       - pip3 install --verbose --no-index --no-deps --no-build-isolation
-        --prefix=${FLATPAK_DEST} packages/libpebble-ble
+        --prefix=${FLATPAK_DEST} packages/cobble-client
     sources:
       - type: git
-        url: https://github.com/luigi311/libpebble-ble
-        commit: ef14965395f9b09bce8e9f3ce9cb7c75584365e8
-        disable-submodules: true
-        disable-shallow-clone: true
-  - name: python3-pebble-le-proto
-    buildsystem: simple
-    build-commands:
-      - pip3 install --verbose --no-index --no-deps --no-build-isolation
-        --prefix=${FLATPAK_DEST} packages/pebble-le-proto
-    sources:
-      - type: git
-        url: https://github.com/luigi311/libpebble-ble
-        commit: ef14965395f9b09bce8e9f3ce9cb7c75584365e8
-        disable-submodules: true
-        disable-shallow-clone: true
-  - name: python3-pebble-le-client
-    buildsystem: simple
-    build-commands:
-      - pip3 install --verbose --no-index --no-deps --no-build-isolation
-        --prefix=${FLATPAK_DEST} packages/pebble-le-client
-    sources:
-      - type: git
-        url: https://github.com/luigi311/libpebble-ble
-        commit: ef14965395f9b09bce8e9f3ce9cb7c75584365e8
+        url: https://github.com/luigi311/cobble
+        commit: 7615a42292b1a71801b24a0f2cd7f450e2907990
         disable-submodules: true
         disable-shallow-clone: true
 
@@ -118,7 +96,7 @@ modules:
     sources:
       - type: git
         url: https://github.com/luigi311/workout_parser
-        commit: 631d57b79e34633d71e2cbfb3b07337a77fa90a8
+        commit: 417be9cdfe0e3e21e20ca3b0b488ec06dc25ffc3
         disable-submodules: true
         disable-shallow-clone: true
 

@@ -749,6 +749,28 @@ class WorkoutView(Gtk.Box):
         self.card_pp.set_value(current_pace_text)
         self._update_compliance_pill()
 
+    def set_gauge_hr(
+        self,
+        *,
+        current_bpm: float,
+        target_bpm_lo: float,
+        target_bpm_mid: float,
+        target_bpm_hi: float,
+    ) -> None:
+        """Show a heart-rate target band in beats per minute."""
+        self.gauge.set_state(
+            value=current_bpm,
+            target_lo=target_bpm_lo,
+            target_mid=target_bpm_mid,
+            target_hi=target_bpm_hi,
+            headline=f"{round(current_bpm)} bpm",
+            subline=f"Target: {round(target_bpm_mid)} bpm",
+            domain_pad=0.25,
+        )
+        self.card_pp.set_unit("bpm")
+        self.card_pp.set_value(str(round(current_bpm)))
+        self._update_compliance_pill()
+
     # --- internal ---
     def _update_compliance_pill(self) -> None:
         status = self.gauge.band_status()

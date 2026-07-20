@@ -4,7 +4,8 @@ from enum import Enum
 from typing import TYPE_CHECKING
 
 import gi
-from workout_parser.main import load_workout
+from loguru import logger
+from workout_parser import WorkoutParserError, load_workout
 
 from fitness_tracker.database import SportTypesEnum
 from fitness_tracker.workouts import discover_workouts
@@ -357,11 +358,25 @@ class ModeSelectView(Gtk.Box):
         # Determine entries
         self._entries: list[tuple[Workout, str]] = []
         if self.sport_type == SportTypesEnum.running:
-            for workout in discover_workouts(self._workouts_running_dir):
-                self._entries.append((load_workout(workout), "run"))
+            workout_files = (
+                (workout_path, "run")
+                for workout_path in discover_workouts(self._workouts_running_dir)
+            )
         elif self.sport_type == SportTypesEnum.biking:
-            for workout in discover_workouts(self._workouts_cycling_dir):
-                self._entries.append((load_workout(workout), "cycle"))
+            workout_files = (
+                (workout_path, "cycle")
+                for workout_path in discover_workouts(self._workouts_cycling_dir)
+            )
+        else:
+            workout_files = iter(())
+
+        for workout_path, sport in workout_files:
+            try:
+                workout = load_workout(workout_path)
+            except WorkoutParserError as error:
+                logger.warning(f"Skipping invalid workout {workout_path}: {error}")
+                continue
+            self._entries.append((workout, sport))
 
         # clear all rows
         for row in list(self._list):
