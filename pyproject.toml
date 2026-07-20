@@ -14,8 +14,7 @@ dependencies = [
     "bleaksport>=0.3.0",
     "fitparse>=1.2.0",
     "libpebble2>=0.1.0",
-    "libpebble-ble>=0.1.0",
-    "pebble-le-client >= 0.1.0",
+    "cobble-client >= 0.1.0",
     "loguru>=0.7.3",
     "matplotlib>=3.10.9",
     "psycopg2-binary>=2.9.12",
@@ -24,7 +23,7 @@ dependencies = [
     "pygobject>=3.56.3",
     "requests>=2.32.5",
     "sqlalchemy>=2.0.48",
-    "workout-parser>=0.1.0",
+    "workout-parser>=0.2.0",
     "xdg-base-dirs>=6.0.2",
 ]
 
@@ -78,8 +77,7 @@ ignore = [
 
 [tool.uv.sources]
 libpebble2 = { git = "https://github.com/luigi311/libpebble2", branch = "modern" }
-libpebble-ble = { git = "https://github.com/luigi311/libpebble-ble", branch = "main", subdirectory = "packages/libpebble-ble" }
-pebble-le-client = { git = "https://github.com/luigi311/libpebble-ble", branch = "main", subdirectory = "packages/pebble-le-client" }
+cobble-client = { git = "https://github.com/luigi311/cobble", branch = "main", subdirectory = "packages/cobble-client" }
 bleaksport = { git = "https://github.com/luigi311/bleaksport", branch = "main" }
 workout-parser = { git = "https://github.com/luigi311/workout_parser", branch = "main" }
 # Pin to rev as there is no new release that fixes packaging
