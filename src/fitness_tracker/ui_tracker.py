@@ -281,6 +281,10 @@ class TrackerPageUI:
             in_outdoor=in_outdoor,
             trainer=trainer,
         )
+        if self.app.pebble_bridge:
+            self.app.pebble_bridge.update(
+                workout_outdoor=in_outdoor == IndoorOutdoorEnum.outdoor,
+            )
         self._workout_paused = False
         self._workout_pause_started_monotonic = None
         self._push(self.workout_view, nice)
@@ -541,6 +545,8 @@ class TrackerPageUI:
         speed = self._target_values(step.speed_mps, step_progress)
         heart_rate = self._hr_target_values(step, step_progress)
 
+        if idx != self._active_step_index and self.app.pebble_bridge:
+            self.app.pebble_bridge.update(workout_step=idx)
         self._active_step_index = idx
 
         # target text
