@@ -277,10 +277,16 @@ class FitnessAppUI(Adw.Application):
                         logger.debug("Recorder already matches desired profile. Skipping rebuild.")
                         return
 
-                with contextlib.suppress(Exception):
-                    self.recorder.shutdown()
+                if not self.recorder.shutdown():
+                    msg = "The current sensor worker is still shutting down; profile unchanged"
+                    logger.error(msg)
+                    self.show_toast(msg)
+                    return
+                self.recorder = None
         except Exception as e:
             logger.error(e)
+            self.show_toast(f"Unable to stop the current sensor worker: {e}")
+            return
 
         # Build recorder with sensors
         logger.debug(f"Applying sensor settings for profile '{sport_type}': {desired}")
