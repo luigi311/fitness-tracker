@@ -29,6 +29,8 @@ from gi.repository import Adw, Gdk, GLib, Gtk  # noqa: E402  # ty:ignore[unresol
 if TYPE_CHECKING:
     import datetime
 
+UI_THREAD_WAIT_TIMEOUT_S = 5.0
+
 
 @dataclass(frozen=True)
 class SensorProfile:
@@ -120,10 +122,14 @@ class FitnessAppUI(Adw.Application):
 
     def _on_shutdown(self, _app):
         logger.debug("shutdown signal fired")
-        if self.recorder:
-            with contextlib.suppress(Exception):
-                self.recorder.stop_recording()
-            self.recorder.shutdown()
+        with self._sensor_apply_lock:
+            recorder = self.recorder
+            if recorder:
+                with contextlib.suppress(Exception):
+                    recorder.stop_recording()
+                recorder.shutdown()
+                if self.recorder is recorder:
+                    self.recorder = None
         if self.pebble_bridge:
             with contextlib.suppress(Exception):
                 self.pebble_bridge.stop()
@@ -354,7 +360,10 @@ class FitnessAppUI(Adw.Application):
             return False
 
         GLib.idle_add(invoke)
-        completed.wait()
+        if not completed.wait(timeout=UI_THREAD_WAIT_TIMEOUT_S):
+            msg = "Timed out waiting for the GTK main thread"
+            logger.error(msg)
+            raise TimeoutError(msg)
         if errors:
             raise errors[0]
 

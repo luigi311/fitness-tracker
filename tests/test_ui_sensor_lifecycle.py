@@ -1,7 +1,8 @@
-# ruff: noqa: ANN001, ANN201, D101, D102, E402, PT009, SLF001
+# ruff: noqa: ANN001, ANN201, D101, D102, E402, PT009, PT027, SLF001
 
 import queue
 import sys
+import tempfile
 import threading
 import types
 import unittest
@@ -50,6 +51,7 @@ ui_tracker = types.ModuleType("fitness_tracker.ui_tracker")
 ui_tracker.TrackerPageUI = object
 sys.modules[ui_tracker.__name__] = ui_tracker
 
+from fitness_tracker import ui as ui_module
 from fitness_tracker.database import SportTypesEnum
 from fitness_tracker.ui import FitnessAppUI, SensorProfile
 
@@ -77,6 +79,8 @@ class SensorSettingsLifecycleTests(unittest.TestCase):
     def setUp(self):
         while not _GLib.callbacks.empty():
             _GLib.callbacks.get_nowait()
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp_dir.cleanup)
 
     def _make_app(self):
         app = FitnessAppUI.__new__(FitnessAppUI)
@@ -84,7 +88,7 @@ class SensorSettingsLifecycleTests(unittest.TestCase):
         app.app_settings = types.SimpleNamespace(
             personal=types.SimpleNamespace(weight_kg=75.0),
         )
-        app.database = Path("/tmp/fitness-tracker-test.db")
+        app.database = Path(self.temp_dir.name) / "fitness-tracker-test.db"
         app.test_mode = True
         app.toasts = []
         app.show_toast = app.toasts.append
@@ -100,6 +104,33 @@ class SensorSettingsLifecycleTests(unittest.TestCase):
 
     def _run_idle(self):
         _GLib.callbacks.get(timeout=2)()
+
+    def test_app_shutdown_waits_for_profile_apply_lock(self):
+        app = self._make_app()
+        current = _CurrentRecorder()
+        current.shutdown_release.set()
+        app.recorder = current
+        app.pebble_bridge = None
+        app._sensor_apply_lock.acquire()
+
+        shutdown_thread = threading.Thread(target=app._on_shutdown, args=(None,))
+        shutdown_thread.start()
+        self.assertFalse(current.shutdown_started.wait(timeout=0.05))
+
+        app._sensor_apply_lock.release()
+        shutdown_thread.join(timeout=1)
+
+        self.assertFalse(shutdown_thread.is_alive())
+        self.assertTrue(current.shutdown_started.is_set())
+        self.assertIsNone(app.recorder)
+
+    def test_ui_thread_handoff_times_out(self):
+        with (
+            patch.object(ui_module.GLib, "idle_add", return_value=1),
+            patch.object(ui_module, "UI_THREAD_WAIT_TIMEOUT_S", 0),
+            self.assertRaisesRegex(TimeoutError, "GTK main thread"),
+        ):
+            FitnessAppUI._run_on_ui_thread(lambda: None)
 
     def test_shutdown_and_rebuild_do_not_block_caller(self):
         app = self._make_app()
@@ -136,6 +167,22 @@ class SensorSettingsLifecycleTests(unittest.TestCase):
             ["The current sensor worker is still shutting down; profile unchanged"],
         )
         recorder_factory.assert_not_called()
+
+    def test_construction_failure_leaves_no_stopped_profile_installed(self):
+        app = self._make_app()
+        current = _CurrentRecorder()
+        current.shutdown_release.set()
+        app.recorder = current
+
+        with patch("fitness_tracker.ui.Recorder", side_effect=RuntimeError("build failed")):
+            app.apply_sensor_settings()
+            self.assertTrue(current.shutdown_started.wait(timeout=1))
+            self._run_idle()
+            self._run_idle()
+
+        self.assertIsNone(app.recorder)
+        self.assertFalse(app.profile_installed.is_set())
+        self.assertEqual(app.toasts, ["Unable to build the sensor worker: build failed"])
 
 
 if __name__ == "__main__":
