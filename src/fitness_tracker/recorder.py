@@ -70,6 +70,7 @@ class Recorder:
 
         self._ble_lock = asyncio.Lock()  # Lock for BLE operations
         self._thread: threading.Thread | None = None
+        self._stop_requested = threading.Event()
 
         # Disable write when in test mode
         self.test_mode = bool(test_mode)
@@ -141,24 +142,43 @@ class Recorder:
         self.devices: list[BLEDevice] = []
 
     def start(self):
+        if self._thread and self._thread.is_alive():
+            return
+        if self.loop.is_closed():
+            msg = "Cannot restart Recorder after its event loop has closed"
+            raise RuntimeError(msg)
+
+        self._stop_requested.clear()
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
 
-    def shutdown(self):
+    def shutdown(self, timeout: float = 15.0) -> bool:
         logger.debug("Recorder.shutdown called")
-        if not self.loop.is_running():
-            logger.debug("Loop not running, returning")
-            return
-
-        def _stop():
-            self._stop_event.set()
 
         # Stop recording on shutdown
         self.stop_recording()
+        self._stop_requested.set()
+        self._pending_trainer_target = None
 
-        self.loop.call_soon_threadsafe(_stop)
+        if self._erg_retry_task and not self._erg_retry_task.done():
+            self._erg_retry_task.cancel()
+
+        if self.loop.is_running():
+            self.loop.call_soon_threadsafe(self._stop_event.set)
+        elif self._thread is None:
+            # Test-mode recorders never start their worker thread, so their
+            # otherwise-unused loop belongs to this thread and can close here.
+            if not self.loop.is_closed():
+                self.loop.close()
+            return True
+
         if self._thread:
-            self._thread.join(timeout=10)
+            self._thread.join(timeout=timeout)
+            if self._thread.is_alive():
+                logger.error(f"Recorder worker did not stop within {timeout:.1f}s")
+                return False
+
+        return True
 
     def start_recording(self):
         if not self._recording:
@@ -184,7 +204,35 @@ class Recorder:
 
     def _run(self):
         asyncio.set_event_loop(self.loop)
-        self.loop.run_until_complete(self._workflow())
+        try:
+            self.loop.run_until_complete(self._workflow())
+        except Exception as e:
+            logger.exception(f"Recorder workflow failed: {e}")
+        finally:
+            try:
+                self.loop.run_until_complete(self._shutdown_loop())
+            finally:
+                asyncio.set_event_loop(None)
+                self.loop.close()
+
+    async def _shutdown_loop(self) -> None:
+        """Cancel tasks left outside the main workflow before closing the loop."""
+        current = asyncio.current_task()
+        pending = [task for task in asyncio.all_tasks() if task is not current and not task.done()]
+        for task in pending:
+            task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+        await self.loop.shutdown_asyncgens()
+
+    async def _wait_for_stop(self) -> None:
+        """Wait for shutdown without relying only on a cross-thread loop wakeup."""
+        while not self._stop_requested.is_set():
+            try:
+                await asyncio.wait_for(self._stop_event.wait(), timeout=0.5)
+                return
+            except TimeoutError:
+                pass
 
     # --- HR handling ---
     def _handle_hr_sample(self, sample: HeartRateSample) -> None:
@@ -399,9 +447,10 @@ class Recorder:
 
     async def _workflow(self):
         logger.debug("Starting Recorder workflow")
-        # Run both device loops concurrently (if configured)
-        if self._stop_event._loop is not self.loop:
-            self._stop_event = asyncio.Event()
+        # Bind the stop event to the Recorder's worker loop.
+        self._stop_event = asyncio.Event()
+        if self._stop_requested.is_set():
+            self._stop_event.set()
 
         # Scan for BLE devices upfront, call bleaksport with found devices to speed up connection
         self.devices = await BleakScanner.discover(
@@ -516,7 +565,7 @@ class Recorder:
             return
 
         # Wait for explicit stop only — let each mux's internal loop handle reconnects
-        await self._stop_event.wait()
+        await self._wait_for_stop()
         logger.debug(f"Stop event received, cancelling {len(device_tasks)} device tasks")
 
         for t in device_tasks:

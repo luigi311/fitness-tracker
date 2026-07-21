@@ -1,5 +1,7 @@
 import contextlib
 import socket
+import threading
+from collections.abc import Callable
 from configparser import ConfigParser
 from dataclasses import dataclass
 from pathlib import Path
@@ -22,10 +24,12 @@ from fitness_tracker.ui_tracker import TrackerPageUI
 
 gi.require_versions({"Gtk": "4.0", "Adw": "1"})
 
-from gi.repository import Adw, Gdk, Gtk  # noqa: E402  # ty:ignore[unresolved-import]
+from gi.repository import Adw, Gdk, GLib, Gtk  # noqa: E402  # ty:ignore[unresolved-import]
 
 if TYPE_CHECKING:
     import datetime
+
+UI_THREAD_WAIT_TIMEOUT_S = 5.0
 
 
 @dataclass(frozen=True)
@@ -75,6 +79,7 @@ class FitnessAppUI(Adw.Application):
 
         self.window = None
         self.recorder: Recorder | None = None
+        self._sensor_apply_lock = threading.Lock()
         self._times: list[float] = []
         self._bpms: list[int] = []
 
@@ -117,10 +122,14 @@ class FitnessAppUI(Adw.Application):
 
     def _on_shutdown(self, _app):
         logger.debug("shutdown signal fired")
-        if self.recorder:
-            with contextlib.suppress(Exception):
-                self.recorder.stop_recording()
-            self.recorder.shutdown()
+        with self._sensor_apply_lock:
+            recorder = self.recorder
+            if recorder:
+                with contextlib.suppress(Exception):
+                    recorder.stop_recording()
+                recorder.shutdown()
+                if self.recorder is recorder:
+                    self.recorder = None
         if self.pebble_bridge:
             with contextlib.suppress(Exception):
                 self.pebble_bridge.stop()
@@ -131,6 +140,9 @@ class FitnessAppUI(Adw.Application):
         return False
 
     def show_toast(self, message: str) -> None:
+        if "BleakDeviceNotFoundError" in message:
+            logger.debug(message)
+            return
         logger.info(message)
         # Create and display a toast on our overlay
         toast = Adw.Toast.new(message)
@@ -251,63 +263,109 @@ class FitnessAppUI(Adw.Application):
         self, sport_type: SportTypesEnum = SportTypesEnum.running, trainer: bool = False
     ) -> None:
         desired = self._profile_from_sport_type(sport_type, trainer=trainer)
-        try:
-            if self.recorder:
-                if getattr(self.recorder, "sport_type", None) == sport_type:
+
+        def worker() -> None:
+            with self._sensor_apply_lock:
+                current = self.recorder
+                if current and getattr(current, "sport_type", None) == sport_type:
                     same = True
-                    same &= (desired.hr_address or "") == (
-                        getattr(self.recorder, "hr_address", "") or ""
-                    )
+                    same &= (desired.hr_address or "") == (getattr(current, "hr_address", "") or "")
                     same &= (desired.speed_address or "") == (
-                        getattr(self.recorder, "speed_address", "") or ""
+                        getattr(current, "speed_address", "") or ""
                     )
                     same &= (desired.cadence_address or "") == (
-                        getattr(self.recorder, "cadence_address", "") or ""
+                        getattr(current, "cadence_address", "") or ""
                     )
                     same &= (desired.power_address or "") == (
-                        getattr(self.recorder, "power_address", "") or ""
+                        getattr(current, "power_address", "") or ""
                     )
                     same &= (desired.trainer_address or "") == (
-                        getattr(self.recorder, "trainer_address", "") or ""
+                        getattr(current, "trainer_address", "") or ""
                     )
                     same &= (desired.trainer_machine_type or "") == (
-                        getattr(self.recorder, "trainer_machine_type", "") or ""
+                        getattr(current, "trainer_machine_type", "") or ""
                     )
                     if same:
                         logger.debug("Recorder already matches desired profile. Skipping rebuild.")
                         return
 
-                with contextlib.suppress(Exception):
-                    self.recorder.shutdown()
-        except Exception as e:
-            logger.error(e)
+                if current:
+                    try:
+                        if not current.shutdown():
+                            msg = "The current sensor worker is still shutting down; profile unchanged"
+                            logger.error(msg)
+                            self._run_on_ui_thread(lambda: self.show_toast(msg))
+                            return
+                    except Exception as e:
+                        msg = f"Unable to stop the current sensor worker: {e}"
+                        logger.error(msg)
+                        self._run_on_ui_thread(lambda: self.show_toast(msg))
+                        return
 
-        # Build recorder with sensors
-        logger.debug(f"Applying sensor settings for profile '{sport_type}': {desired}")
-        self.recorder = Recorder(
-            weight_kg=self.app_settings.personal.weight_kg,
-            sport_type=sport_type,
-            on_sample_update=self.tracker.on_sample,
-            database_url=f"sqlite:///{self.database}",
-            hr_name=desired.hr_name,
-            hr_address=desired.hr_address,
-            speed_name=desired.speed_name,
-            speed_address=desired.speed_address,
-            cadence_name=desired.cadence_name,
-            cadence_address=desired.cadence_address,
-            power_name=desired.power_name,
-            power_address=desired.power_address,
-            trainer_name=desired.trainer_name,
-            trainer_address=desired.trainer_address,
-            trainer_machine_type=desired.trainer_machine_type,
-            on_error=self.show_toast,
-            test_mode=self.test_mode,
-        )
-        if not self.test_mode:
-            # Only spin BLE loops when not in test mode
-            self.recorder.start()
+                    def clear_current() -> None:
+                        if self.recorder is current:
+                            self.recorder = None
 
-        self.tracker.update_metric_statuses()
+                    self._run_on_ui_thread(clear_current)
+
+                try:
+                    logger.debug(f"Applying sensor settings for profile '{sport_type}': {desired}")
+                    replacement = Recorder(
+                        weight_kg=self.app_settings.personal.weight_kg,
+                        sport_type=sport_type,
+                        on_sample_update=self.tracker.on_sample,
+                        database_url=f"sqlite:///{self.database}",
+                        hr_name=desired.hr_name,
+                        hr_address=desired.hr_address,
+                        speed_name=desired.speed_name,
+                        speed_address=desired.speed_address,
+                        cadence_name=desired.cadence_name,
+                        cadence_address=desired.cadence_address,
+                        power_name=desired.power_name,
+                        power_address=desired.power_address,
+                        trainer_name=desired.trainer_name,
+                        trainer_address=desired.trainer_address,
+                        trainer_machine_type=desired.trainer_machine_type,
+                        on_error=self.show_toast,
+                        test_mode=self.test_mode,
+                    )
+                except Exception as e:
+                    msg = f"Unable to build the sensor worker: {e}"
+                    logger.error(msg)
+                    self._run_on_ui_thread(lambda: self.show_toast(msg))
+                    return
+
+                def install_replacement() -> None:
+                    self.recorder = replacement
+                    if not self.test_mode:
+                        replacement.start()
+                    self.tracker.update_metric_statuses()
+
+                self._run_on_ui_thread(install_replacement)
+
+        threading.Thread(target=worker, name="sensor-profile-apply", daemon=True).start()
+
+    @staticmethod
+    def _run_on_ui_thread(callback: Callable[[], None]) -> None:
+        completed = threading.Event()
+        errors: list[Exception] = []
+
+        def invoke() -> bool:
+            try:
+                callback()
+            except Exception as e:
+                errors.append(e)
+            finally:
+                completed.set()
+            return False
+
+        GLib.idle_add(invoke)
+        if not completed.wait(timeout=UI_THREAD_WAIT_TIMEOUT_S):
+            msg = "Timed out waiting for the GTK main thread"
+            logger.error(msg)
+            raise TimeoutError(msg)
+        if errors:
+            raise errors[0]
 
     def do_activate(self):
         if not self.window:

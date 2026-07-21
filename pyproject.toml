@@ -15,6 +15,7 @@ dependencies = [
     "fitparse>=1.2.0",
     "libpebble2>=0.1.0",
     "cobble-client >= 0.1.0",
+    "dbus-fast>=3.0.2",
     "loguru>=0.7.3",
     "matplotlib>=3.10.9",
     "psycopg2-binary>=2.9.12",
