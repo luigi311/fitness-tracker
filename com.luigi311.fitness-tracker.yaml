@@ -60,7 +60,7 @@ modules:
     sources:
       - type: git
         url: https://github.com/luigi311/bleaksport
-        commit: 7d0aedacb8f116e96ba1748b8afa9f9dc4d5ee5f
+        commit: 96152e9a4e92a5cd4b6d253ef6ed8c245a5391ec
         disable-submodules: true
         disable-shallow-clone: true
 

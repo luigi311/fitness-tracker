@@ -1,9 +1,11 @@
 import asyncio
+import contextlib
 import threading
+from collections.abc import Callable, Coroutine
 from configparser import ConfigParser
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import gi
 import requests
@@ -15,8 +17,8 @@ from bleaksport import (
     discover_power_devices,
     discover_speed_cadence_devices,
 )
-from dbus_next import BusType
-from dbus_next.aio import MessageBus
+from dbus_fast import BusType
+from dbus_fast.aio import MessageBus
 from loguru import logger
 from pydantic import BaseModel
 from pydantic_file_settings import FileSettings
@@ -231,6 +233,10 @@ def fallback_settings(file: Path) -> AppSettings | None:
 class SettingsPageUI:
     def __init__(self, app):
         self.app = app
+        # Bleak keeps one BlueZ manager per event loop. Serialize the short-lived
+        # settings loops so a burst of button clicks cannot create overlapping
+        # managers and scans.
+        self._ble_scan_lock = threading.Lock()
 
         # Widgets to toggle
         self.pebble_row: Adw.ActionRow | None = None
@@ -1057,6 +1063,13 @@ class SettingsPageUI:
         self._set_action_enabled(self.row_sync, self.sync_button, db_ok)
 
     # ----- Scanners -----
+    def _run_ble_scan[T](
+        self,
+        scan_factory: Callable[[], Coroutine[Any, Any, T]],
+    ) -> T:
+        with self._ble_scan_lock:
+            return asyncio.run(scan_factory())
+
     def _fill_devices_hr(self):
         GLib.idle_add(self.hr_spinner.start)
         self.hr_row.set_subtitle("Scanning for HRM…")
@@ -1090,7 +1103,7 @@ class SettingsPageUI:
 
             GLib.idle_add(_apply)
 
-        asyncio.run(_scan())
+        self._run_ble_scan(_scan)
 
     def _fill_devices_speed_cadence(self):
         GLib.idle_add(self.speed_spinner.start)
@@ -1150,7 +1163,7 @@ class SettingsPageUI:
 
             GLib.idle_add(_apply)
 
-        asyncio.run(_scan())
+        self._run_ble_scan(_scan)
 
     def _fill_devices_power(self):
         GLib.idle_add(self.power_spinner.start)
@@ -1185,7 +1198,7 @@ class SettingsPageUI:
 
             GLib.idle_add(_apply)
 
-        asyncio.run(_scan())
+        self._run_ble_scan(_scan)
 
     def _fill_devices_trainer_hr(self, spinner, row, combo, settings_hr_name, map_attr: str):
         GLib.idle_add(spinner.start)
@@ -1204,7 +1217,7 @@ class SettingsPageUI:
 
             GLib.idle_add(_apply)
 
-        asyncio.run(_scan())
+        self._run_ble_scan(_scan)
 
     def _fill_devices_running_trainer_hr(self):
         self._fill_devices_trainer_hr(
@@ -1250,7 +1263,7 @@ class SettingsPageUI:
 
             GLib.idle_add(_apply)
 
-        asyncio.run(_scan())
+        self._run_ble_scan(_scan)
 
     def _fill_devices_running_trainer(self):
         self._fill_devices_trainer(
@@ -1279,8 +1292,9 @@ class SettingsPageUI:
 
         async def _scan() -> dict[str, str]:
             mapping: dict[str, str] = {}
-            bus = await MessageBus(bus_type=BusType.SYSTEM).connect()
+            bus = MessageBus(bus_type=BusType.SYSTEM)
             try:
+                await bus.connect()
                 introspection = await bus.introspect("org.bluez", "/")
                 proxy = bus.get_proxy_object("org.bluez", "/", introspection)
                 obj_manager = proxy.get_interface("org.freedesktop.DBus.ObjectManager")
@@ -1297,7 +1311,10 @@ class SettingsPageUI:
                     if "pebble" in name.lower():
                         mapping[name] = mac
             finally:
-                bus.disconnect()
+                with contextlib.suppress(Exception):
+                    bus.disconnect()
+                with contextlib.suppress(Exception):
+                    await bus.wait_for_disconnect()
             return mapping
 
         def _uniq_display_names(name_to_mac: dict[str, str]) -> dict[str, str]:
@@ -1325,7 +1342,7 @@ class SettingsPageUI:
                 return
 
             try:
-                name_to_mac = asyncio.run(_scan())
+                name_to_mac = self._run_ble_scan(_scan)
             except Exception as e:
                 name_to_mac = {}
                 GLib.idle_add(self.pebble_row.set_subtitle, f"Scan failed: {e}")
