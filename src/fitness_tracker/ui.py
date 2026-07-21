@@ -134,6 +134,9 @@ class FitnessAppUI(Adw.Application):
         return False
 
     def show_toast(self, message: str) -> None:
+        if "BleakDeviceNotFoundError" in message:
+            logger.debug(message)
+            return
         logger.info(message)
         # Create and display a toast on our overlay
         toast = Adw.Toast.new(message)
