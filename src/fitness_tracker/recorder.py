@@ -406,7 +406,7 @@ class Recorder:
             sample.target_power is not None
             and self._pending_trainer_target is None
             and self._erg_applied_target != sample.target_power
-            and self._trainer_target_mode != "Resistance"
+            and self._trainer_target_mode in (None, "Power")
         ):
             logger.debug(
                 f"Trainer target power {sample.target_power} watts differs from applied {self._erg_applied_target} watts, scheduling update"
@@ -792,7 +792,10 @@ class Recorder:
                         result = await mux.set_target_power(int(target))
                         # Only clear the pending value if it wasn't updated
                         # while the await was in-flight.
-                        if self._pending_trainer_target == result:
+                        if (
+                            self._trainer_target_mode == target_mode
+                            and self._pending_trainer_target == result
+                        ):
                             self._pending_trainer_target = None
                             self._erg_applied_target = result
 
@@ -801,14 +804,20 @@ class Recorder:
                         result = await mux.set_target_resistance(float(target))
                         # Only clear the pending value if it wasn't updated
                         # while the await was in-flight.
-                        if self._pending_trainer_target == result:
+                        if (
+                            self._trainer_target_mode == target_mode
+                            and self._pending_trainer_target == result
+                        ):
                             self._pending_trainer_target = None
                             self._erg_applied_target = result
 
                             return
                     elif target_mode == "Speed":
                         result = await mux.set_target_speed(float(target))
-                        if self._pending_trainer_target == result:
+                        if (
+                            self._trainer_target_mode == target_mode
+                            and self._pending_trainer_target == result
+                        ):
                             self._pending_trainer_target = None
                             self._erg_applied_target = result
                             return
@@ -819,6 +828,9 @@ class Recorder:
             await asyncio.sleep(retry_interval)
 
     def _update_erg_safeguard(self, timestamp_ms: int, power_watts: int | None):
+        if self._trainer_target_mode != "Power" and self.sport_type != SportTypesEnum.biking:
+            return
+
         window = 3000
         power_threshold = 60
 
