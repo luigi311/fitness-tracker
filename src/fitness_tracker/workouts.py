@@ -8,6 +8,26 @@ from pathlib import Path
 AUTO_SUBDIRS = ("intervals_icu",)
 
 
+def apply_target_bias(
+    values: tuple[float, float, float] | None,
+    percent: int,
+    decimal_places: int | None = None,
+) -> tuple[float, float, float] | None:
+    """Scale a resolved workout target by the trainer bias percentage."""
+    if values is None:
+        return None
+    factor = 1.0 + percent / 100.0
+    low, current, high = values
+    adjusted = low * factor, current * factor, high * factor
+    if decimal_places is None:
+        return adjusted
+    return (
+        round(adjusted[0], decimal_places),
+        round(adjusted[1], decimal_places),
+        round(adjusted[2], decimal_places),
+    )
+
+
 def _date_from_filename(p: Path) -> date | None:
     # YYYY-MM-DD Title.ext
     try:
