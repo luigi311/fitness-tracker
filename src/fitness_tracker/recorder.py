@@ -87,6 +87,7 @@ class Recorder:
         self.activity_id = None
         self._start_ms = None
         self._pending_trainer_target: int | float | None = None
+        self._trainer_target_mode: Literal["Power", "Resistance", "Speed"] | None = None
         self._erg_retry_task: Future | None = None
         self._erg_applied_target: int | float | None = None
 
@@ -405,10 +406,12 @@ class Recorder:
             sample.target_power is not None
             and self._pending_trainer_target is None
             and self._erg_applied_target != sample.target_power
+            and self._trainer_target_mode != "Resistance"
         ):
             logger.debug(
                 f"Trainer target power {sample.target_power} watts differs from applied {self._erg_applied_target} watts, scheduling update"
             )
+            self._select_trainer_target_mode("Power")
             self._pending_trainer_target = sample.target_power
             self._ensure_erg_retry_loop("Power")
 
@@ -698,6 +701,8 @@ class Recorder:
             self._erg_safeguard_saved_watts: int = watts
             return
 
+        self._select_trainer_target_mode("Power")
+
         # Store intent
         self._pending_trainer_target = watts
 
@@ -710,6 +715,7 @@ class Recorder:
     def set_target_resistance(self, resistance: float) -> None:
         """Set target resistance on the trainer if supported."""
         logger.debug(f"Trying to set target resistance to {resistance} watts")
+        self._select_trainer_target_mode("Resistance")
 
         # Store intent
         self._pending_trainer_target = resistance
@@ -720,7 +726,32 @@ class Recorder:
 
         self._ensure_erg_retry_loop("Resistance")
 
-    def _ensure_erg_retry_loop(self, target_mode: Literal["Power", "Resistance"]) -> None:
+    def set_target_speed(self, speed_kmh: float) -> None:
+        """Set target treadmill speed in kilometers per hour."""
+        logger.debug(f"Trying to set target speed to {speed_kmh} km/h")
+        self._select_trainer_target_mode("Speed")
+        self._pending_trainer_target = speed_kmh
+        if self._erg_applied_target != speed_kmh:
+            self._erg_applied_target = None
+        self._ensure_erg_retry_loop("Speed")
+
+    def _select_trainer_target_mode(
+        self,
+        target_mode: Literal["Power", "Resistance", "Speed"],
+    ) -> None:
+        if self._trainer_target_mode != target_mode:
+            self._trainer_target_mode = target_mode
+            self._pending_trainer_target = None
+            self._erg_applied_target = None
+            if self._erg_retry_task and not self._erg_retry_task.done():
+                self._erg_retry_task.cancel()
+
+    def _ensure_erg_retry_loop(
+        self,
+        target_mode: Literal["Power", "Resistance", "Speed"],
+    ) -> None:
+        self._select_trainer_target_mode(target_mode)
+
         if self.test_mode:
             return
 
@@ -732,9 +763,15 @@ class Recorder:
             self.loop,
         )
 
-    async def _erg_retry_loop(self, target_mode: Literal["Power", "Resistance"]) -> None:
+    async def _erg_retry_loop(
+        self,
+        target_mode: Literal["Power", "Resistance", "Speed"],
+    ) -> None:
         retry_interval = 2.0
         while True:
+            if self._trainer_target_mode != target_mode:
+                return
+
             # Read the current pending target at the start of each iteration.
             target = self._pending_trainer_target
             if target is None:
@@ -768,6 +805,12 @@ class Recorder:
                             self._pending_trainer_target = None
                             self._erg_applied_target = result
 
+                            return
+                    elif target_mode == "Speed":
+                        result = await mux.set_target_speed(float(target))
+                        if self._pending_trainer_target == result:
+                            self._pending_trainer_target = None
+                            self._erg_applied_target = result
                             return
 
                 except Exception as e:

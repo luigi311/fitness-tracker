@@ -222,6 +222,7 @@ class TrackerPageUI:
         view.btn_stop.connect("clicked", lambda *_: self._stop_run_and_back())
         view.btn_start.connect("clicked", lambda *_: self._begin_run_now())
         view.set_incline_callback(self._on_incline_changed)
+        view.set_trainer_target_callback(self._on_trainer_target_changed)
         if self.app.recorder and self.app.recorder.incline_percent is not None:
             view.incline_control.set_value(self.app.recorder.incline_percent)
         return view
@@ -1079,3 +1080,13 @@ class TrackerPageUI:
         self._erg_last_set_watts = None
         self._erg_last_set_ts = 0.0
         self._update_workout_guidance(self._elapsed_display_s if self._running else 0)
+
+    def _on_trainer_target_changed(self, mode: str, value: int | float) -> None:
+        if not self.app.recorder:
+            return
+        if mode == "Power":
+            self.app.recorder.set_target_power(int(value))
+        elif mode == "Resistance":
+            self.app.recorder.set_target_resistance(value)
+        else:
+            self.app.recorder.set_target_speed(round(value * 1.60934, 3))

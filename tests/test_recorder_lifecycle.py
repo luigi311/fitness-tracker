@@ -72,6 +72,37 @@ class RecorderLifecycleTests(unittest.TestCase):
         self.assertTrue(recorder.shutdown())
         self.assertTrue(recorder.loop.is_closed())
 
+    def test_trainer_target_can_switch_between_power_and_resistance(self):
+        recorder = _make_recorder(test_mode=True)
+        recorder._erg_disabled = False
+
+        recorder.set_target_power(150)
+        self.assertEqual(recorder._trainer_target_mode, "Power")
+        self.assertEqual(recorder._pending_trainer_target, 150)
+
+        recorder.set_target_resistance(25)
+        self.assertEqual(recorder._trainer_target_mode, "Resistance")
+        self.assertEqual(recorder._pending_trainer_target, 25)
+
+        recorder.set_target_speed(8.5)
+        self.assertEqual(recorder._trainer_target_mode, "Speed")
+        self.assertEqual(recorder._pending_trainer_target, 8.5)
+
+        recorder.shutdown()
+
+    def test_erg_lockout_keeps_recovery_resistance_when_power_target_arrives(self):
+        recorder = _make_recorder(test_mode=True)
+        recorder.set_target_resistance(5)
+        recorder._erg_disabled = True
+
+        recorder.set_target_power(250)
+
+        self.assertEqual(recorder._trainer_target_mode, "Resistance")
+        self.assertEqual(recorder._pending_trainer_target, 5)
+        self.assertEqual(recorder._erg_safeguard_saved_watts, 250)
+
+        recorder.shutdown()
+
 
 if __name__ == "__main__":
     unittest.main()
