@@ -16,6 +16,7 @@ from fitness_tracker.database import SportTypesEnum
 from fitness_tracker.ui_free_run import FreeRunView
 from fitness_tracker.ui_mode import IndoorOutdoorEnum, ModeSelectView
 from fitness_tracker.ui_workout import WorkoutView
+from fitness_tracker.workouts import apply_target_bias
 
 gi.require_versions({"Gtk": "4.0", "Adw": "1"})
 from gi.repository import Adw, GLib  # noqa: E402  # ty:ignore[unresolved-import]
@@ -40,6 +41,7 @@ class TrackerPageUI:
         self._last_ms: int | None = None
         self._erg_last_set_watts: int | None = None
         self._erg_last_set_ts: float = 0.0
+        self._workout_bias_percent: int = 0
 
         # lifecycle flags
         self._running = False  # true ONLY after Start is pressed
@@ -130,6 +132,7 @@ class TrackerPageUI:
         self._workout_steps = [step.resolve_power_targets(ftp_watts) for step in steps]
         self._workout = workout
         self._manual_offset_s = 0.0
+        self._workout_bias_percent = 0
         self._show_workout_page(sport_type=sport_type, in_outdoor=in_outdoor, trainer=trainer)
 
     def _show_free_from_mode(
@@ -291,6 +294,7 @@ class TrackerPageUI:
         self._active_step_index = -1
 
         self.workout_view.set_incline_callback(self._on_incline_changed)
+        self.workout_view.set_bias_callback(self._on_bias_changed)
         if self.app.recorder and self.app.recorder.incline_percent is not None:
             self.workout_view.incline_control.set_value(self.app.recorder.incline_percent)
 
@@ -483,6 +487,16 @@ class TrackerPageUI:
             return current, current, current
         return None
 
+    def _biased_target_values(
+        self,
+        target: PointTarget | RangeTarget | RampTarget | None,
+        progress: float = 0.0,
+        *,
+        decimal_places: int,
+    ) -> tuple[float, float, float] | None:
+        values = self._target_values(target, progress)
+        return apply_target_bias(values, self._workout_bias_percent, decimal_places)
+
     def _hr_target_values(
         self,
         step: WorkoutStep,
@@ -491,18 +505,20 @@ class TrackerPageUI:
         """Resolve a step's preferred HR target to an absolute BPM band."""
         absolute = self._target_values(step.heart_rate_bpm, progress)
         if absolute:
-            return absolute
+            return apply_target_bias(absolute, self._workout_bias_percent, 0)
 
         percent_max = self._target_values(step.heart_rate_percent_max, progress)
         if percent_max:
             factor = self.app.app_settings.personal.max_hr / 100.0
-            return tuple(value * factor for value in percent_max)
+            values = tuple(value * factor for value in percent_max)
+            return apply_target_bias(values, self._workout_bias_percent, 0)
 
         lthr_bpm = self.app.app_settings.personal.lthr_bpm
         percent_lthr = self._target_values(step.heart_rate_percent_lthr, progress)
         if percent_lthr and lthr_bpm:
             factor = lthr_bpm / 100.0
-            return tuple(value * factor for value in percent_lthr)
+            values = tuple(value * factor for value in percent_lthr)
+            return apply_target_bias(values, self._workout_bias_percent, 0)
 
         zone_target = step.heart_rate_zone
         if zone_target is None:
@@ -525,7 +541,8 @@ class TrackerPageUI:
                 float(zone_target.end) - float(zone_target.start)
             ) * min(1.0, max(0.0, progress))
             low, high = zone_bounds(zone)
-        return low, (low + high) / 2.0, high
+        values = low, (low + high) / 2.0, high
+        return apply_target_bias(values, self._workout_bias_percent, 0)
 
     def _update_workout_guidance(self, elapsed_s: int) -> None:
         """Compute target for a given elapsed_s (caller decides whether running or preview)."""
@@ -541,8 +558,8 @@ class TrackerPageUI:
         step_start = sum(float(s.duration_s or 0) for s in self._workout_steps[:idx])
         step_dur = float(step.duration_s or 0)
         step_progress = (t_s - step_start) / max(1.0, step_dur)
-        power = self._target_values(step.power_watts, step_progress)
-        speed = self._target_values(step.speed_mps, step_progress)
+        power = self._biased_target_values(step.power_watts, step_progress, decimal_places=0)
+        speed = self._biased_target_values(step.speed_mps, step_progress, decimal_places=1)
         heart_rate = self._hr_target_values(step, step_progress)
 
         if idx != self._active_step_index and self.app.pebble_bridge:
@@ -566,8 +583,8 @@ class TrackerPageUI:
         nxt_text = "Next: —"
         if 0 <= idx + 1 < len(self._workout_steps):
             next_step = self._workout_steps[idx + 1]
-            next_power = self._target_values(next_step.power_watts)
-            next_speed = self._target_values(next_step.speed_mps)
+            next_power = self._biased_target_values(next_step.power_watts, decimal_places=0)
+            next_speed = self._biased_target_values(next_step.speed_mps, decimal_places=1)
             next_hr = self._hr_target_values(next_step)
             next_duration_s = int(next_step.duration_s or 0)
 
@@ -846,8 +863,8 @@ class TrackerPageUI:
             step = self._workout_steps[idx]
             step_start = sum(float(item.duration_s or 0) for item in self._workout_steps[:idx])
             step_progress = (t_s - step_start) / max(1.0, float(step.duration_s or 0))
-            power = self._target_values(step.power_watts, step_progress)
-            speed = self._target_values(step.speed_mps, step_progress)
+            power = self._biased_target_values(step.power_watts, step_progress, decimal_places=0)
+            speed = self._biased_target_values(step.speed_mps, step_progress, decimal_places=1)
             heart_rate = self._hr_target_values(step, step_progress)
             if power:
                 target_power = power[1]
@@ -1055,3 +1072,10 @@ class TrackerPageUI:
         """Called by either FreeRunView or WorkoutView incline controls."""
         if self.app.recorder:
             self.app.recorder.set_incline(percent)
+
+    def _on_bias_changed(self, percent: int) -> None:
+        """Apply trainer workout difficulty changes immediately."""
+        self._workout_bias_percent = percent
+        self._erg_last_set_watts = None
+        self._erg_last_set_ts = 0.0
+        self._update_workout_guidance(self._elapsed_display_s if self._running else 0)

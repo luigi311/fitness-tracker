@@ -92,6 +92,72 @@ class InclineControl(Gtk.Frame):
         self._refresh()
 
 
+class BiasControl(Gtk.Frame):
+    """Large-touch trainer workout difficulty control."""
+
+    MIN_PCT = -50
+    MAX_PCT = 50
+    STEP = 5
+
+    def __init__(self, on_change, initial_value: int = 0) -> None:
+        super().__init__()
+        self._value = initial_value
+        self._on_change = on_change
+
+        outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        for margin in ("top", "bottom", "start", "end"):
+            getattr(outer, f"set_margin_{margin}")(8)
+
+        title = Gtk.Label(label="Workout Bias")
+        title.add_css_class("caption")
+        title.set_xalign(0.5)
+        outer.append(title)
+
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        self._btn_down = Gtk.Button(label="-")
+        self._btn_down.add_css_class("destructive-action")
+        self._btn_down.set_hexpand(True)
+        self._btn_down.set_size_request(-1, 72)
+        self._btn_down.get_child().add_css_class("title-1")
+        self._btn_down.connect("clicked", lambda *_: self._change(-self.STEP))
+
+        self._lbl_value = Gtk.Label()
+        self._lbl_value.add_css_class("title-1")
+        self._lbl_value.add_css_class("numeric")
+        self._lbl_value.set_xalign(0.5)
+        self._lbl_value.set_width_chars(7)
+        self._lbl_value.set_hexpand(True)
+        self._lbl_value.set_valign(Gtk.Align.CENTER)
+
+        self._btn_up = Gtk.Button(label="+")
+        self._btn_up.add_css_class("suggested-action")
+        self._btn_up.set_hexpand(True)
+        self._btn_up.set_size_request(-1, 72)
+        self._btn_up.get_child().add_css_class("title-1")
+        self._btn_up.connect("clicked", lambda *_: self._change(self.STEP))
+
+        row.append(self._btn_down)
+        row.append(self._lbl_value)
+        row.append(self._btn_up)
+        outer.append(row)
+        self.set_child(outer)
+        self._refresh()
+
+    def _change(self, delta: int) -> None:
+        self._value = max(self.MIN_PCT, min(self.MAX_PCT, self._value + delta))
+        self._refresh()
+        self._on_change(self._value)
+
+    def _refresh(self) -> None:
+        self._lbl_value.set_text(f"{self._value:+d}%")
+        self._btn_down.set_sensitive(self._value > self.MIN_PCT)
+        self._btn_up.set_sensitive(self._value < self.MAX_PCT)
+
+    def set_value(self, value: int) -> None:
+        self._value = max(self.MIN_PCT, min(self.MAX_PCT, int(value)))
+        self._refresh()
+
+
 # --------- TargetGauge: semi-circle with target band + needle --------- #
 class TargetGauge(Gtk.DrawingArea):
     """
@@ -546,6 +612,11 @@ class WorkoutView(Gtk.Box):
         ):
             content.append(self.incline_control)
 
+        self.bias_control = BiasControl(on_change=self._on_bias_change)
+        self.bias_control.set_hexpand(True)
+        if self.trainer:
+            content.append(self.bias_control)
+
         # Buttons
         self.btn_prev = Gtk.Button.new_with_label("◀︎ Prev")
         self.btn_prev.add_css_class("pill")
@@ -634,6 +705,13 @@ class WorkoutView(Gtk.Box):
 
     def set_incline_callback(self, cb) -> None:
         self._incline_cb = cb
+
+    def _on_bias_change(self, percent: int) -> None:
+        if callable(getattr(self, "_bias_cb", None)):
+            self._bias_cb(percent)
+
+    def set_bias_callback(self, cb) -> None:
+        self._bias_cb = cb
 
     # Timers (optional helpers)
     def set_elapsed_text(self, text: str) -> None:
