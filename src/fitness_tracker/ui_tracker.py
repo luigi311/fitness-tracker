@@ -253,6 +253,11 @@ class TrackerPageUI:
         in_outdoor: IndoorOutdoorEnum = IndoorOutdoorEnum.indoor,
         trainer: bool = False,
     ) -> None:
+        self._workout = None
+        self._workout_steps = []
+        self._manual_offset_s = 0.0
+        self._active_step_index = -1
+
         # Reconfigure recorder for this activity *before* preview/status updates.
         self.app.apply_sensor_settings(sport_type=sport_type, trainer=trainer)
         if self.app.pebble_bridge:
@@ -607,8 +612,7 @@ class TrackerPageUI:
         speed = self._biased_target_values(step.speed_mps, step_progress, decimal_places=1)
         heart_rate = self._hr_target_values(step, step_progress)
 
-        if idx != self._active_step_index and self.app.pebble_bridge:
-            self.app.pebble_bridge.update(workout_step=idx)
+        step_changed = idx != self._active_step_index
         self._active_step_index = idx
 
         # target text
@@ -623,6 +627,14 @@ class TrackerPageUI:
             tgt_txt = f"Target: {b} - {a} /mi"
         elif heart_rate:
             tgt_txt = f"Target: {round(heart_rate[0])} - {round(heart_rate[2])} bpm"
+
+        if step_changed:
+            self.app.show_workout_step_notification(
+                idx + 1,
+                len(self._workout_steps),
+                tgt_txt,
+                announce=self._running,
+            )
 
         # next preview
         nxt_text = "Next: —"
@@ -790,7 +802,7 @@ class TrackerPageUI:
                 self.update_metric_statuses()
             # Clear reference to the workout view so it is not updated off-screen
             self.workout_view = None
-            self.app.show_toast("✅ Workout complete. Continuing in Free Run…")
+            self.app.show_workout_complete_notification()
 
             if self.app.pebble_bridge:
                 self.app.pebble_bridge.update(tgt_kind=TGT_NONE)
@@ -939,7 +951,8 @@ class TrackerPageUI:
         self._sim_target_mph = None
 
         if self._workout:
-            t_s = (t_ms / 1000.0 if self._running else 0.0) + self._manual_offset_s
+            raw_t_s = (t_ms / 1000.0 if self._running else 0.0) + self._manual_offset_s
+            t_s = max(0.0, raw_t_s) if math.isfinite(raw_t_s) else 0.0
             idx, step = self._workout.get_step_at(t_s)
             if not step or idx is None:
                 return True
