@@ -29,7 +29,7 @@ from fitness_tracker.ui_tracker import TrackerPageUI
 
 gi.require_versions({"Gtk": "4.0", "Adw": "1"})
 
-from gi.repository import Adw, Gdk, GLib, Gtk  # noqa: E402  # ty:ignore[unresolved-import]
+from gi.repository import Adw, Gdk, Gio, GLib, Gtk  # noqa: E402  # ty:ignore[unresolved-import]
 
 if TYPE_CHECKING:
     import datetime
@@ -153,6 +153,34 @@ class FitnessAppUI(Adw.Application):
         # Create and display a toast on our overlay
         toast = Adw.Toast.new(message)
         self.toast_overlay.add_toast(toast)
+
+    def show_workout_step_notification(
+        self,
+        step_number: int,
+        step_count: int,
+        target_text: str,
+        *,
+        announce: bool = True,
+    ) -> None:
+        """Update step integrations and optionally announce a workout step change."""
+        if self.pebble_bridge:
+            self.pebble_bridge.update(workout_step=step_number - 1)
+        if not announce:
+            return
+
+        title = f"Workout step {step_number} of {step_count}"
+        self.show_toast(f"{title}: {target_text}")
+        notification = Gio.Notification.new(title)
+        notification.set_body(target_text)
+        self.send_notification("workout-step-change", notification)
+
+    def show_workout_complete_notification(self) -> None:
+        """Show in-app and desktop notifications when a workout completes."""
+        message = "✅ Workout complete. Continuing in Free Run…"
+        self.show_toast(message)
+        notification = Gio.Notification.new("Workout complete")
+        notification.set_body("Continuing in Free Run")
+        self.send_notification("workout-complete", notification)
 
     def apply_pebble_settings(self) -> None:
         if self.pebble_bridge:

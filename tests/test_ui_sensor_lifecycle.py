@@ -28,8 +28,22 @@ class _GLib:
         return 1
 
 
+class _Notification:
+    def __init__(self, title):
+        self.title = title
+        self.body = None
+
+    @classmethod
+    def new(cls, title):
+        return cls(title)
+
+    def set_body(self, body):
+        self.body = body
+
+
 gi.repository.Adw = types.SimpleNamespace(Application=_Application)
 gi.repository.Gdk = types.SimpleNamespace()
+gi.repository.Gio = types.SimpleNamespace(Notification=_Notification)
 gi.repository.GLib = _GLib
 gi.repository.Gtk = types.SimpleNamespace()
 
@@ -105,6 +119,58 @@ class SensorSettingsLifecycleTests(unittest.TestCase):
 
     def _run_idle(self):
         _GLib.callbacks.get(timeout=2)()
+
+    def test_workout_step_notification_uses_toast_and_desktop_notification(self):
+        app = FitnessAppUI.__new__(FitnessAppUI)
+        toasts = []
+        notifications = []
+        pebble_steps = []
+        app.show_toast = toasts.append
+        app.send_notification = lambda notification_id, notification: notifications.append(
+            (notification_id, notification),
+        )
+        app.pebble_bridge = types.SimpleNamespace(
+            update=lambda **values: pebble_steps.append(values["workout_step"]),
+        )
+
+        app.show_workout_step_notification(2, 5, "Target: 150 - 175 W")
+
+        self.assertEqual(pebble_steps, [1])
+        self.assertEqual(toasts, ["Workout step 2 of 5: Target: 150 - 175 W"])
+        self.assertEqual(notifications[0][0], "workout-step-change")
+        self.assertEqual(notifications[0][1].title, "Workout step 2 of 5")
+        self.assertEqual(notifications[0][1].body, "Target: 150 - 175 W")
+
+    def test_workout_step_preview_only_updates_pebble(self):
+        app = FitnessAppUI.__new__(FitnessAppUI)
+        pebble_steps = []
+        app.pebble_bridge = types.SimpleNamespace(
+            update=lambda **values: pebble_steps.append(values["workout_step"]),
+        )
+        app.show_toast = lambda _message: self.fail("Preview should not show a toast")
+        app.send_notification = lambda *_args: self.fail(
+            "Preview should not send a desktop notification",
+        )
+
+        app.show_workout_step_notification(1, 5, "Target: 100 W", announce=False)
+
+        self.assertEqual(pebble_steps, [0])
+
+    def test_workout_complete_uses_toast_and_desktop_notification(self):
+        app = FitnessAppUI.__new__(FitnessAppUI)
+        toasts = []
+        notifications = []
+        app.show_toast = toasts.append
+        app.send_notification = lambda notification_id, notification: notifications.append(
+            (notification_id, notification),
+        )
+
+        app.show_workout_complete_notification()
+
+        self.assertEqual(toasts, ["✅ Workout complete. Continuing in Free Run…"])
+        self.assertEqual(notifications[0][0], "workout-complete")
+        self.assertEqual(notifications[0][1].title, "Workout complete")
+        self.assertEqual(notifications[0][1].body, "Continuing in Free Run")
 
     def test_app_shutdown_waits_for_profile_apply_lock(self):
         app = self._make_app()
