@@ -16,7 +16,11 @@ from fitness_tracker.database import SportTypesEnum
 from fitness_tracker.ui_free_run import FreeRunView
 from fitness_tracker.ui_mode import IndoorOutdoorEnum, ModeSelectView
 from fitness_tracker.ui_workout import WorkoutView
-from fitness_tracker.workouts import apply_target_bias
+from fitness_tracker.workouts import (
+    apply_target_bias,
+    has_external_trainer_hr_sensor,
+    has_heart_rate_targets,
+)
 
 gi.require_versions({"Gtk": "4.0", "Adw": "1"})
 from gi.repository import Adw, GLib  # noqa: E402  # ty:ignore[unresolved-import]
@@ -274,6 +278,12 @@ class TrackerPageUI:
 
         raw = self._workout.name if self._workout else "Workout"
         nice = pretty_workout_name(raw)
+        show_trainer_target_control = (
+            trainer
+            and sport_type == SportTypesEnum.biking
+            and has_heart_rate_targets(self._workout_steps)
+            and has_external_trainer_hr_sensor(self.app.recorder)
+        )
         self.workout_view = WorkoutView(
             app=self.app,
             sport_type=sport_type,
@@ -284,6 +294,7 @@ class TrackerPageUI:
             on_start_record=self._on_workout_start_pause_clicked,
             in_outdoor=in_outdoor,
             trainer=trainer,
+            show_trainer_target_control=show_trainer_target_control,
         )
         if self.app.pebble_bridge:
             self.app.pebble_bridge.update(
@@ -296,6 +307,7 @@ class TrackerPageUI:
 
         self.workout_view.set_incline_callback(self._on_incline_changed)
         self.workout_view.set_bias_callback(self._on_bias_changed)
+        self.workout_view.set_trainer_target_callback(self._on_trainer_target_changed)
         if self.app.recorder and self.app.recorder.incline_percent is not None:
             self.workout_view.incline_control.set_value(self.app.recorder.incline_percent)
 

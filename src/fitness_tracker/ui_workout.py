@@ -6,6 +6,7 @@ import gi
 
 from fitness_tracker.database import SportTypesEnum
 from fitness_tracker.ui_mode import IndoorOutdoorEnum
+from fitness_tracker.ui_trainer_control import TrainerTargetControl
 
 gi.require_versions({"Gtk": "4.0", "Adw": "1"})
 from gi.repository import Adw, Gdk, Gtk, Pango, PangoCairo  # noqa: E402, I001  # ty:ignore[unresolved-import]
@@ -491,6 +492,7 @@ class WorkoutView(Gtk.Box):
         on_start_record,
         in_outdoor: IndoorOutdoorEnum = IndoorOutdoorEnum.indoor,
         trainer: bool = False,
+        show_trainer_target_control: bool = False,
     ) -> None:
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         self.app = app
@@ -617,6 +619,13 @@ class WorkoutView(Gtk.Box):
         if self.trainer:
             content.append(self.bias_control)
 
+        if show_trainer_target_control:
+            self.trainer_target_control = TrainerTargetControl(
+                self._on_trainer_target_change,
+                self.sport_type,
+            )
+            content.append(self.trainer_target_control)
+
         # Buttons
         self.btn_prev = Gtk.Button.new_with_label("◀︎ Prev")
         self.btn_prev.add_css_class("pill")
@@ -712,6 +721,13 @@ class WorkoutView(Gtk.Box):
 
     def set_bias_callback(self, cb) -> None:
         self._bias_cb = cb
+
+    def _on_trainer_target_change(self, mode: str, value: int | float) -> None:
+        if callable(getattr(self, "_trainer_target_cb", None)):
+            self._trainer_target_cb(mode, value)
+
+    def set_trainer_target_callback(self, cb) -> None:
+        self._trainer_target_cb = cb
 
     # Timers (optional helpers)
     def set_elapsed_text(self, text: str) -> None:
