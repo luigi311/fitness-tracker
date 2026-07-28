@@ -88,6 +88,12 @@ class TrainerTargetControl(Gtk.Frame):
         self.set_child(outer)
         self._refresh()
 
+    def set_mode_available(self, mode: str, available: bool) -> None:
+        """Show or hide an optional trainer control mode."""
+        button = self._mode_buttons.get(mode)
+        if button:
+            button.set_visible(available)
+
     def _change(self, direction: int) -> None:
         config = self.MODES[self._mode]
         value = self._values[self._mode] + direction * config["step"]

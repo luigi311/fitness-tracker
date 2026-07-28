@@ -426,13 +426,14 @@ class WorkoutView(Gtk.Box):
         on_start_record,
         in_outdoor: IndoorOutdoorEnum = IndoorOutdoorEnum.indoor,
         trainer: bool = False,
-        show_trainer_target_control: bool = False,
+        show_trainer_bias_control: bool = False,
     ) -> None:
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         self.app = app
         self.sport_type = sport_type
         self.in_outdoor = in_outdoor
         self.trainer = trainer
+        self.trainer_target_control = None
 
         for m in ("top", "bottom"):
             getattr(self, f"set_margin_{m}")(12)
@@ -551,15 +552,18 @@ class WorkoutView(Gtk.Box):
         if self.trainer:
             if self.sport_type == SportTypesEnum.running:
                 modes = ("Bias", "Speed")
-            elif show_trainer_target_control:
-                modes = ("Bias", "Power", "Resistance")
             else:
-                modes = ("Bias",)
+                modes = ("Bias", "Power", "Resistance")
             self.trainer_target_control = TrainerTargetControl(
                 self._on_trainer_target_change,
                 self.sport_type,
                 available_modes=modes,
             )
+            if self.sport_type == SportTypesEnum.biking:
+                self.trainer_target_control.set_mode_available(
+                    "Bias",
+                    show_trainer_bias_control,
+                )
             content.append(self.trainer_target_control)
 
         # Buttons
@@ -667,6 +671,10 @@ class WorkoutView(Gtk.Box):
 
     def set_trainer_target_callback(self, cb) -> None:
         self._trainer_target_cb = cb
+
+    def set_trainer_bias_available(self, available: bool) -> None:
+        if self.trainer_target_control and self.sport_type == SportTypesEnum.biking:
+            self.trainer_target_control.set_mode_available("Bias", available)
 
     # Timers (optional helpers)
     def set_elapsed_text(self, text: str) -> None:

@@ -33,6 +33,8 @@ if TYPE_CHECKING:
 
     from bleak.backends.device import BLEDevice
 
+type TrainerTargetMode = Literal["Power", "Resistance", "Speed", "HeartRate"]
+
 
 class Recorder:
     def __init__(
@@ -88,7 +90,7 @@ class Recorder:
         self.activity_id = None
         self._start_ms = None
         self._pending_trainer_target: int | float | None = None
-        self._trainer_target_mode: Literal["Power", "Resistance", "Speed"] | None = None
+        self._trainer_target_mode: TrainerTargetMode | None = None
         self._erg_retry_task: Future | None = None
         self._erg_applied_target: int | float | None = None
 
@@ -102,6 +104,7 @@ class Recorder:
         self.hr_name: str | None = hr_name
         self.hr_address: str | None = hr_address
         self.trainer_supplied_hr = trainer_supplied_hr
+        self._trainer_heart_rate_available = False
         self.hr_device: BLEDevice | None = None
         self.speed_name: str | None = speed_name
         self.speed_address: str | None = speed_address
@@ -429,6 +432,7 @@ class Recorder:
         )
 
         if self.trainer_supplied_hr and sample.heart_rate_bpm is not None:
+            self._trainer_heart_rate_available = True
             self.hr_connected = True
             self._handle_hr_sample(
                 HeartRateSample(
@@ -666,6 +670,12 @@ class Recorder:
         self.distance_connected = connected
 
         if not connected:
+            self._trainer_heart_rate_available = False
+            if self._trainer_target_mode == "HeartRate":
+                self._pending_trainer_target = None
+                if self._erg_retry_task and not self._erg_retry_task.done():
+                    self._erg_retry_task.cancel()
+                self._erg_retry_task = None
             if self.trainer_supplied_hr:
                 self.hr_connected = False
             # reset erg watts on disconnect so it applies immediately on reconnect
@@ -748,9 +758,36 @@ class Recorder:
             self._erg_applied_target = None
         self._ensure_erg_retry_loop("Speed")
 
+    def set_target_heart_rate(self, bpm: int) -> bool:
+        """Set trainer-controlled target HR when its own HR telemetry is available."""
+        if not self.trainer_heart_rate_control_available:
+            logger.debug(
+                "Ignoring target heart rate because trainer-supplied HR is not available",
+            )
+            return False
+
+        bpm = int(bpm)
+        logger.debug(f"Trying to set target heart rate to {bpm} bpm")
+        self._select_trainer_target_mode("HeartRate")
+        self._pending_trainer_target = bpm
+        if self._erg_applied_target != bpm:
+            self._erg_applied_target = None
+        self._ensure_erg_retry_loop("HeartRate")
+        return True
+
+    @property
+    def trainer_heart_rate_control_available(self) -> bool:
+        """Return whether trainer-controlled HR targets are currently safe to use."""
+        return bool(
+            self.trainer_supplied_hr
+            and self._trainer_heart_rate_available
+            and self.trainer_mux
+            and self.trainer_mux.supports_target_heart_rate,
+        )
+
     def _select_trainer_target_mode(
         self,
-        target_mode: Literal["Power", "Resistance", "Speed"],
+        target_mode: TrainerTargetMode,
     ) -> None:
         if self._trainer_target_mode != target_mode:
             self._trainer_target_mode = target_mode
@@ -763,7 +800,7 @@ class Recorder:
 
     def _ensure_erg_retry_loop(
         self,
-        target_mode: Literal["Power", "Resistance", "Speed"],
+        target_mode: TrainerTargetMode,
     ) -> None:
         self._select_trainer_target_mode(target_mode)
 
@@ -780,7 +817,7 @@ class Recorder:
 
     async def _erg_retry_loop(
         self,
-        target_mode: Literal["Power", "Resistance", "Speed"],
+        target_mode: TrainerTargetMode,
     ) -> None:
         retry_interval = 2.0
         while True:
@@ -805,37 +842,22 @@ class Recorder:
                 try:
                     if target_mode == "Power":
                         result = await mux.set_target_power(int(target))
-                        # Only clear the pending value if it wasn't updated
-                        # while the await was in-flight.
-                        if (
-                            self._trainer_target_mode == target_mode
-                            and self._pending_trainer_target == result
-                        ):
-                            self._pending_trainer_target = None
-                            self._erg_applied_target = result
-
-                            return
                     elif target_mode == "Resistance":
                         result = await mux.set_target_resistance(float(target))
-                        # Only clear the pending value if it wasn't updated
-                        # while the await was in-flight.
-                        if (
-                            self._trainer_target_mode == target_mode
-                            and self._pending_trainer_target == result
-                        ):
-                            self._pending_trainer_target = None
-                            self._erg_applied_target = result
-
-                            return
                     elif target_mode == "Speed":
                         result = await mux.set_target_speed(float(target))
-                        if (
-                            self._trainer_target_mode == target_mode
-                            and self._pending_trainer_target == result
-                        ):
-                            self._pending_trainer_target = None
-                            self._erg_applied_target = result
-                            return
+                    else:
+                        result = await mux.set_target_heart_rate(int(target))
+
+                    # Only clear the pending value if it wasn't updated
+                    # while the await was in-flight.
+                    if (
+                        self._trainer_target_mode == target_mode
+                        and self._pending_trainer_target == result
+                    ):
+                        self._pending_trainer_target = None
+                        self._erg_applied_target = result
+                        return
 
                 except Exception as e:
                     self._on_ble_error(f"ERG set failed, retrying: {e}")

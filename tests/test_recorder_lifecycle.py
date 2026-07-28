@@ -189,6 +189,58 @@ class RecorderLifecycleTests(unittest.TestCase):
         recorder._recording = False
         recorder.shutdown()
 
+    def test_target_heart_rate_requires_trainer_supplied_sample(self):
+        recorder = _make_recorder(test_mode=True, trainer_supplied_hr=True)
+        recorder.trainer_mux = types.SimpleNamespace(supports_target_heart_rate=True)
+
+        self.assertFalse(recorder.set_target_heart_rate(150))
+        self.assertFalse(recorder.trainer_heart_rate_control_available)
+        self.assertIsNone(recorder._trainer_target_mode)
+
+        recorder.inject_test_sample(TrainerSample(timestamp_ms=1000, heart_rate_bpm=145))
+
+        self.assertTrue(recorder.trainer_heart_rate_control_available)
+        self.assertTrue(recorder.set_target_heart_rate(150))
+        self.assertEqual(recorder._trainer_target_mode, "HeartRate")
+        self.assertEqual(recorder._pending_trainer_target, 150)
+        recorder.shutdown()
+
+    def test_target_heart_rate_ignores_trainer_sample_when_hrm_is_external(self):
+        recorder = _make_recorder(test_mode=True, trainer_supplied_hr=False)
+        recorder.trainer_mux = types.SimpleNamespace(supports_target_heart_rate=True)
+        recorder.inject_test_sample(TrainerSample(timestamp_ms=1000, heart_rate_bpm=145))
+
+        self.assertFalse(recorder.trainer_heart_rate_control_available)
+        self.assertFalse(recorder.set_target_heart_rate(150))
+        self.assertIsNone(recorder._trainer_target_mode)
+        recorder.shutdown()
+
+    def test_target_heart_rate_requires_trainer_control_support(self):
+        recorder = _make_recorder(test_mode=True, trainer_supplied_hr=True)
+        recorder.trainer_mux = types.SimpleNamespace(supports_target_heart_rate=False)
+        recorder.inject_test_sample(TrainerSample(timestamp_ms=1000, heart_rate_bpm=145))
+
+        self.assertFalse(recorder.trainer_heart_rate_control_available)
+        self.assertFalse(recorder.set_target_heart_rate(150))
+        self.assertIsNone(recorder._trainer_target_mode)
+        recorder.shutdown()
+
+    def test_trainer_disconnect_clears_pending_heart_rate_retry(self):
+        recorder = _make_recorder(test_mode=True, trainer_supplied_hr=True)
+        recorder.trainer_mux = types.SimpleNamespace(supports_target_heart_rate=True)
+        recorder.inject_test_sample(TrainerSample(timestamp_ms=1000, heart_rate_bpm=145))
+        self.assertTrue(recorder.set_target_heart_rate(150))
+        retry_task = Mock()
+        retry_task.done.return_value = False
+        recorder._erg_retry_task = retry_task
+
+        recorder._on_trainer_link("trainer", False, {})
+
+        self.assertIsNone(recorder._pending_trainer_target)
+        self.assertIsNone(recorder._erg_retry_task)
+        retry_task.cancel.assert_called_once_with()
+        recorder.shutdown()
+
 
 if __name__ == "__main__":
     unittest.main()

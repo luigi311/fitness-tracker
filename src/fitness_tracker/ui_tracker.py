@@ -16,10 +16,7 @@ from fitness_tracker.database import SportTypesEnum
 from fitness_tracker.ui_free_run import FreeRunView
 from fitness_tracker.ui_mode import IndoorOutdoorEnum, ModeSelectView
 from fitness_tracker.ui_workout import WorkoutView
-from fitness_tracker.workouts import (
-    apply_target_bias,
-    has_heart_rate_targets,
-)
+from fitness_tracker.workouts import apply_target_bias
 
 gi.require_versions({"Gtk": "4.0", "Adw": "1"})
 from gi.repository import Adw, GLib  # noqa: E402  # ty:ignore[unresolved-import]
@@ -44,6 +41,8 @@ class TrackerPageUI:
         self._last_ms: int | None = None
         self._erg_last_set_watts: int | None = None
         self._erg_last_set_ts: float = 0.0
+        self._hr_last_set_bpm: int | None = None
+        self._hr_last_set_ts: float = 0.0
         self._speed_last_set_kmh: float | None = None
         self._speed_last_set_ts: float = 0.0
         self._workout_trainer_control_mode = "Bias"
@@ -295,12 +294,11 @@ class TrackerPageUI:
 
         raw = self._workout.name if self._workout else "Workout"
         nice = pretty_workout_name(raw)
-        show_trainer_target_control = (
-            trainer
-            and sport_type == SportTypesEnum.biking
-            and has_heart_rate_targets(self._workout_steps)
-            and self.app.recorder
-            and not self.app.recorder.trainer_supplied_hr
+        show_trainer_bias_control = trainer and sport_type == SportTypesEnum.biking
+        self._workout_trainer_control_mode = (
+            "Bias"
+            if sport_type == SportTypesEnum.running or show_trainer_bias_control
+            else "Power"
         )
         self.workout_view = WorkoutView(
             app=self.app,
@@ -312,7 +310,7 @@ class TrackerPageUI:
             on_start_record=self._on_workout_start_pause_clicked,
             in_outdoor=in_outdoor,
             trainer=trainer,
-            show_trainer_target_control=show_trainer_target_control,
+            show_trainer_bias_control=show_trainer_bias_control,
         )
         if self.app.pebble_bridge:
             self.app.pebble_bridge.update(
@@ -431,6 +429,7 @@ class TrackerPageUI:
         self,
         sample: HeartRateSample | RunningSample | CyclingSample | TrainerSample,
     ) -> None:
+        self._update_trainer_bias_availability()
         if isinstance(sample, HeartRateSample):
             if sample.heart_rate_bpm is None:
                 return
@@ -651,6 +650,7 @@ class TrackerPageUI:
 
         # gauge update (choose power vs pace)
         if power:
+            self._hr_last_set_bpm = None
             power_lo, power_mid, power_hi = power
             self.workout_view.set_gauge_power(
                 current_w=self._rt_watts,
@@ -666,7 +666,11 @@ class TrackerPageUI:
                 )
 
             # ERG Mode controls
-            if self.app.recorder and self.app.recorder.trainer_mux:
+            if (
+                self.app.recorder
+                and self.app.recorder.trainer_mux
+                and self._workout_trainer_control_mode == "Bias"
+            ):
                 now = time.monotonic()
                 # Limit ERG commands to avoid overwhelming the trainer or BLE connection.
                 # Require a change of at least 3 watts to avoid sending redundant commands
@@ -683,6 +687,7 @@ class TrackerPageUI:
         # If a single speed target is defined
         # all of them are guaranteed to be defined due to pydantic validators
         elif speed:
+            self._hr_last_set_bpm = None
             speed_lo, speed_mid, speed_hi = speed
             self.workout_view.set_gauge_pace(
                 current_mps=self._rt_mps,
@@ -727,6 +732,21 @@ class TrackerPageUI:
                     tgt_lo=hr_lo,
                     tgt_hi=hr_hi,
                 )
+            if (
+                self.app.recorder
+                and self.app.recorder.trainer_mux
+                and self.app.recorder.trainer_heart_rate_control_available
+                and self._workout_trainer_control_mode == "Bias"
+            ):
+                target_bpm = round(hr_mid)
+                now = time.monotonic()
+                target_changed = self._hr_last_set_bpm != target_bpm
+                refresh_due = now - self._hr_last_set_ts >= 10.0
+                if (target_changed or refresh_due) and self.app.recorder.set_target_heart_rate(
+                    target_bpm,
+                ):
+                    self._hr_last_set_bpm = target_bpm
+                    self._hr_last_set_ts = now
         elif self.app.pebble_bridge:
             self.app.pebble_bridge.update(tgt_kind=TGT_NONE)
 
@@ -1156,3 +1176,12 @@ class TrackerPageUI:
             self._speed_last_set_kmh = None
             self._workout_manual_speed_kmh = round(value * 1.60934, 3)
             self.app.recorder.set_target_speed(self._workout_manual_speed_kmh)
+
+    def _update_trainer_bias_availability(self) -> None:
+        if not self.workout_view or not self.app.recorder:
+            return
+        available = (
+            self.workout_view.trainer
+            and self.workout_view.sport_type == SportTypesEnum.biking
+        )
+        self.workout_view.set_trainer_bias_available(available)
