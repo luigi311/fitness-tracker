@@ -428,7 +428,7 @@ class WorkoutView(Gtk.Box):
         trainer: bool = False,
         show_trainer_bias_control: bool = False,
     ) -> None:
-        super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=3)
         self.app = app
         self.sport_type = sport_type
         self.in_outdoor = in_outdoor
@@ -436,7 +436,7 @@ class WorkoutView(Gtk.Box):
         self.trainer_target_control = None
 
         for m in ("top", "bottom"):
-            getattr(self, f"set_margin_{m}")(12)
+            getattr(self, f"set_margin_{m}")(6)
 
         for m in ("start", "end"):
             getattr(self, f"set_margin_{m}")(4)
@@ -444,7 +444,7 @@ class WorkoutView(Gtk.Box):
         clamp = Adw.Clamp(maximum_size=820, tightening_threshold=680)
         self.append(clamp)
 
-        content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=3)
         clamp.set_child(content)
 
         # Header
@@ -508,7 +508,7 @@ class WorkoutView(Gtk.Box):
         flow.set_halign(Gtk.Align.FILL)
         flow.set_homogeneous(True)  # all cells same size
         flow.set_column_spacing(12)
-        flow.set_row_spacing(12)
+        flow.set_row_spacing(4)
         # Optional: keep items short so more fit per row
         # (each pill already hexpands; that’s okay)
         self.card_hr = _MetricPill("Heart Rate", "bpm")
