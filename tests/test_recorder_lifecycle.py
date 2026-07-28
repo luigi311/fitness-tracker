@@ -4,6 +4,7 @@ import asyncio
 import threading
 import types
 import unittest
+from unittest.mock import Mock
 
 # Recorder only needs these modules for UI callbacks. Stub them so its
 # event-loop lifecycle can be tested on headless systems without GTK typelibs.
@@ -13,11 +14,13 @@ import gi.repository
 gi.require_versions = lambda _versions: None
 gi.repository.Adw = types.SimpleNamespace()
 
+from bleaksport import TrainerSample
+
 from fitness_tracker.database import SportTypesEnum
 from fitness_tracker.recorder import Recorder
 
 
-def _make_recorder(*, test_mode=False):
+def _make_recorder(*, test_mode=False, trainer_supplied_hr=False):
     return Recorder(
         weight_kg=None,
         sport_type=SportTypesEnum.running,
@@ -34,7 +37,9 @@ def _make_recorder(*, test_mode=False):
         trainer_address=None,
         trainer_machine_type=None,
         on_error=lambda _msg: None,
+        on_sample_update=lambda _sample: None,
         test_mode=test_mode,
+        trainer_supplied_hr=trainer_supplied_hr,
     )
 
 
@@ -164,6 +169,24 @@ class RecorderLifecycleTests(unittest.TestCase):
         self.assertEqual(recorder._pending_trainer_target, 8.5)
         self.assertEqual(recorder._erg_safeguard_saved_watts, 250)
 
+        recorder.shutdown()
+
+    def test_trainer_supplied_heart_rate_is_forwarded_and_persisted(self):
+        recorder = _make_recorder(test_mode=True, trainer_supplied_hr=True)
+        recorder._recording = True
+        recorder.activity_id = 1
+        recorder.db.insert_heart_rate = Mock()
+        recorder.db.insert_running_metrics = Mock()
+
+        recorder.inject_test_sample(
+            TrainerSample(timestamp_ms=1000, heart_rate_bpm=152),
+        )
+
+        self.assertTrue(recorder.hr_connected)
+        self.assertEqual(list(recorder._bpm_history), [152])
+        recorder.db.insert_heart_rate.assert_called_once_with(1, 0, 152, None, None)
+
+        recorder._recording = False
         recorder.shutdown()
 
 

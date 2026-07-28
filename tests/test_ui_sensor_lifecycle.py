@@ -44,6 +44,7 @@ sys.modules[ui_history.__name__] = ui_history
 ui_settings = types.ModuleType("fitness_tracker.ui_settings")
 ui_settings.AppSettings = object
 ui_settings.SettingsPageUI = object
+ui_settings.TRAINER_SUPPLIED_HR_LABEL = "Trainer supplied"
 ui_settings.fallback_settings = lambda _path: None
 sys.modules[ui_settings.__name__] = ui_settings
 

@@ -31,6 +31,7 @@ gi.require_versions({"Gtk": "4.0", "Adw": "1"})
 from gi.repository import Adw, GLib, Gtk  # noqa: E402  # ty:ignore[unresolved-import]
 
 NONE_LABEL = "None"
+TRAINER_SUPPLIED_HR_LABEL = "Trainer supplied"
 
 
 class PersonalSettings(BaseModel):
@@ -987,16 +988,28 @@ class SettingsPageUI:
 
         self._combo_set_items_with_none(
             self.trainer_running_hr_combo,
-            [self.app.app_settings.trainer_running.hr_name]
-            if self.app.app_settings.trainer_running.hr_name
-            else [],
+            [
+                TRAINER_SUPPLIED_HR_LABEL,
+                *(
+                    [self.app.app_settings.trainer_running.hr_name]
+                    if self.app.app_settings.trainer_running.hr_name
+                    and self.app.app_settings.trainer_running.hr_name != TRAINER_SUPPLIED_HR_LABEL
+                    else []
+                ),
+            ],
             self.app.app_settings.trainer_running.hr_name,
         )
         self._combo_set_items_with_none(
             self.trainer_cycling_hr_combo,
-            [self.app.app_settings.trainer_cycling.hr_name]
-            if self.app.app_settings.trainer_cycling.hr_name
-            else [],
+            [
+                TRAINER_SUPPLIED_HR_LABEL,
+                *(
+                    [self.app.app_settings.trainer_cycling.hr_name]
+                    if self.app.app_settings.trainer_cycling.hr_name
+                    and self.app.app_settings.trainer_cycling.hr_name != TRAINER_SUPPLIED_HR_LABEL
+                    else []
+                ),
+            ],
             self.app.app_settings.trainer_cycling.hr_name,
         )
         self.trainer_running_hr_map = (
@@ -1080,7 +1093,7 @@ class SettingsPageUI:
         async def _scan():
             devices = await discover_heart_rate_devices(scan_timeout=5.0)
             mapping = {d.name: d.address for d in devices if d.name}
-            names = sorted(mapping.keys())
+            names = [TRAINER_SUPPLIED_HR_LABEL, *sorted(mapping.keys())]
 
             def _apply():
                 self.hr_spinner.stop()
@@ -1565,6 +1578,9 @@ class SettingsPageUI:
             if sel == NONE_LABEL or not sel:
                 self.app.app_settings.trainer_running.hr_name = None
                 self.app.app_settings.trainer_running.hr_address = None
+            elif sel == TRAINER_SUPPLIED_HR_LABEL:
+                self.app.app_settings.trainer_running.hr_name = TRAINER_SUPPLIED_HR_LABEL
+                self.app.app_settings.trainer_running.hr_address = None
             else:
                 self.app.app_settings.trainer_running.hr_name = sel
                 self.app.app_settings.trainer_running.hr_address = self.trainer_running_hr_map.get(
@@ -1593,6 +1609,9 @@ class SettingsPageUI:
             sel = self.trainer_cycling_hr_combo.get_active_text()
             if sel == NONE_LABEL or not sel:
                 self.app.app_settings.trainer_cycling.hr_name = None
+                self.app.app_settings.trainer_cycling.hr_address = None
+            elif sel == TRAINER_SUPPLIED_HR_LABEL:
+                self.app.app_settings.trainer_cycling.hr_name = TRAINER_SUPPLIED_HR_LABEL
                 self.app.app_settings.trainer_cycling.hr_address = None
             else:
                 self.app.app_settings.trainer_cycling.hr_name = sel

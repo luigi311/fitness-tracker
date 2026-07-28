@@ -58,6 +58,7 @@ class Recorder:
         ]
         | None = None,
         test_mode: bool = False,
+        trainer_supplied_hr: bool = False,
     ):
         logger.debug(f"Initializing Recorder with sport_type {sport_type}")
         logger.debug(f"HR sensor: name={hr_name}, address={hr_address}")
@@ -100,6 +101,7 @@ class Recorder:
         # Sensors
         self.hr_name: str | None = hr_name
         self.hr_address: str | None = hr_address
+        self.trainer_supplied_hr = trainer_supplied_hr
         self.hr_device: BLEDevice | None = None
         self.speed_name: str | None = speed_name
         self.speed_address: str | None = speed_address
@@ -426,6 +428,15 @@ class Recorder:
             update={"timestamp_ms": delta_ms, "distance_m": adjusted_distance_m},
         )
 
+        if self.trainer_supplied_hr and sample.heart_rate_bpm is not None:
+            self.hr_connected = True
+            self._handle_hr_sample(
+                HeartRateSample(
+                    timestamp_ms=sample.timestamp_ms,
+                    heart_rate_bpm=sample.heart_rate_bpm,
+                ),
+            )
+
         # Update UI
         GLib.idle_add(self.on_sample, cleaned_sample)
 
@@ -655,6 +666,8 @@ class Recorder:
         self.distance_connected = connected
 
         if not connected:
+            if self.trainer_supplied_hr:
+                self.hr_connected = False
             # reset erg watts on disconnect so it applies immediately on reconnect
             self._erg_applied_target = None
 
