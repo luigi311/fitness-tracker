@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import ClassVar
+
 import gi
 
 from fitness_tracker.database import SportTypesEnum
@@ -11,7 +13,7 @@ from gi.repository import Gtk  # noqa: E402  # ty:ignore[unresolved-import]
 class TrainerTargetControl(Gtk.Frame):
     """Touch-friendly control for selecting and adjusting trainer targets."""
 
-    MODE_CONFIGS = {
+    MODE_CONFIGS: ClassVar[dict[str, dict[str, int | float | str]]] = {
         "Bias": {"minimum": -50, "maximum": 50, "step": 5, "unit": "%"},
         "Power": {"minimum": 0, "maximum": 2000, "step": 5, "unit": "W"},
         "Resistance": {"minimum": 0, "maximum": 100, "step": 1, "unit": "%"},

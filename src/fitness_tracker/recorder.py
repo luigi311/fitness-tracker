@@ -756,8 +756,10 @@ class Recorder:
             self._trainer_target_mode = target_mode
             self._pending_trainer_target = None
             self._erg_applied_target = None
-            if self._erg_retry_task and not self._erg_retry_task.done():
-                self._erg_retry_task.cancel()
+            previous_retry = self._erg_retry_task
+            self._erg_retry_task = None
+            if previous_retry and not previous_retry.done():
+                previous_retry.cancel()
 
     def _ensure_erg_retry_loop(
         self,
