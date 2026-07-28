@@ -1,4 +1,9 @@
-from fitness_tracker.workouts import apply_target_bias
+from types import SimpleNamespace
+
+from fitness_tracker.workouts import (
+    apply_target_bias,
+    has_heart_rate_targets,
+)
 
 
 def test_workout_bias_scales_full_power_target_range() -> None:
@@ -17,3 +22,9 @@ def test_workout_bias_preserves_fractional_speed_to_tenths() -> None:
     values = apply_target_bias((3.3, 3.3, 3.3), 5, decimal_places=1)
 
     assert values == (3.5, 3.5, 3.5)
+
+
+def test_detects_heart_rate_target() -> None:
+    steps = [SimpleNamespace(heart_rate_bpm=SimpleNamespace(value=150))]
+
+    assert has_heart_rate_targets(steps)

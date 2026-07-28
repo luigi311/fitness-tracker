@@ -8,6 +8,17 @@ from pathlib import Path
 AUTO_SUBDIRS = ("intervals_icu",)
 
 
+def has_heart_rate_targets(steps) -> bool:
+    """Return whether any workout step contains a supported heart-rate target."""
+    fields = (
+        "heart_rate_bpm",
+        "heart_rate_percent_max",
+        "heart_rate_percent_lthr",
+        "heart_rate_zone",
+    )
+    return any(any(getattr(step, field, None) is not None for field in fields) for step in steps)
+
+
 def apply_target_bias(
     values: tuple[float, float, float] | None,
     percent: int,

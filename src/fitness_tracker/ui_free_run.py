@@ -8,6 +8,7 @@ from matplotlib.figure import Figure
 
 from fitness_tracker.database import SportTypesEnum
 from fitness_tracker.ui_mode import IndoorOutdoorEnum
+from fitness_tracker.ui_trainer_control import TrainerTargetControl
 from fitness_tracker.ui_workout import InclineControl
 
 gi.require_versions({"Gtk": "4.0", "Adw": "1"})
@@ -169,6 +170,13 @@ class FreeRunView(Gtk.Box):
         ):
             grid.attach(self.incline_control, 0, 4, 2, 1)
 
+        self.trainer_target_control = TrainerTargetControl(
+            self._on_trainer_target_change,
+            self.sport_type,
+        )
+        if self.trainer:
+            grid.attach(self.trainer_target_control, 0, 4, 2, 1)
+
         self.append(grid)
 
         # Chart
@@ -281,6 +289,14 @@ class FreeRunView(Gtk.Box):
     def set_incline_callback(self, cb) -> None:
         """Register a callable(percent: float) to fire on every incline change."""
         self._incline_cb = cb
+
+    def _on_trainer_target_change(self, mode: str, value: int | float) -> None:
+        if callable(getattr(self, "_trainer_target_cb", None)):
+            self._trainer_target_cb(mode, value)
+
+    def set_trainer_target_callback(self, cb) -> None:
+        """Register a callable(mode, value) for trainer target changes."""
+        self._trainer_target_cb = cb
 
     # ---- style helpers
     def _style_hr_axis(self) -> None:

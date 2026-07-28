@@ -19,7 +19,12 @@ from xdg_base_dirs import (
 from fitness_tracker.database import SportTypesEnum
 from fitness_tracker.recorder import Recorder
 from fitness_tracker.ui_history import HistoryPageUI
-from fitness_tracker.ui_settings import AppSettings, SettingsPageUI, fallback_settings
+from fitness_tracker.ui_settings import (
+    TRAINER_SUPPLIED_HR_LABEL,
+    AppSettings,
+    SettingsPageUI,
+    fallback_settings,
+)
 from fitness_tracker.ui_tracker import TrackerPageUI
 
 gi.require_versions({"Gtk": "4.0", "Adw": "1"})
@@ -35,8 +40,9 @@ UI_THREAD_WAIT_TIMEOUT_S = 5.0
 @dataclass(frozen=True)
 class SensorProfile:
     # Common HRM (optional)
-    hr_name: str = ""
-    hr_address: str = ""
+    hr_name: str | None = None
+    hr_address: str | None = None
+    trainer_supplied_hr: bool = False
 
     # “speed/cadence/power” addresses (meaning depends on profile)
     speed_name: str = ""
@@ -197,9 +203,17 @@ class FitnessAppUI(Adw.Application):
         if trainer:
             if sport_type == SportTypesEnum.running:
                 logger.debug("Using trainer running profile")
+                trainer_supplied_hr = (
+                    self.app_settings.trainer_running.hr_name == TRAINER_SUPPLIED_HR_LABEL
+                )
                 return SensorProfile(
-                    hr_name=self.app_settings.trainer_running.hr_name,
-                    hr_address=self.app_settings.trainer_running.hr_address,
+                    hr_name=None
+                    if trainer_supplied_hr
+                    else self.app_settings.trainer_running.hr_name,
+                    hr_address=None
+                    if trainer_supplied_hr
+                    else self.app_settings.trainer_running.hr_address,
+                    trainer_supplied_hr=trainer_supplied_hr,
                     speed_name="",  # trainer doesn't use speed/cad/power sensors
                     speed_address="",
                     cadence_name="",
@@ -212,9 +226,17 @@ class FitnessAppUI(Adw.Application):
                 )
             if sport_type == SportTypesEnum.biking:
                 logger.debug("Using trainer biking profile")
+                trainer_supplied_hr = (
+                    self.app_settings.trainer_cycling.hr_name == TRAINER_SUPPLIED_HR_LABEL
+                )
                 return SensorProfile(
-                    hr_name=self.app_settings.trainer_cycling.hr_name,
-                    hr_address=self.app_settings.trainer_cycling.hr_address,
+                    hr_name=None
+                    if trainer_supplied_hr
+                    else self.app_settings.trainer_cycling.hr_name,
+                    hr_address=None
+                    if trainer_supplied_hr
+                    else self.app_settings.trainer_cycling.hr_address,
+                    trainer_supplied_hr=trainer_supplied_hr,
                     speed_name="",  # trainer doesn't use speed/cad/power sensors
                     speed_address="",
                     cadence_name="",
@@ -270,6 +292,11 @@ class FitnessAppUI(Adw.Application):
                 if current and getattr(current, "sport_type", None) == sport_type:
                     same = True
                     same &= (desired.hr_address or "") == (getattr(current, "hr_address", "") or "")
+                    same &= desired.trainer_supplied_hr == getattr(
+                        current,
+                        "trainer_supplied_hr",
+                        False,
+                    )
                     same &= (desired.speed_address or "") == (
                         getattr(current, "speed_address", "") or ""
                     )
@@ -326,6 +353,7 @@ class FitnessAppUI(Adw.Application):
                         trainer_name=desired.trainer_name,
                         trainer_address=desired.trainer_address,
                         trainer_machine_type=desired.trainer_machine_type,
+                        trainer_supplied_hr=desired.trainer_supplied_hr,
                         on_error=self.show_toast,
                         test_mode=self.test_mode,
                     )
