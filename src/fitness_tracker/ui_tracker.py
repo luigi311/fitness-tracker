@@ -18,7 +18,6 @@ from fitness_tracker.ui_mode import IndoorOutdoorEnum, ModeSelectView
 from fitness_tracker.ui_workout import WorkoutView
 from fitness_tracker.workouts import (
     apply_target_bias,
-    has_external_trainer_hr_sensor,
     has_heart_rate_targets,
 )
 
@@ -45,6 +44,10 @@ class TrackerPageUI:
         self._last_ms: int | None = None
         self._erg_last_set_watts: int | None = None
         self._erg_last_set_ts: float = 0.0
+        self._speed_last_set_kmh: float | None = None
+        self._speed_last_set_ts: float = 0.0
+        self._workout_trainer_control_mode = "Bias"
+        self._workout_manual_speed_kmh: float | None = None
         self._workout_bias_percent: int = 0
 
         # lifecycle flags
@@ -137,6 +140,8 @@ class TrackerPageUI:
         self._workout = workout
         self._manual_offset_s = 0.0
         self._workout_bias_percent = 0
+        self._workout_trainer_control_mode = "Bias"
+        self._workout_manual_speed_kmh = None
         self._show_workout_page(sport_type=sport_type, in_outdoor=in_outdoor, trainer=trainer)
 
     def _show_free_from_mode(
@@ -161,6 +166,14 @@ class TrackerPageUI:
             # Reset erg throttle so target power re-applies immediately
             self._erg_last_set_watts = None
             self._erg_last_set_ts = 0.0
+            self._speed_last_set_kmh = None
+            self._speed_last_set_ts = 0.0
+            if (
+                self._workout_trainer_control_mode == "Speed"
+                and self._workout_manual_speed_kmh is not None
+                and self.app.recorder
+            ):
+                self.app.recorder.set_target_speed(self._workout_manual_speed_kmh)
             if self.workout_view:
                 self.workout_view.set_paused(False)
         else:
@@ -169,8 +182,12 @@ class TrackerPageUI:
             self._workout_paused = True
             # Drop ERG target so user isn't fighting the trainer
             if self.app.recorder and self.app.recorder.trainer_mux:
-                self.app.recorder.set_target_power(0)
+                if self.workout_view and self.workout_view.sport_type == SportTypesEnum.running:
+                    self.app.recorder.set_target_speed(0)
+                else:
+                    self.app.recorder.set_target_power(0)
                 self._erg_last_set_watts = None
+                self._speed_last_set_kmh = None
             if self.workout_view:
                 self.workout_view.set_paused(True)
 
@@ -282,7 +299,8 @@ class TrackerPageUI:
             trainer
             and sport_type == SportTypesEnum.biking
             and has_heart_rate_targets(self._workout_steps)
-            and has_external_trainer_hr_sensor(self.app.recorder)
+            and self.app.recorder
+            and not self.app.recorder.trainer_supplied_hr
         )
         self.workout_view = WorkoutView(
             app=self.app,
@@ -333,6 +351,8 @@ class TrackerPageUI:
         self._last_ms = 0
         self._erg_last_set_watts = None
         self._erg_last_set_ts = 0.0
+        self._speed_last_set_kmh = None
+        self._speed_last_set_ts = 0.0
 
         if self.app.recorder:
             self.app.recorder.start_recording()
@@ -364,14 +384,27 @@ class TrackerPageUI:
             GLib.source_remove(self._test_source)
             self._test_source = None
 
+        trainer_sport_type = (
+            self.workout_view.sport_type
+            if self.workout_view
+            else self.free_view.sport_type
+            if self.free_view
+            else None
+        )
+
         # release page refs and go home
         self.free_view = None
         self.workout_view = None
 
         self._erg_last_set_watts = None
         self._erg_last_set_ts = 0.0
+        self._speed_last_set_kmh = None
+        self._speed_last_set_ts = 0.0
         if self.app.recorder and self.app.recorder.trainer_mux:
-            self.app.recorder.set_target_power(0)
+            if trainer_sport_type == SportTypesEnum.running:
+                self.app.recorder.set_target_speed(0)
+            else:
+                self.app.recorder.set_target_power(0)
 
         self._pop_to_mode()
 
@@ -665,6 +698,21 @@ class TrackerPageUI:
                     tgt_lo=speed_lo,
                     tgt_hi=speed_hi,
                 )
+            if (
+                self.app.recorder
+                and self.app.recorder.trainer_mux
+                and self.workout_view.trainer
+                and self.workout_view.sport_type == SportTypesEnum.running
+                and self._workout_trainer_control_mode == "Bias"
+            ):
+                target_kmh = round(speed_mid * 3.6, 1)
+                now = time.monotonic()
+                if self._speed_last_set_kmh != target_kmh and (
+                    self._speed_last_set_kmh is None or now - self._speed_last_set_ts > 2.0
+                ):
+                    self.app.recorder.set_target_speed(target_kmh)
+                    self._speed_last_set_kmh = target_kmh
+                    self._speed_last_set_ts = now
         elif heart_rate:
             hr_lo, hr_mid, hr_hi = heart_rate
             self.workout_view.set_gauge_hr(
@@ -1088,17 +1136,23 @@ class TrackerPageUI:
 
     def _on_bias_changed(self, percent: int) -> None:
         """Apply trainer workout difficulty changes immediately."""
+        self._workout_trainer_control_mode = "Bias"
         self._workout_bias_percent = percent
         self._erg_last_set_watts = None
         self._erg_last_set_ts = 0.0
+        self._speed_last_set_kmh = None
+        self._speed_last_set_ts = 0.0
         self._update_workout_guidance(self._elapsed_display_s if self._running else 0)
 
     def _on_trainer_target_changed(self, mode: str, value: int | float) -> None:
         if not self.app.recorder:
             return
+        self._workout_trainer_control_mode = mode
         if mode == "Power":
             self.app.recorder.set_target_power(int(value))
         elif mode == "Resistance":
             self.app.recorder.set_target_resistance(value)
         else:
-            self.app.recorder.set_target_speed(round(value * 1.60934, 3))
+            self._speed_last_set_kmh = None
+            self._workout_manual_speed_kmh = round(value * 1.60934, 3)
+            self.app.recorder.set_target_speed(self._workout_manual_speed_kmh)

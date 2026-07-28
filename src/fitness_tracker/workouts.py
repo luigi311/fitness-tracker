@@ -19,17 +19,6 @@ def has_heart_rate_targets(steps) -> bool:
     return any(any(getattr(step, field, None) is not None for field in fields) for step in steps)
 
 
-def has_external_trainer_hr_sensor(recorder) -> bool:
-    """Return whether the configured trainer HR source is a separate device."""
-    if not recorder:
-        return False
-    if recorder.hr_address and recorder.trainer_address:
-        return recorder.hr_address != recorder.trainer_address
-    if recorder.hr_name and recorder.trainer_name:
-        return recorder.hr_name != recorder.trainer_name
-    return False
-
-
 def apply_target_bias(
     values: tuple[float, float, float] | None,
     percent: int,

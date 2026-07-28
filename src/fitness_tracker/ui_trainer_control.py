@@ -9,46 +9,52 @@ from gi.repository import Gtk  # noqa: E402  # ty:ignore[unresolved-import]
 
 
 class TrainerTargetControl(Gtk.Frame):
-    """Sport-specific trainer target control."""
+    """Touch-friendly control for selecting and adjusting trainer targets."""
 
-    BIKE_MODES = {
+    MODE_CONFIGS = {
+        "Bias": {"minimum": -50, "maximum": 50, "step": 5, "unit": "%"},
         "Power": {"minimum": 0, "maximum": 2000, "step": 5, "unit": "W"},
         "Resistance": {"minimum": 0, "maximum": 100, "step": 1, "unit": "%"},
-    }
-    RUN_MODES = {
         "Speed": {"minimum": 0.0, "maximum": 15.0, "step": 0.1, "unit": "mph"},
     }
 
-    def __init__(self, on_change, sport_type: SportTypesEnum) -> None:
+    def __init__(
+        self,
+        on_change,
+        sport_type: SportTypesEnum,
+        *,
+        available_modes: tuple[str, ...] | None = None,
+    ) -> None:
         super().__init__()
         self._on_change = on_change
-        self.MODES = self.BIKE_MODES if sport_type == SportTypesEnum.biking else self.RUN_MODES
-        self._mode = "Power" if sport_type == SportTypesEnum.biking else "Speed"
-        self._values = {"Power": 100, "Resistance": 2, "Speed": 3.0}
+        if available_modes is None:
+            available_modes = (
+                ("Power", "Resistance") if sport_type == SportTypesEnum.biking else ("Speed",)
+            )
+        self.MODES = {mode: self.MODE_CONFIGS[mode] for mode in available_modes}
+        self._mode = available_modes[0]
+        self._values = {"Bias": 0, "Power": 100, "Resistance": 2, "Speed": 3.0}
+        self._mode_buttons = {}
 
         outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
         for margin in ("top", "bottom", "start", "end"):
             getattr(outer, f"set_margin_{margin}")(8)
 
-        if sport_type == SportTypesEnum.biking:
+        if len(available_modes) > 1:
             mode_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
             mode_row.set_homogeneous(True)
             mode_row.set_hexpand(True)
-
-            self._power_mode_btn = Gtk.Button(label="Power")
-            self._power_mode_btn.set_size_request(-1, 56)
-            self._power_mode_btn.add_css_class("suggested-action")
-
-            self._resistance_mode_btn = Gtk.Button(label="Resistance")
-            self._resistance_mode_btn.set_size_request(-1, 56)
-
-            self._power_mode_btn.connect("clicked", self._on_mode_clicked, "Power")
-            self._resistance_mode_btn.connect("clicked", self._on_mode_clicked, "Resistance")
-            mode_row.append(self._power_mode_btn)
-            mode_row.append(self._resistance_mode_btn)
+            for mode in available_modes:
+                button = Gtk.Button(label=mode)
+                button.set_size_request(-1, 56)
+                if mode == self._mode:
+                    button.add_css_class("suggested-action")
+                button.connect("clicked", self._on_mode_clicked, mode)
+                self._mode_buttons[mode] = button
+                mode_row.append(button)
             outer.append(mode_row)
         else:
-            title = Gtk.Label(label="Speed")
+            title = Gtk.Label(label=self._mode)
             title.add_css_class("caption")
             outer.append(title)
 
@@ -92,10 +98,8 @@ class TrainerTargetControl(Gtk.Frame):
         if mode == self._mode:
             return
         self._mode = mode
-        self._power_mode_btn.set_css_classes(["suggested-action"] if mode == "Power" else [])
-        self._resistance_mode_btn.set_css_classes(
-            ["suggested-action"] if mode == "Resistance" else [],
-        )
+        for button_mode, button in self._mode_buttons.items():
+            button.set_css_classes(["suggested-action"] if button_mode == mode else [])
         self._refresh()
         self._on_change(self._mode, self._values[self._mode])
 
