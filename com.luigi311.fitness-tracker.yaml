@@ -60,7 +60,7 @@ modules:
     sources:
       - type: git
         url: https://github.com/luigi311/bleaksport
-        commit: 96152e9a4e92a5cd4b6d253ef6ed8c245a5391ec
+        commit: 4fb34ff69dbab6ec160a130a476fd95b2f682d1e
         disable-submodules: true
         disable-shallow-clone: true
 
@@ -84,7 +84,7 @@ modules:
     sources:
       - type: git
         url: https://github.com/luigi311/cobble
-        commit: 7615a42292b1a71801b24a0f2cd7f450e2907990
+        commit: 182e1d09ac445a8d493faa32c51c7461e68aac4b
         disable-submodules: true
         disable-shallow-clone: true
 
