@@ -719,6 +719,9 @@ class TrackerPageUI:
                     self._speed_last_set_kmh = target_kmh
                     self._speed_last_set_ts = now
         elif heart_rate:
+            if self._hr_last_set_bpm is None:
+                self._erg_last_set_watts = None
+                self._speed_last_set_kmh = None
             hr_lo, hr_mid, hr_hi = heart_rate
             self.workout_view.set_gauge_hr(
                 current_bpm=self._last_bpm,
