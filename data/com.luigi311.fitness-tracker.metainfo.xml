@@ -66,6 +66,29 @@
         type="desktop-id"
     >com.luigi311.fitness-tracker.desktop</launchable>
     <releases>
+        <release version="4.0.0" date="2026-07-30">
+            <url
+                type="details"
+            >https://github.com/luigi311/fitness-tracker/releases/tag/v4.0.0</url>
+            <description>
+                <p>
+                    Features
+                </p>
+                <ul>
+                    <li>Workout Bias controls</li>
+                    <li>Workout/Freeride ERG Power/Resistance controls</li>
+                    <li>Heart Rate target workouts</li>
+                    <li>Support Pebble BLE via Cobble</li>
+                </ul>
+                <p>
+                    Bug Fixes
+                </p>
+                <ul>
+                    <li>Fix dbus sessions runaway</li>
+                </ul>
+
+            </description>
+        </release>
         <release version="3.0.2" date="2026-05-10">
             <url
                 type="details"
