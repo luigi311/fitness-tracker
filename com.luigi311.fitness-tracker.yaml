@@ -15,12 +15,6 @@ finish-args:
   - --allow=bluetooth
   - --system-talk-name=org.bluez
 
-  - --filesystem=xdg-data:create
-  - --filesystem=xdg-config:create
-
-  - --own-name=com.luigi311.fitness-tracker
-  - --talk-name=com.luigi311.fitness-tracker
-
   # Talk to the cobble daemon where available
   - --talk-name=org.cobble.Daemon
 
@@ -49,8 +43,6 @@ modules:
       - type: git
         url: https://github.com/luigi311/python-pyftms
         commit: b72174016b6fc8dc70f2af82da2a8f0014e745f6
-        disable-submodules: true
-        disable-shallow-clone: true
 
   - name: python3-bleaksport
     buildsystem: simple
@@ -61,8 +53,6 @@ modules:
       - type: git
         url: https://github.com/luigi311/bleaksport
         commit: 4fb34ff69dbab6ec160a130a476fd95b2f682d1e
-        disable-submodules: true
-        disable-shallow-clone: true
 
   - name: python3-libpebble2
     buildsystem: simple
@@ -73,8 +63,6 @@ modules:
       - type: git
         url: https://github.com/luigi311/libpebble2
         commit: be74eea06da089b79cd59ceb1ffeb62dbe515de6
-        disable-submodules: true
-        disable-shallow-clone: true
 
   - name: python3-cobble-client
     buildsystem: simple
@@ -85,8 +73,6 @@ modules:
       - type: git
         url: https://github.com/luigi311/cobble
         commit: 182e1d09ac445a8d493faa32c51c7461e68aac4b
-        disable-submodules: true
-        disable-shallow-clone: true
 
   - name: python3-workout-parser
     buildsystem: simple
@@ -96,9 +82,7 @@ modules:
     sources:
       - type: git
         url: https://github.com/luigi311/workout_parser
-        commit: 417be9cdfe0e3e21e20ca3b0b488ec06dc25ffc3
-        disable-submodules: true
-        disable-shallow-clone: true
+        commit: 0bb1d9c81af01cdbbfb0665367258f75d1f3fb00
 
   - name: fitness-tracker
     buildsystem: simple

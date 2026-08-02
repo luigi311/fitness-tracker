@@ -1602,7 +1602,7 @@ wheels = [
 [[package]]
 name = "workout-parser"
 version = "0.2.0"
-source = { git = "https://github.com/luigi311/workout_parser?branch=main#417be9cdfe0e3e21e20ca3b0b488ec06dc25ffc3" }
+source = { git = "https://github.com/luigi311/workout_parser?branch=main#0bb1d9c81af01cdbbfb0665367258f75d1f3fb00" }
 dependencies = [
     { name = "fitparse" },
     { name = "pydantic" },
