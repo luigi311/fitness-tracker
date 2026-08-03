@@ -393,6 +393,7 @@ class ModeSelectView(Gtk.Box):
         # repopulate
         for workout, _ in self._entries:
             row = Adw.ActionRow()
+            row.set_use_markup(False)
             row.set_title(workout.name)
 
             # Workout information
