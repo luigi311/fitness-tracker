@@ -66,6 +66,20 @@
         type="desktop-id"
     >com.luigi311.fitness-tracker.desktop</launchable>
     <releases>
+        <release version="4.0.1" date="2026-08-03">
+            <url
+                type="details"
+            >https://github.com/luigi311/fitness-tracker/releases/tag/v4.0.1</url>
+            <description>
+                <p>
+                    Bug Fixes
+                </p>
+                <ul>
+                    <li>Fix passive rest reading as 1000%</li>
+                    <li>Fix workouts with special characters not rendering</li>
+                </ul>
+            </description>
+        </release>
         <release version="4.0.0" date="2026-07-30">
             <url
                 type="details"
@@ -86,7 +100,6 @@
                 <ul>
                     <li>Fix dbus sessions runaway</li>
                 </ul>
-
             </description>
         </release>
         <release version="3.0.2" date="2026-05-10">
