@@ -47,21 +47,13 @@ def _format_time_remaining(seconds: float) -> str:
     return f"{minutes:02d}:{remainder:02d}"
 
 
-def _format_distance_duration(meters: float) -> str:
+def _format_distance(meters: float, *, include_whole_km_decimal: bool) -> str:
     """Format a distance in metres below one kilometre and kilometres above it."""
     meters = max(0.0, float(meters))
     if meters < _DISTANCE_KM_THRESHOLD_M:
         return f"{_format_number(meters)} m"
-    return f"{_format_number(meters / _DISTANCE_KM_THRESHOLD_M)} km"
-
-
-def _format_summary_distance(meters: float) -> str:
-    """Format a workout total distance with one decimal for whole kilometres."""
-    meters = max(0.0, float(meters))
-    if meters < _DISTANCE_KM_THRESHOLD_M:
-        return f"{_format_number(meters)} m"
     kilometers = _format_number(meters / _DISTANCE_KM_THRESHOLD_M)
-    if "." not in kilometers:
+    if include_whole_km_decimal and "." not in kilometers:
         kilometers += ".0"
     return f"{kilometers} km"
 
@@ -72,7 +64,7 @@ def format_step_duration(step: WorkoutStep) -> str:
     if isinstance(duration, TimeDuration):
         return _format_time_duration(duration.seconds)
     if isinstance(duration, DistanceDuration):
-        return _format_distance_duration(duration.meters)
+        return _format_distance(duration.meters, include_whole_km_decimal=False)
     if isinstance(duration, OpenDuration):
         return "Open"
     return str(duration)
@@ -83,7 +75,7 @@ def format_step_remaining(snapshot: WorkoutExecutionSnapshot) -> str:
     if snapshot.remaining_seconds is not None:
         return _format_time_remaining(snapshot.remaining_seconds)
     if snapshot.remaining_meters is not None:
-        return _format_distance_duration(snapshot.remaining_meters)
+        return _format_distance(snapshot.remaining_meters, include_whole_km_decimal=False)
     return "—"
 
 
@@ -104,7 +96,7 @@ def format_workout_summary(workout: Workout) -> str:
     if total_seconds:
         parts.append(_format_time_duration(total_seconds))
     if total_meters:
-        parts.append(_format_summary_distance(total_meters))
+        parts.append(_format_distance(total_meters, include_whole_km_decimal=True))
     if has_open_duration:
         parts.append("Open")
     return " + ".join(parts)
