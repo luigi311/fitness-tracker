@@ -891,11 +891,18 @@ class TrackerPageUI:
         self._erg_last_set_ts = 0.0
         self._speed_last_set_kmh = None
         self._speed_last_set_ts = 0.0
+        self._hr_last_set_bpm = None
+        self._hr_last_set_ts = 0.0
 
         self._update_workout_guidance(snapshot)
         self._workout_snapshot = replace(snapshot, step_changed=False)
-        if self.workout_view and not self._running and not snapshot.completed:
-            self.workout_view.set_progress(snapshot.progress)
+        if self.workout_view and not snapshot.completed:
+            if not self._running:
+                self.workout_view.set_progress(snapshot.progress)
+            if snapshot.remaining_seconds is not None:
+                self.workout_view.set_step_remaining_text(
+                    self._fmt_mmss(int(max(0.0, snapshot.remaining_seconds))),
+                )
 
     # ---- helpers
     def _set_cards(
