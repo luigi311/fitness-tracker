@@ -1,7 +1,11 @@
 import pytest
 from workout_parser import DistanceDuration, OpenDuration, TimeDuration, WorkoutStep
 
-from fitness_tracker.workout_execution import WorkoutDistanceAccumulator, WorkoutExecution
+from fitness_tracker.workout_execution import (
+    EmptyWorkoutError,
+    WorkoutDistanceAccumulator,
+    WorkoutExecution,
+)
 
 
 def _step(duration: TimeDuration | DistanceDuration | OpenDuration) -> WorkoutStep:
@@ -199,6 +203,49 @@ def test_next_on_final_step_restarts_final_step() -> None:
     assert snapshot.active_index == 0
     assert snapshot.progress == 0
     assert not snapshot.completed
+
+
+def test_completed_workout_navigation_preserves_completion_and_reenters_final_step() -> None:
+    execution = WorkoutExecution(
+        [_step(TimeDuration(seconds=5)), _step(DistanceDuration(meters=100))],
+    )
+    execution.update(5, 0)
+
+    completed = execution.update(5, 100)
+    assert completed.completed
+
+    preserved = execution.next_step()
+    assert preserved.completed
+    assert preserved.active_index is None
+    assert preserved.step is None
+    assert preserved.progress == completed.progress
+
+    previous = execution.previous_step()
+    assert previous.active_index == 1
+    assert previous.progress == 0
+    assert previous.remaining_meters == 100
+    assert not previous.completed
+
+
+def test_empty_workout_is_rejected() -> None:
+    with pytest.raises(EmptyWorkoutError, match="At least one workout step is required"):
+        WorkoutExecution([])
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("elapsed_s", -1.0),
+        ("elapsed_s", float("nan")),
+        ("elapsed_s", float("inf")),
+        ("distance_m", -1.0),
+        ("distance_m", float("nan")),
+        ("distance_m", float("inf")),
+    ),
+)
+def test_invalid_measurements_are_rejected(field: str, value: float) -> None:
+    with pytest.raises(ValueError, match=f"{field} must be finite and non-negative"):
+        WorkoutExecution([_step(TimeDuration(seconds=10))], **{field: value})
 
 
 def test_open_ended_steps_are_rejected_with_specific_message() -> None:
