@@ -125,7 +125,7 @@ class WorkoutExecution:
 
         while not self.completed:
             if self.active_index is None:
-                raise RuntimeError
+                raise RuntimeError("Incomplete workout has no active step index")
             duration = self._supported_duration(self.steps[self.active_index])
             consumed = self._consumed(duration)
             limit = self._duration_value(duration)
@@ -171,7 +171,7 @@ class WorkoutExecution:
             target_index = len(self.steps) - 1
         else:
             if self.active_index is None:
-                raise RuntimeError
+                raise RuntimeError("Cannot move to previous step without an active step index")
             target_index = max(0, self.active_index - 1)
         return self._enter_step(target_index)
 
@@ -187,7 +187,7 @@ class WorkoutExecution:
             return self._snapshot(step_changed=False)
 
         if self.active_index is None:
-            raise RuntimeError
+            raise RuntimeError("Cannot move to next step without an active step index")
         target_index = min(self.active_index + 1, len(self.steps) - 1)
         return self._enter_step(target_index)
 
@@ -246,7 +246,7 @@ class WorkoutExecution:
             )
 
         if self.active_index is None:
-            raise RuntimeError
+            raise RuntimeError("Cannot snapshot incomplete workout without an active step index")
         step = self.steps[self.active_index]
         duration = self._supported_duration(step)
         consumed = max(0.0, self._consumed(duration))
