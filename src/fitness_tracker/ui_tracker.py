@@ -10,7 +10,14 @@ from typing import TYPE_CHECKING
 import gi
 import numpy as np
 from bleaksport import CyclingSample, HeartRateSample, RunningSample, TrainerSample
-from workout_parser import OpenDuration, PointTarget, RampTarget, RangeTarget, WorkoutStep
+from workout_parser import (
+    DistanceDuration,
+    OpenDuration,
+    PointTarget,
+    RampTarget,
+    RangeTarget,
+    WorkoutStep,
+)
 from workout_parser.main import pretty_workout_name
 
 from fitness_tracker.database import SportTypesEnum
@@ -83,6 +90,7 @@ class TrackerPageUI:
         self._workout: Workout | None = None
         self._workout_steps: list[WorkoutStep] = []
         self._workout_distance_accumulator = WorkoutDistanceAccumulator()
+        self._workout_distance_waiting_notified = False
         self._workout_execution: WorkoutExecution | None = None
         self._workout_snapshot: WorkoutExecutionSnapshot | None = None
         self._active_step_index: int = -1
@@ -146,6 +154,7 @@ class TrackerPageUI:
         ftp_watts = self.app.app_settings.personal.ftp_watts
         self._workout_steps = [step.resolve_power_targets(ftp_watts) for step in steps]
         self._workout = workout
+        self._workout_distance_waiting_notified = False
         self._workout_execution = WorkoutExecution(self._workout_steps)
         self._workout_snapshot = None
         self._manual_offset_s = 0.0
@@ -268,6 +277,7 @@ class TrackerPageUI:
     ) -> None:
         self._workout = None
         self._workout_steps = []
+        self._workout_distance_waiting_notified = False
         self._workout_execution = None
         self._workout_snapshot = None
         self._manual_offset_s = 0.0
@@ -359,6 +369,23 @@ class TrackerPageUI:
             self._hrsim_bpm = float(self.app.app_settings.personal.resting_hr or 60)
             self._test_source = GLib.timeout_add(1000, self._tick_test)
 
+    def _maybe_notify_distance_waiting(self) -> None:
+        """Tell the user once when a distance workout starts without a source."""
+        if (
+            not self._workout
+            or self.app.test_mode
+            or self._workout_distance_waiting_notified
+            or not any(isinstance(step.duration, DistanceDuration) for step in self._workout_steps)
+        ):
+            return
+
+        recorder = self.app.recorder
+        if recorder and getattr(recorder, "distance_connected", False):
+            return
+
+        self.app.show_toast("Waiting for distance sensor")
+        self._workout_distance_waiting_notified = True
+
     def _begin_run_now(self) -> None:
         """Called when Start is pressed."""
         if self._running:
@@ -377,6 +404,7 @@ class TrackerPageUI:
 
         if self.app.recorder:
             self.app.recorder.start_recording()
+        self._maybe_notify_distance_waiting()
 
         # start 1 Hz UI timer (decoupled from sensors)
         if self._timer_source_id is None:
