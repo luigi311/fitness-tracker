@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING
 import gi
 import numpy as np
 from bleaksport import CyclingSample, HeartRateSample, RunningSample, TrainerSample
-from workout_parser import PointTarget, RampTarget, RangeTarget, WorkoutStep
+from workout_parser import OpenDuration, PointTarget, RampTarget, RangeTarget, WorkoutStep
 from workout_parser.main import pretty_workout_name
 
 from fitness_tracker.database import SportTypesEnum
@@ -139,8 +139,8 @@ class TrackerPageUI:
         if not steps:
             self.app.show_toast("Workout has no executable steps")
             return
-        if any(step.duration_s is None for step in steps):
-            self.app.show_toast("Distance and open-ended workout steps are not supported yet")
+        if any(isinstance(step.duration, OpenDuration) for step in steps):
+            self.app.show_toast("Open-ended workout steps are not supported yet")
             return
 
         ftp_watts = self.app.app_settings.personal.ftp_watts
@@ -232,7 +232,7 @@ class TrackerPageUI:
                 snapshot = self._update_workout_execution(elapsed_s)
                 if snapshot and not snapshot.completed:
                     self._update_workout_running_timers(snapshot)
-                self._maybe_complete_workout(elapsed_s)
+                self._maybe_complete_workout(snapshot)
 
         return True
 
@@ -500,7 +500,8 @@ class TrackerPageUI:
 
         self._push_sample()
         if self._workout and not self._workout_paused and distance_changed:
-            self._update_workout_execution(elapsed_s=self._elapsed_display_s)
+            snapshot = self._update_workout_execution(elapsed_s=self._elapsed_display_s)
+            self._maybe_complete_workout(snapshot)
 
     # ---- core update
     def _push_sample(self) -> None:
@@ -829,14 +830,14 @@ class TrackerPageUI:
         if self._running:
             self.workout_view.set_progress(snapshot.progress)
 
-    def _maybe_complete_workout(self, elapsed_s: int) -> None:
-        """When workout time is up, switch to Free Run and carry on (only if running)."""
-        if not (self._running and self._workout):
+    def _maybe_complete_workout(self, snapshot: WorkoutExecutionSnapshot | None) -> None:
+        """Switch to Free Run once the executor reports final-step completion."""
+        if not (self._running and self._workout and self._workout_execution):
             return
-        t_s = max(0.0, float(elapsed_s) + self._manual_offset_s)
-        total = sum(float(step.duration_s or 0) for step in self._workout_steps)
+        if snapshot is None or not snapshot.completed:
+            return
 
-        if t_s >= total:
+        if self._workout_execution.completed:
             self._workout = None
             self._active_step_index = -1
             self._workout_execution = None
