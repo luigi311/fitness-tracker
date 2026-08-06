@@ -1,11 +1,64 @@
 import pytest
 from workout_parser import DistanceDuration, OpenDuration, TimeDuration, WorkoutStep
 
-from fitness_tracker.workout_execution import WorkoutExecution
+from fitness_tracker.workout_execution import WorkoutDistanceAccumulator, WorkoutExecution
 
 
 def _step(duration: TimeDuration | DistanceDuration | OpenDuration) -> WorkoutStep:
     return WorkoutStep(duration=duration)
+
+
+def test_distance_accumulator_establishes_baseline_then_adds_positive_deltas() -> None:
+    accumulator = WorkoutDistanceAccumulator()
+
+    accumulator.observe(100, running=True, paused=False)
+    accumulator.observe(112.5, running=True, paused=False)
+
+    assert accumulator.available
+    assert accumulator.distance_m == pytest.approx(12.5)
+
+
+def test_distance_accumulator_reset_excludes_movement_before_start() -> None:
+    accumulator = WorkoutDistanceAccumulator()
+    accumulator.observe(100, running=False, paused=False)
+    accumulator.observe(105, running=False, paused=False)
+
+    accumulator.reset()
+    accumulator.observe(110, running=True, paused=False)
+    accumulator.observe(113, running=True, paused=False)
+
+    assert accumulator.distance_m == pytest.approx(3)
+
+
+def test_distance_accumulator_ignores_paused_movement() -> None:
+    accumulator = WorkoutDistanceAccumulator()
+    accumulator.observe(100, running=True, paused=False)
+    accumulator.observe(125, running=True, paused=True)
+    accumulator.observe(125, running=True, paused=False)
+    accumulator.observe(130, running=True, paused=False)
+
+    assert accumulator.distance_m == pytest.approx(5)
+
+
+def test_distance_accumulator_rebaselines_decreasing_readings() -> None:
+    accumulator = WorkoutDistanceAccumulator()
+    accumulator.observe(100, running=True, paused=False)
+    accumulator.observe(110, running=True, paused=False)
+    accumulator.observe(40, running=True, paused=False)
+    accumulator.observe(45, running=True, paused=False)
+
+    assert accumulator.distance_m == pytest.approx(15)
+
+
+def test_distance_accumulator_ignores_missing_and_invalid_readings() -> None:
+    accumulator = WorkoutDistanceAccumulator()
+    for reading in (None, float("nan"), float("inf"), -1):
+        accumulator.observe(reading, running=True, paused=False)
+
+    accumulator.observe(10, running=True, paused=False)
+
+    assert not accumulator.distance_m
+    assert accumulator.available
 
 
 def test_starts_on_first_time_step() -> None:

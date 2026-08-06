@@ -16,6 +16,7 @@ from fitness_tracker.database import SportTypesEnum
 from fitness_tracker.ui_free_run import FreeRunView
 from fitness_tracker.ui_mode import IndoorOutdoorEnum, ModeSelectView
 from fitness_tracker.ui_workout import WorkoutView
+from fitness_tracker.workout_execution import WorkoutDistanceAccumulator
 from fitness_tracker.workouts import apply_target_bias
 
 gi.require_versions({"Gtk": "4.0", "Adw": "1"})
@@ -76,6 +77,7 @@ class TrackerPageUI:
         # workout state
         self._workout: Workout | None = None
         self._workout_steps: list[WorkoutStep] = []
+        self._workout_distance_accumulator = WorkoutDistanceAccumulator()
         self._active_step_index: int = -1
         self._manual_offset_s: float = 0.0
         self._sim_target_mph: float | None = None
@@ -160,6 +162,7 @@ class TrackerPageUI:
             if self._workout_pause_started_monotonic is not None:
                 paused_for = time.monotonic() - self._workout_pause_started_monotonic
                 self._manual_offset_s -= paused_for
+            self._workout_distance_accumulator.reset_raw_baseline()
             self._workout_pause_started_monotonic = None
             self._workout_paused = False
             # Reset erg throttle so target power re-applies immediately
@@ -347,6 +350,8 @@ class TrackerPageUI:
         """Called when Start is pressed."""
         if self._running:
             return
+        if self._workout:
+            self._workout_distance_accumulator.reset()
         self._running = True
         self._armed = True
         self._start_monotonic = time.monotonic()
@@ -459,6 +464,12 @@ class TrackerPageUI:
             self._rt_cadence = int(cadence)
             self._rt_dist_mi = float(sample.distance_miles or 0.0)
             self._rt_dist_m = float(sample.distance_m or 0.0)
+            if self._workout:
+                self._workout_distance_accumulator.observe(
+                    sample.distance_m,
+                    running=self._running,
+                    paused=self._workout_paused,
+                )
             self._rt_pace_str = self._pace_from_mph(self._rt_mph)
             self._rt_watts = int(sample.power_watts or 0)
 
@@ -1115,6 +1126,7 @@ class TrackerPageUI:
         self._powers.clear()
         self._last_ms = None
         self._bpm_max = 0
+        self._workout_distance_accumulator.reset()
         # freeze integrated distance until running
         if hasattr(self, "_integrated_distance_miles"):
             self._integrated_distance_miles = getattr(self, "_integrated_distance_miles", 0.0)

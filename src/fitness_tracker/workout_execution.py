@@ -36,6 +36,50 @@ class UnsupportedWorkoutDurationError(TypeError):
         super().__init__(f"Unsupported workout step duration: {duration_type}")
 
 
+@dataclass(slots=True)
+class WorkoutDistanceAccumulator:
+    """Accumulate valid sensor distance only while a workout is moving."""
+
+    _last_raw_distance_m: float | None = None
+    distance_m: float = 0.0
+    available: bool = False
+
+    def reset(self) -> None:
+        """Clear the effective distance and the raw sensor baseline."""
+        self._last_raw_distance_m = None
+        self.distance_m = 0.0
+        self.available = False
+
+    def reset_raw_baseline(self) -> None:
+        """Forget a possibly stale raw value without losing effective distance."""
+        self._last_raw_distance_m = None
+
+    def observe(
+        self,
+        raw_distance_m: float | None,
+        *,
+        running: bool,
+        paused: bool,
+    ) -> None:
+        """Process one raw distance reading from the active workout sensor."""
+        if raw_distance_m is None:
+            return
+        try:
+            raw_distance = float(raw_distance_m)
+        except (TypeError, ValueError):
+            return
+        if not isfinite(raw_distance) or raw_distance < 0:
+            return
+
+        self.available = True
+        previous = self._last_raw_distance_m
+        self._last_raw_distance_m = raw_distance
+        if previous is None or raw_distance < previous:
+            return
+        if running and not paused:
+            self.distance_m += raw_distance - previous
+
+
 @dataclass(frozen=True, slots=True)
 class WorkoutExecutionSnapshot:
     """The active state of a workout after an observation or navigation action."""
