@@ -4,6 +4,7 @@ import math
 import random
 import time
 from collections import deque
+from dataclasses import replace
 from typing import TYPE_CHECKING
 
 import gi
@@ -16,7 +17,11 @@ from fitness_tracker.database import SportTypesEnum
 from fitness_tracker.ui_free_run import FreeRunView
 from fitness_tracker.ui_mode import IndoorOutdoorEnum, ModeSelectView
 from fitness_tracker.ui_workout import WorkoutView
-from fitness_tracker.workout_execution import WorkoutDistanceAccumulator
+from fitness_tracker.workout_execution import (
+    WorkoutDistanceAccumulator,
+    WorkoutExecution,
+    WorkoutExecutionSnapshot,
+)
 from fitness_tracker.workouts import apply_target_bias
 
 gi.require_versions({"Gtk": "4.0", "Adw": "1"})
@@ -78,6 +83,8 @@ class TrackerPageUI:
         self._workout: Workout | None = None
         self._workout_steps: list[WorkoutStep] = []
         self._workout_distance_accumulator = WorkoutDistanceAccumulator()
+        self._workout_execution: WorkoutExecution | None = None
+        self._workout_snapshot: WorkoutExecutionSnapshot | None = None
         self._active_step_index: int = -1
         self._manual_offset_s: float = 0.0
         self._sim_target_mph: float | None = None
@@ -139,6 +146,8 @@ class TrackerPageUI:
         ftp_watts = self.app.app_settings.personal.ftp_watts
         self._workout_steps = [step.resolve_power_targets(ftp_watts) for step in steps]
         self._workout = workout
+        self._workout_execution = WorkoutExecution(self._workout_steps)
+        self._workout_snapshot = None
         self._manual_offset_s = 0.0
         self._workout_bias_percent = 0
         self._workout_trainer_control_mode = "Bias"
@@ -220,8 +229,9 @@ class TrackerPageUI:
             self.workout_view.set_elapsed_text(self._fmt_hhmmss(elapsed_s))
 
             if not self._workout_paused:
-                self._update_workout_guidance(elapsed_s)
-                self._update_workout_running_timers(elapsed_s)
+                snapshot = self._update_workout_execution(elapsed_s)
+                if snapshot and not snapshot.completed:
+                    self._update_workout_running_timers(snapshot)
                 self._maybe_complete_workout(elapsed_s)
 
         return True
@@ -258,6 +268,8 @@ class TrackerPageUI:
     ) -> None:
         self._workout = None
         self._workout_steps = []
+        self._workout_execution = None
+        self._workout_snapshot = None
         self._manual_offset_s = 0.0
         self._active_step_index = -1
 
@@ -336,8 +348,9 @@ class TrackerPageUI:
             self.workout_view.incline_control.set_value(self.app.recorder.incline_percent)
 
         # Prime UI in preview (t=0)
-        self._update_workout_guidance(elapsed_s=0)
-        self.workout_view.set_progress(0.0)
+        snapshot = self._update_workout_execution(elapsed_s=0)
+        if snapshot and not snapshot.completed:
+            self.workout_view.set_progress(snapshot.progress)
         self.update_metric_statuses()
         self._update_workout_preview_timers()
 
@@ -440,6 +453,7 @@ class TrackerPageUI:
         sample: HeartRateSample | RunningSample | CyclingSample | TrainerSample,
     ) -> None:
         self._update_trainer_bias_availability()
+        distance_changed = False
         if isinstance(sample, HeartRateSample):
             if sample.heart_rate_bpm is None:
                 return
@@ -465,10 +479,14 @@ class TrackerPageUI:
             self._rt_dist_mi = float(sample.distance_miles or 0.0)
             self._rt_dist_m = float(sample.distance_m or 0.0)
             if self._workout:
+                previous_distance_m = self._workout_distance_accumulator.distance_m
                 self._workout_distance_accumulator.observe(
                     sample.distance_m,
                     running=self._running,
                     paused=self._workout_paused,
+                )
+                distance_changed = (
+                    self._workout_distance_accumulator.distance_m != previous_distance_m
                 )
             self._rt_pace_str = self._pace_from_mph(self._rt_mph)
             self._rt_watts = int(sample.power_watts or 0)
@@ -476,11 +494,13 @@ class TrackerPageUI:
         if not self._running:
             self._preview_cards_only()
             if self.workout_view and self._workout:
-                self._update_workout_guidance(elapsed_s=0)
+                self._update_workout_execution(elapsed_s=0)
                 self.workout_view.set_progress(0.0)
             return
 
         self._push_sample()
+        if self._workout and not self._workout_paused and distance_changed:
+            self._update_workout_execution(elapsed_s=self._elapsed_display_s)
 
     # ---- core update
     def _push_sample(self) -> None:
@@ -605,25 +625,54 @@ class TrackerPageUI:
         values = low, (low + high) / 2.0, high
         return apply_target_bias(values, self._workout_bias_percent, 0)
 
-    def _update_workout_guidance(self, elapsed_s: int) -> None:
-        """Compute target for a given elapsed_s (caller decides whether running or preview)."""
+    def _update_workout_execution(self, elapsed_s: float) -> WorkoutExecutionSnapshot | None:
+        """Advance the workout executor and apply any active-step guidance."""
+        if not self._workout_execution:
+            return None
+
+        workout_elapsed_s = self._current_workout_elapsed_s(elapsed_s)
+        snapshot = self._workout_execution.update(
+            workout_elapsed_s,
+            self._workout_distance_accumulator.distance_m,
+        )
+        if not snapshot.completed:
+            self._update_workout_guidance(snapshot)
+        self._workout_snapshot = replace(snapshot, step_changed=False)
+        return snapshot
+
+    def _current_workout_elapsed_s(self, elapsed_s: float | None = None) -> float:
+        """Return elapsed workout time with pauses excluded."""
+        current_elapsed_s = float(self._elapsed_display_s if elapsed_s is None else elapsed_s)
+        if self._workout_paused and self._workout_pause_started_monotonic is not None:
+            current_elapsed_s -= time.monotonic() - self._workout_pause_started_monotonic
+        return max(0.0, current_elapsed_s + self._manual_offset_s)
+
+    def _update_workout_guidance(
+        self,
+        snapshot: WorkoutExecutionSnapshot | None = None,
+    ) -> None:
+        """Apply target, gauge, notification, and progress state for one snapshot."""
         if not self.workout_view or not self._workout:
             return
 
-        t_s = max(0.0, float(elapsed_s) + self._manual_offset_s)
-        idx, step = self._workout.get_step_at(t_s)
-        if step is None or idx is None:
+        if snapshot is None:
+            snapshot = self._workout_snapshot
+        if snapshot is None and self._workout_execution:
+            snapshot = self._workout_execution.snapshot()
+        if snapshot is None or snapshot.completed:
             return
 
-        step = self._workout_steps[idx]
-        step_start = sum(float(s.duration_s or 0) for s in self._workout_steps[:idx])
-        step_dur = float(step.duration_s or 0)
-        step_progress = (t_s - step_start) / max(1.0, step_dur)
+        idx = snapshot.active_index
+        step = snapshot.step
+        if idx is None or step is None:
+            return
+
+        step_progress = snapshot.progress
         power = self._biased_target_values(step.power_watts, step_progress, decimal_places=0)
         speed = self._biased_target_values(step.speed_mps, step_progress, decimal_places=1)
         heart_rate = self._hr_target_values(step, step_progress)
 
-        step_changed = idx != self._active_step_index
+        step_changed = snapshot.step_changed or idx != self._active_step_index
         self._active_step_index = idx
 
         # target text
@@ -778,9 +827,7 @@ class TrackerPageUI:
 
         # step progress — ONLY advance when running
         if self._running:
-            step_elapsed = min(max(0.0, t_s - step_start), step_dur)
-            frac = step_elapsed / step_dur
-            self.workout_view.set_progress(float(frac))
+            self.workout_view.set_progress(snapshot.progress)
 
     def _maybe_complete_workout(self, elapsed_s: int) -> None:
         """When workout time is up, switch to Free Run and carry on (only if running)."""
@@ -792,6 +839,8 @@ class TrackerPageUI:
         if t_s >= total:
             self._workout = None
             self._active_step_index = -1
+            self._workout_execution = None
+            self._workout_snapshot = None
             self._manual_offset_s = 0.0
 
             # Swap UI to free-run (keep recording, timer, charts alive)
@@ -819,31 +868,33 @@ class TrackerPageUI:
                 self.app.pebble_bridge.update(tgt_kind=TGT_NONE)
 
     def _skip_step(self, direction: int) -> None:
-        if not self._workout or self._active_step_index < 0:
+        if not self._workout or not self._workout_execution:
             return
 
-        starts = [0.0]
-        for step in self._workout_steps:
-            starts.append(starts[-1] + float(step.duration_s or 0))
-
-        current_elapsed = float(self._elapsed_display_s if self._running else 0.0)
-        t_s = max(0.0, current_elapsed + self._manual_offset_s)
-
-        target_idx = min(
-            max(0, self._active_step_index + (1 if direction > 0 else -1)),
-            len(self._workout_steps) - 1,
+        current_elapsed_s = self._current_workout_elapsed_s(
+            self._elapsed_display_s if self._running else 0.0,
         )
-        target_start = starts[target_idx]
+        if direction > 0:
+            snapshot = self._workout_execution.next_step(
+                elapsed_s=current_elapsed_s,
+                distance_m=self._workout_distance_accumulator.distance_m,
+            )
+        else:
+            snapshot = self._workout_execution.previous_step(
+                elapsed_s=current_elapsed_s,
+                distance_m=self._workout_distance_accumulator.distance_m,
+            )
 
-        # Immediate jump (preview and running both supported)
-        self._manual_offset_s += (target_start - t_s) + 0.001
-
-        # Reset erg values so it sets immediately on step change if in an erg step
+        # Reset target throttling so the destination step applies immediately.
         self._erg_last_set_watts = None
         self._erg_last_set_ts = 0.0
+        self._speed_last_set_kmh = None
+        self._speed_last_set_ts = 0.0
 
-        # refresh guidance with either running time or preview time 0
-        self._update_workout_guidance(int(current_elapsed if self._running else 0))
+        self._update_workout_guidance(snapshot)
+        self._workout_snapshot = replace(snapshot, step_changed=False)
+        if self.workout_view and not self._running and not snapshot.completed:
+            self.workout_view.set_progress(snapshot.progress)
 
     # ---- helpers
     def _set_cards(
@@ -919,27 +970,14 @@ class TrackerPageUI:
         else:
             self.workout_view.set_step_remaining_text("00:00")
 
-    def _update_workout_running_timers(self, elapsed_s: int) -> None:
+    def _update_workout_running_timers(self, snapshot: WorkoutExecutionSnapshot) -> None:
         if not (self.workout_view and self._workout):
             return
 
-        # remaining in current step
-        t_s = max(0.0, float(elapsed_s) + self._manual_offset_s)
-        acc = 0.0
-        step_start = 0.0
-        step_dur = 0.0
-        for step in self._workout_steps:
-            duration_s = float(step.duration_s or 0)
-            nxt = acc + duration_s
-            if t_s < nxt + 1e-6:
-                step_start = acc
-                step_dur = duration_s
-                break
-            acc = nxt
-        step_elapsed = min(max(0.0, t_s - step_start), max(1.0, step_dur))
-        remaining = int(max(0.0, step_dur - step_elapsed))
-        # Keep the step remaining timer as mm:ss
-        self.workout_view.set_step_remaining_text(self._fmt_mmss(remaining))
+        if snapshot.remaining_seconds is not None:
+            self.workout_view.set_step_remaining_text(
+                self._fmt_mmss(int(max(0.0, snapshot.remaining_seconds))),
+            )
 
     # ---- test-mode generator
     def _tick_test(self) -> bool:
@@ -1190,7 +1228,7 @@ class TrackerPageUI:
         self._erg_last_set_ts = 0.0
         self._speed_last_set_kmh = None
         self._speed_last_set_ts = 0.0
-        self._update_workout_guidance(self._elapsed_display_s if self._running else 0)
+        self._update_workout_guidance()
 
     def _on_trainer_target_changed(self, mode: str, value: int | float) -> None:
         if not self.app.recorder:
