@@ -22,7 +22,7 @@ from fitness_tracker.workout_execution import (
     WorkoutExecution,
     WorkoutExecutionSnapshot,
 )
-from fitness_tracker.workouts import apply_target_bias
+from fitness_tracker.workouts import apply_target_bias, format_step_duration, format_step_remaining
 
 gi.require_versions({"Gtk": "4.0", "Adw": "1"})
 from gi.repository import Adw, GLib  # noqa: E402  # ty:ignore[unresolved-import]
@@ -704,19 +704,19 @@ class TrackerPageUI:
             next_power = self._biased_target_values(next_step.power_watts, decimal_places=0)
             next_speed = self._biased_target_values(next_step.speed_mps, decimal_places=1)
             next_hr = self._hr_target_values(next_step)
-            next_duration_s = int(next_step.duration_s or 0)
+            next_duration = format_step_duration(next_step)
 
             if next_power:
                 a = round(next_power[0])
                 b = round(next_power[2])
-                nxt_text = f"Next: {a} - {b} W for {next_duration_s} s"
+                nxt_text = f"Next: {a} - {b} W for {next_duration}"
             elif next_speed:
                 a = self._pace_from_mph(next_speed[0] * 2.23694)
                 b = self._pace_from_mph(next_speed[2] * 2.23694)
-                nxt_text = f"Next: {b} - {a} /mi for {next_duration_s} s"
+                nxt_text = f"Next: {b} - {a} /mi for {next_duration}"
             elif next_hr:
                 a, _, b = next_hr
-                nxt_text = f"Next: {round(a)} - {round(b)} bpm for {next_duration_s} s"
+                nxt_text = f"Next: {round(a)} - {round(b)} bpm for {next_duration}"
 
         self.workout_view.set_target_text(tgt_txt)
         self.workout_view.set_next_text(nxt_text)
@@ -899,10 +899,7 @@ class TrackerPageUI:
         if self.workout_view and not snapshot.completed:
             if not self._running:
                 self.workout_view.set_progress(snapshot.progress)
-            if snapshot.remaining_seconds is not None:
-                self.workout_view.set_step_remaining_text(
-                    self._fmt_mmss(int(max(0.0, snapshot.remaining_seconds))),
-                )
+            self.workout_view.set_step_remaining_text(format_step_remaining(snapshot))
 
     # ---- helpers
     def _set_cards(
@@ -970,22 +967,19 @@ class TrackerPageUI:
             return
         self.workout_view.set_elapsed_text("00:00")
 
-        # remaining = current step full duration
-        if self._workout and self._workout_steps:
-            dur = int(self._workout_steps[0].duration_s or 0)
-            # Keep the step remaining timer as mm:ss
-            self.workout_view.set_step_remaining_text(self._fmt_mmss(dur))
+        snapshot = self._workout_snapshot
+        if snapshot and not snapshot.completed:
+            self.workout_view.set_step_remaining_text(format_step_remaining(snapshot))
+        elif self._workout_steps:
+            self.workout_view.set_step_remaining_text(format_step_duration(self._workout_steps[0]))
         else:
-            self.workout_view.set_step_remaining_text("00:00")
+            self.workout_view.set_step_remaining_text("—")
 
     def _update_workout_running_timers(self, snapshot: WorkoutExecutionSnapshot) -> None:
         if not (self.workout_view and self._workout):
             return
 
-        if snapshot.remaining_seconds is not None:
-            self.workout_view.set_step_remaining_text(
-                self._fmt_mmss(int(max(0.0, snapshot.remaining_seconds))),
-            )
+        self.workout_view.set_step_remaining_text(format_step_remaining(snapshot))
 
     # ---- test-mode generator
     def _tick_test(self) -> bool:
@@ -1207,11 +1201,6 @@ class TrackerPageUI:
             m += 1
             s = 0
         return f"{m}:{s:02d}"
-
-    @staticmethod
-    def _fmt_mmss(total_s: int) -> str:
-        m, s = divmod(int(total_s), 60)
-        return f"{m:02d}:{s:02d}"
 
     @staticmethod
     def _fmt_hhmmss(total_s: int) -> str:

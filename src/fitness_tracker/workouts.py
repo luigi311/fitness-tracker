@@ -1,11 +1,73 @@
 from datetime import date
 from pathlib import Path
 
+from workout_parser import DistanceDuration, OpenDuration, TimeDuration, WorkoutStep
+
+from fitness_tracker.workout_execution import WorkoutExecutionSnapshot
+
 # -----------------------
 # Discovery
 # -----------------------
 
 AUTO_SUBDIRS = ("intervals_icu",)
+_DISTANCE_KM_THRESHOLD_M = 1000
+_SECONDS_INTEGER_TOLERANCE = 1e-6
+
+
+def _format_number(value: float) -> str:
+    """Format a measurement without unnecessary trailing zeroes."""
+    return f"{value:.2f}".rstrip("0").rstrip(".")
+
+
+def _format_time_duration(seconds: float) -> str:
+    """Format a step duration in a compact, human-readable form."""
+    seconds = max(0.0, float(seconds))
+    rounded_seconds = round(seconds)
+    if abs(seconds - rounded_seconds) < _SECONDS_INTEGER_TOLERANCE:
+        total_seconds = int(rounded_seconds)
+        minutes, remainder = divmod(total_seconds, 60)
+        if minutes:
+            if remainder:
+                return f"{minutes} min {remainder} s"
+            return f"{minutes} min"
+        return f"{remainder} s"
+    return f"{seconds:.1f} s"
+
+
+def _format_time_remaining(seconds: float) -> str:
+    """Format time remaining using the active workout clock convention."""
+    total_seconds = max(0, int(float(seconds)))
+    minutes, remainder = divmod(total_seconds, 60)
+    return f"{minutes:02d}:{remainder:02d}"
+
+
+def _format_distance_duration(meters: float) -> str:
+    """Format a distance in metres below one kilometre and kilometres above it."""
+    meters = max(0.0, float(meters))
+    if meters < _DISTANCE_KM_THRESHOLD_M:
+        return f"{_format_number(meters)} m"
+    return f"{_format_number(meters / _DISTANCE_KM_THRESHOLD_M)} km"
+
+
+def format_step_duration(step: WorkoutStep) -> str:
+    """Return the configured duration of a workout step with its unit."""
+    duration = step.duration
+    if isinstance(duration, TimeDuration):
+        return _format_time_duration(duration.seconds)
+    if isinstance(duration, DistanceDuration):
+        return _format_distance_duration(duration.meters)
+    if isinstance(duration, OpenDuration):
+        return "Open"
+    return str(duration)
+
+
+def format_step_remaining(snapshot: WorkoutExecutionSnapshot) -> str:
+    """Return the active step's remaining amount with its unit."""
+    if snapshot.remaining_seconds is not None:
+        return _format_time_remaining(snapshot.remaining_seconds)
+    if snapshot.remaining_meters is not None:
+        return _format_distance_duration(snapshot.remaining_meters)
+    return "—"
 
 
 def has_heart_rate_targets(steps) -> bool:

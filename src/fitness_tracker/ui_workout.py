@@ -465,7 +465,7 @@ class WorkoutView(Gtk.Box):
         # Timers row (Remaining / Elapsed)
         timers = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         self.timer_elapsed = _TimerBig("Elapsed")
-        self.timer_remaining = _TimerBig("Step Remaining")
+        self.timer_remaining = _TimerBig("Remaining")
         timers.append(self.timer_elapsed)
         timers.append(self.timer_remaining)
         content.append(timers)
