@@ -234,14 +234,14 @@ def test_empty_workout_is_rejected() -> None:
 
 @pytest.mark.parametrize(
     ("field", "value"),
-    (
+    [
         ("elapsed_s", -1.0),
         ("elapsed_s", float("nan")),
         ("elapsed_s", float("inf")),
         ("distance_m", -1.0),
         ("distance_m", float("nan")),
         ("distance_m", float("inf")),
-    ),
+    ],
 )
 def test_invalid_measurements_are_rejected(field: str, value: float) -> None:
     with pytest.raises(ValueError, match=f"{field} must be finite and non-negative"):
