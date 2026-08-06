@@ -90,6 +90,7 @@ class TrackerPageUI:
         self._workout: Workout | None = None
         self._workout_steps: list[WorkoutStep] = []
         self._workout_distance_accumulator = WorkoutDistanceAccumulator()
+        self._workout_distance_source_connected: bool | None = None
         self._workout_distance_waiting_notified = False
         self._workout_execution: WorkoutExecution | None = None
         self._workout_snapshot: WorkoutExecutionSnapshot | None = None
@@ -507,6 +508,7 @@ class TrackerPageUI:
             self._rt_dist_mi = float(sample.distance_miles or 0.0)
             self._rt_dist_m = float(sample.distance_m or 0.0)
             if self._workout:
+                self._sync_workout_distance_source(self._distance_source_is_connected())
                 previous_distance_m = self._workout_distance_accumulator.distance_m
                 self._workout_distance_accumulator.observe(
                     sample.distance_m,
@@ -1163,6 +1165,23 @@ class TrackerPageUI:
         return True
 
     # ---- connection dots
+    def _distance_source_is_connected(self) -> bool:
+        recorder = self.app.recorder
+        if self.app.test_mode or not recorder:
+            return True
+        return bool(getattr(recorder, "distance_connected", False))
+
+    def _sync_workout_distance_source(self, connected: bool) -> None:
+        if self._workout and (
+            not connected
+            or (
+                self._workout_distance_source_connected is False
+                and connected
+            )
+        ):
+            self._workout_distance_accumulator.reset_raw_baseline()
+        self._workout_distance_source_connected = connected
+
     def update_metric_statuses(self) -> None:
         rec = self.app.recorder or None
         if self.app.test_mode or not rec:
@@ -1174,6 +1193,7 @@ class TrackerPageUI:
             pow_ok = bool(rec.power_connected)
             dist_ok = bool(rec.distance_connected)
 
+        self._sync_workout_distance_source(dist_ok)
         if self.free_view and hasattr(self.free_view, "set_statuses"):
             self.free_view.set_statuses(hr_ok, speed_ok, cad_ok, pow_ok, dist_ok)
         if self.workout_view:

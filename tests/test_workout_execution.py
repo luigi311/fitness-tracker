@@ -50,6 +50,16 @@ def test_distance_accumulator_rebaselines_decreasing_readings() -> None:
     assert accumulator.distance_m == pytest.approx(15)
 
 
+def test_distance_accumulator_rebaselines_after_reconnect() -> None:
+    accumulator = WorkoutDistanceAccumulator()
+    accumulator.observe(100, running=True, paused=False)
+    accumulator.observe(120, running=True, paused=False)
+    accumulator.reset_raw_baseline()
+    accumulator.observe(150, running=True, paused=False)
+
+    assert accumulator.distance_m == pytest.approx(20)
+
+
 def test_distance_accumulator_ignores_missing_and_invalid_readings() -> None:
     accumulator = WorkoutDistanceAccumulator()
     for reading in (None, float("nan"), float("inf"), -1):
