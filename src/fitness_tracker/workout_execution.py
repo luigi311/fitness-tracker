@@ -251,7 +251,7 @@ class WorkoutExecution:
         duration = self._supported_duration(step)
         consumed = max(0.0, self._consumed(duration))
         limit = self._duration_value(duration)
-        progress = min(1.0, consumed / limit)
+        progress = min(1.0, consumed / limit) if limit > 0 else 0.0
         remaining = max(0.0, limit - consumed)
         if isinstance(duration, TimeDuration):
             remaining_seconds = remaining
