@@ -156,6 +156,7 @@ class TrackerPageUI:
         self._workout_steps = [step.resolve_power_targets(ftp_watts) for step in steps]
         self._workout = workout
         self._workout_distance_waiting_notified = False
+        self._workout_distance_source_connected = None
         self._workout_execution = WorkoutExecution(self._workout_steps)
         self._workout_snapshot = None
         self._manual_offset_s = 0.0
@@ -279,6 +280,7 @@ class TrackerPageUI:
         self._workout = None
         self._workout_steps = []
         self._workout_distance_waiting_notified = False
+        self._workout_distance_source_connected = None
         self._workout_execution = None
         self._workout_snapshot = None
         self._manual_offset_s = 0.0
@@ -1172,13 +1174,7 @@ class TrackerPageUI:
         return bool(getattr(recorder, "distance_connected", False))
 
     def _sync_workout_distance_source(self, connected: bool) -> None:
-        if self._workout and (
-            not connected
-            or (
-                self._workout_distance_source_connected is False
-                and connected
-            )
-        ):
+        if self._workout and (not connected or self._workout_distance_source_connected is False):
             self._workout_distance_accumulator.reset_raw_baseline()
         self._workout_distance_source_connected = connected
 
