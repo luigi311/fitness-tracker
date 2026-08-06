@@ -1000,17 +1000,19 @@ class TrackerPageUI:
         target_power = getattr(self, "_last_power", 250.0)
         target_hr: float | None = None
         self._sim_target_mph = None
+        step: WorkoutStep | None = None
+        step_progress = 0.0
 
         if self._workout:
-            raw_t_s = (t_ms / 1000.0 if self._running else 0.0) + self._manual_offset_s
-            t_s = max(0.0, raw_t_s) if math.isfinite(raw_t_s) else 0.0
-            idx, step = self._workout.get_step_at(t_s)
-            if not step or idx is None:
-                return True
+            elapsed_s = t_ms / 1000.0 if self._running else 0.0
+            snapshot = self._update_workout_execution(elapsed_s=elapsed_s)
+            if snapshot and snapshot.completed:
+                self._maybe_complete_workout(snapshot)
+            if snapshot and not snapshot.completed:
+                step = snapshot.step
+                step_progress = snapshot.progress
 
-            step = self._workout_steps[idx]
-            step_start = sum(float(item.duration_s or 0) for item in self._workout_steps[:idx])
-            step_progress = (t_s - step_start) / max(1.0, float(step.duration_s or 0))
+        if step is not None:
             power = self._biased_target_values(step.power_watts, step_progress, decimal_places=0)
             speed = self._biased_target_values(step.speed_mps, step_progress, decimal_places=1)
             heart_rate = self._hr_target_values(step, step_progress)
@@ -1078,7 +1080,7 @@ class TrackerPageUI:
         )
 
         if self._running:
-            dmiles = self._last_mph / 3600.0
+            dmiles = self._last_mph * dt_s / 3600.0
             self._integrated_distance_miles = (
                 getattr(self, "_integrated_distance_miles", 0.0) + dmiles
             )
