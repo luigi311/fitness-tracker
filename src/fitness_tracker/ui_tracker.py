@@ -225,19 +225,20 @@ class TrackerPageUI:
             self._timer_source_id = None
             return False
 
-        self._elapsed_display_s = int(time.monotonic() - self._start_monotonic)
-        elapsed_s = self._elapsed_display_s
+        elapsed_s = max(0.0, time.monotonic() - self._start_monotonic)
+        self._elapsed_display_s = int(elapsed_s)
+        display_elapsed_s = self._elapsed_display_s
 
         # Free-run timer
         if self.free_view:
-            hh, rem = divmod(elapsed_s, 3600)
+            hh, rem = divmod(display_elapsed_s, 3600)
             mm, ss = divmod(rem, 60)
             self.free_view.set_timer(f"{hh:02d}:{mm:02d}:{ss:02d}")
 
         # Workout timers / guidance
         if self.workout_view and self._workout:
             # Elapsed always updates, even while paused
-            self.workout_view.set_elapsed_text(self._fmt_hhmmss(elapsed_s))
+            self.workout_view.set_elapsed_text(self._fmt_hhmmss(display_elapsed_s))
 
             if not self._workout_paused:
                 snapshot = self._update_workout_execution(elapsed_s)
@@ -1019,8 +1020,9 @@ class TrackerPageUI:
             return False
 
         t_now = time.monotonic()
-        # In preview (armed but not running), hold t_ms at 0 so nothing progresses
-        t_ms = int((t_now - self._start_monotonic) * 1000) if self._running else 0
+        # In preview (armed but not running), hold elapsed time at 0 so nothing progresses
+        elapsed_s = max(0.0, t_now - self._start_monotonic) if self._running else 0.0
+        t_ms = int(elapsed_s * 1000)
         self._last_ms = t_ms
 
         dt_s = 1.0
@@ -1036,7 +1038,6 @@ class TrackerPageUI:
         step_progress = 0.0
 
         if self._workout:
-            elapsed_s = t_ms / 1000.0 if self._running else 0.0
             snapshot = self._update_workout_execution(elapsed_s=elapsed_s)
             if snapshot and snapshot.completed:
                 self._maybe_complete_workout(snapshot)
