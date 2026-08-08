@@ -8,7 +8,7 @@ from loguru import logger
 from workout_parser import WorkoutParserError, load_workout
 
 from fitness_tracker.database import SportTypesEnum
-from fitness_tracker.workouts import discover_workouts
+from fitness_tracker.workouts import discover_workouts, format_workout_summary
 
 gi.require_versions({"Gtk": "4.0", "Adw": "1"})
 
@@ -397,15 +397,13 @@ class ModeSelectView(Gtk.Box):
             row.set_title(workout.name)
 
             # Workout information
-            subtitle = ""
+            subtitle_parts: list[str] = []
             if workout.workout_date:
-                subtitle += workout.workout_date.isoformat()
-            if workout.total_seconds:
-                if subtitle:
-                    subtitle += " · "
-                mins = workout.total_seconds // 60
-                subtitle += f"{mins} min"
-            row.set_subtitle(subtitle)
+                subtitle_parts.append(workout.workout_date.isoformat())
+            summary = format_workout_summary(workout)
+            if summary:
+                subtitle_parts.append(summary)
+            row.set_subtitle(" · ".join(subtitle_parts))
 
             in_outdoor, trainer = self._env_to_params()
             env_name = _ENV_LABELS[self._selected_env]
