@@ -66,6 +66,27 @@
         type="desktop-id"
     >com.luigi311.fitness-tracker.desktop</launchable>
     <releases>
+        <release version="4.1.0" date="2026-08-07">
+            <url
+                type="details"
+            >https://github.com/luigi311/fitness-tracker/releases/tag/v4.1.0</url>
+            <description>
+                <p>
+                    Features
+                </p>
+                <ul>
+                    <li>Support distance-based and mixed time-and-distance workout steps</li>
+                    <li>Show distance remaining and time-and-distance workout summaries</li>
+                    <li>Notify when a distance-based workout is waiting for a sensor</li>
+                </ul>
+                <p>
+                    Bug Fixes
+                </p>
+                <ul>
+                    <li>Keep workout progress and targets accurate across step navigation, pauses, and sensor reconnects</li>
+                </ul>
+            </description>
+        </release>
         <release version="4.0.1" date="2026-08-03">
             <url
                 type="details"
