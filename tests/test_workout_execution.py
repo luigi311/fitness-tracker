@@ -1,11 +1,14 @@
 import pytest
-from workout_parser import DistanceDuration, OpenDuration, TimeDuration, WorkoutStep
-
 from fitness_tracker.workout_execution import (
     EmptyWorkoutError,
     WorkoutDistanceAccumulator,
     WorkoutExecution,
 )
+from workout_parser import DistanceDuration, OpenDuration, TimeDuration, WorkoutStep
+
+TIME_STEP_SECONDS = 10
+DISTANCE_STEP_METERS = 100
+FINAL_STEP_INDEX = 2
 
 
 def _step(duration: TimeDuration | DistanceDuration | OpenDuration) -> WorkoutStep:
@@ -82,7 +85,7 @@ def test_starts_on_first_time_step() -> None:
 
     assert snapshot.active_index == 0
     assert snapshot.progress == 0
-    assert snapshot.remaining_seconds == 10
+    assert snapshot.remaining_seconds == TIME_STEP_SECONDS
     assert snapshot.remaining_meters is None
     assert snapshot.step_changed
 
@@ -124,7 +127,7 @@ def test_time_to_distance_switch_starts_distance_baseline_at_boundary() -> None:
     snapshot = execution.update(5, 20)
     assert snapshot.active_index == 1
     assert snapshot.progress == 0
-    assert snapshot.remaining_meters == 100
+    assert snapshot.remaining_meters == DISTANCE_STEP_METERS
 
     snapshot = execution.update(5, 45)
     assert snapshot.progress == pytest.approx(0.25)
@@ -138,7 +141,7 @@ def test_distance_to_time_switch_starts_time_baseline_at_boundary() -> None:
     snapshot = execution.update(20, 100)
     assert snapshot.active_index == 1
     assert snapshot.progress == 0
-    assert snapshot.remaining_seconds == 10
+    assert snapshot.remaining_seconds == TIME_STEP_SECONDS
 
     snapshot = execution.update(24, 100)
     assert snapshot.progress == pytest.approx(0.4)
@@ -178,7 +181,7 @@ def test_previous_and_next_enter_steps_at_zero_progress() -> None:
     assert snapshot.progress == 0
 
     snapshot = execution.next_step()
-    assert snapshot.active_index == 2
+    assert snapshot.active_index == FINAL_STEP_INDEX
     assert snapshot.progress == 0
 
     snapshot = execution.previous_step()
@@ -223,7 +226,7 @@ def test_completed_workout_navigation_preserves_completion_and_reenters_final_st
     previous = execution.previous_step()
     assert previous.active_index == 1
     assert previous.progress == 0
-    assert previous.remaining_meters == 100
+    assert previous.remaining_meters == DISTANCE_STEP_METERS
     assert not previous.completed
 
 

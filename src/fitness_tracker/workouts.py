@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 from workout_parser import (
@@ -6,9 +6,15 @@ from workout_parser import (
     OpenDuration,
     TimeDuration,
     Workout,
-    WorkoutStep,
 )
 
+from fitness_tracker.core.units import (
+    DurationStyle,
+    UnitSystem,
+    format_distance,
+    format_duration,
+    format_human_duration,
+)
 from fitness_tracker.workout_execution import WorkoutExecutionSnapshot
 
 # -----------------------
@@ -16,66 +22,19 @@ from fitness_tracker.workout_execution import WorkoutExecutionSnapshot
 # -----------------------
 
 AUTO_SUBDIRS = ("intervals_icu",)
-_DISTANCE_KM_THRESHOLD_M = 1000
-_SECONDS_INTEGER_TOLERANCE = 1e-6
-
-
-def _format_number(value: float) -> str:
-    """Format a measurement without unnecessary trailing zeroes."""
-    return f"{value:.2f}".rstrip("0").rstrip(".")
-
-
-def _format_time_duration(seconds: float) -> str:
-    """Format a step duration in a compact, human-readable form."""
-    seconds = max(0.0, float(seconds))
-    rounded_seconds = round(seconds)
-    if abs(seconds - rounded_seconds) < _SECONDS_INTEGER_TOLERANCE:
-        total_seconds = int(rounded_seconds)
-        minutes, remainder = divmod(total_seconds, 60)
-        if minutes:
-            if remainder:
-                return f"{minutes} min {remainder} s"
-            return f"{minutes} min"
-        return f"{remainder} s"
-    return f"{seconds:.1f} s"
-
-
-def _format_time_remaining(seconds: float) -> str:
-    """Format time remaining using the active workout clock convention."""
-    total_seconds = max(0, int(float(seconds)))
-    minutes, remainder = divmod(total_seconds, 60)
-    return f"{minutes:02d}:{remainder:02d}"
-
-
-def _format_distance(meters: float, *, include_whole_km_decimal: bool) -> str:
-    """Format a distance in metres below one kilometre and kilometres above it."""
-    meters = max(0.0, float(meters))
-    if meters < _DISTANCE_KM_THRESHOLD_M:
-        return f"{_format_number(meters)} m"
-    kilometers = _format_number(meters / _DISTANCE_KM_THRESHOLD_M)
-    if include_whole_km_decimal and "." not in kilometers:
-        kilometers += ".0"
-    return f"{kilometers} km"
-
-
-def format_step_duration(step: WorkoutStep) -> str:
-    """Return the configured duration of a workout step with its unit."""
-    duration = step.duration
-    if isinstance(duration, TimeDuration):
-        return _format_time_duration(duration.seconds)
-    if isinstance(duration, DistanceDuration):
-        return _format_distance(duration.meters, include_whole_km_decimal=False)
-    if isinstance(duration, OpenDuration):
-        return "Open"
-    return str(duration)
+_WORKOUT_LOOKAHEAD_DAYS = 6
 
 
 def format_step_remaining(snapshot: WorkoutExecutionSnapshot) -> str:
     """Return the active step's remaining amount with its unit."""
     if snapshot.remaining_seconds is not None:
-        return _format_time_remaining(snapshot.remaining_seconds)
+        return format_duration(snapshot.remaining_seconds, DurationStyle.COUNTDOWN)
     if snapshot.remaining_meters is not None:
-        return _format_distance(snapshot.remaining_meters, include_whole_km_decimal=False)
+        return format_distance(
+            snapshot.remaining_meters,
+            UnitSystem.METRIC,
+            include_whole_km_decimal=False,
+        )
     return "—"
 
 
@@ -94,43 +53,18 @@ def format_workout_summary(workout: Workout) -> str:
 
     parts: list[str] = []
     if total_seconds:
-        parts.append(_format_time_duration(total_seconds))
+        parts.append(format_human_duration(total_seconds))
     if total_meters:
-        parts.append(_format_distance(total_meters, include_whole_km_decimal=True))
+        parts.append(
+            format_distance(
+                total_meters,
+                UnitSystem.METRIC,
+                include_whole_km_decimal=True,
+            ),
+        )
     if has_open_duration:
         parts.append("Open")
     return " + ".join(parts)
-
-
-def has_heart_rate_targets(steps) -> bool:
-    """Return whether any workout step contains a supported heart-rate target."""
-    fields = (
-        "heart_rate_bpm",
-        "heart_rate_percent_max",
-        "heart_rate_percent_lthr",
-        "heart_rate_zone",
-    )
-    return any(any(getattr(step, field, None) is not None for field in fields) for step in steps)
-
-
-def apply_target_bias(
-    values: tuple[float, float, float] | None,
-    percent: int,
-    decimal_places: int | None = None,
-) -> tuple[float, float, float] | None:
-    """Scale a resolved workout target by the trainer bias percentage."""
-    if values is None:
-        return None
-    factor = 1.0 + percent / 100.0
-    low, current, high = values
-    adjusted = low * factor, current * factor, high * factor
-    if decimal_places is None:
-        return adjusted
-    return (
-        round(adjusted[0], decimal_places),
-        round(adjusted[1], decimal_places),
-        round(adjusted[2], decimal_places),
-    )
 
 
 def _date_from_filename(p: Path) -> date | None:
@@ -149,7 +83,7 @@ def discover_workouts(running_dir: Path) -> list[Path]:
       2) Other dated auto files later this week (ascending date)
       3) Manual files in the root 'running' directory
     """
-    today = date.today()
+    today = datetime.now().astimezone().date()
 
     # Collect auto files from provider subfolders
     auto_files: list[Path] = []
@@ -167,7 +101,7 @@ def discover_workouts(running_dir: Path) -> list[Path]:
             continue
         if d == today:
             todays.append((d, p))
-        elif 0 <= (d - today).days <= 6:
+        elif 0 <= (d - today).days <= _WORKOUT_LOOKAHEAD_DAYS:
             weeks.append((d, p))
 
     todays.sort(key=lambda t: t[0])  # single day but deterministic
@@ -180,5 +114,4 @@ def discover_workouts(running_dir: Path) -> list[Path]:
     )
 
     # Stitch in order
-    ordered = [p for _, p in todays] + [p for _, p in weeks] + manual
-    return ordered
+    return [p for _, p in todays] + [p for _, p in weeks] + manual
