@@ -36,11 +36,18 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v7
 
+      - name: Verify lockfile
+        run: uv lock --check
+
       - name: Install deps
         run: uv sync --dev --frozen --group flatpak
 
+      - name: Verify Flatpak source pins
+        run: uv run --no-sync python scripts/sync_flatpak_sources.py --check
+
       - name: Generate flatpak files
         run: ./regenerate_flatpak_deps.sh .
+        working-directory: ${{ github.workspace }}
 
       - uses: flatpak/flatpak-github-actions/flatpak-builder@v6
         with:

@@ -11,22 +11,21 @@ on:
       - "*.md"
 
 jobs:
-  build:
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-24.04
-            name: fitness_tracker-x86_64
-          - os: ubuntu-24.04-arm
-            name: fitness_tracker-arm64
-  
+  test:
+    permissions:
+      contents: read
+    runs-on: ubuntu-24.04
+
     steps:
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
 
       - name: Install uv
         uses: astral-sh/setup-uv@v7
+
+      - name: Verify lockfile
+        run: uv lock --check
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -39,28 +38,97 @@ jobs:
           sudo apt-get install -y \
             libcairo2-dev \
             pkg-config \
-            libgirepository-2.0-dev
+            libgirepository-2.0-dev \
+            gir1.2-gtk-4.0 \
+            gir1.2-adw-1
+
+      - name: Install dependencies
+        run: uv sync --dev --frozen
+
+      - name: Validate release metadata
+        run: uv run python scripts/validate_release.py
+
+      - name: Verify Pebble protocol generation
+        run: uv run python scripts/generate_pebble_protocol.py --check
+
+      - name: Run tests
+        run: uv run pytest
+
+      - name: Run ty
+        run: uv run ty check src
+
+  lint:
+    permissions:
+      contents: read
+    runs-on: ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Verify lockfile
+        run: uv lock --check
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version-file: ".python-version"
+
+      - name: Install lint dependencies
+        run: uv sync --only-group dev --no-install-project --frozen
+
+      - name: Run Ruff
+        run: uv run --no-sync ruff check src tests scripts
+
+  build:
+    needs: test
+    permissions:
+      contents: write
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            name: fitness_tracker-x86_64
+          - os: ubuntu-24.04-arm
+            name: fitness_tracker-arm64
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Verify lockfile
+        run: uv lock --check
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version-file: ".python-version"
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libcairo2-dev \
+            pkg-config \
+            libgirepository-2.0-dev \
+            gir1.2-gtk-4.0 \
+            gir1.2-adw-1
 
       - name: Install dependencies
         run: uv sync --frozen --no-dev
-        
-      - name: Build
-        run: uv build
 
-      # Export deps to use for pex due to libpebble2 custom repo
-      - name: Export Deps
-        run: uv export --format requirements-txt --no-emit-project --no-dev --frozen --no-hashes -o dist/requirements.txt
-
-      - name: Create PEX
-        run: |
-          uvx --python .venv/bin/python pex \
-            -r dist/requirements.txt \
-            dist/fitness_tracker-*.whl \
-            -e fitness_tracker.main:main \
-            -o dist/fitness_tracker.pex \
-            --python-shebang '#!/usr/bin/env python3' \
-            --scie eager \
-            --scie-pbs-stripped
+      - name: Build PEX artifact
+        run: ./build_pex.sh
 
       - name: Upload Full
         uses: actions/upload-artifact@v7
@@ -82,7 +150,7 @@ jobs:
           tag: ${{ github.ref }}
           asset_name: ${{ matrix.name }}
           file: ${{ github.workspace }}/dist/fitness_tracker
-      
+
       - name: Upload pex to GitHub Releases
         if: startsWith(github.ref, 'refs/tags/')
         uses: svenstaro/upload-release-action@v2
@@ -94,6 +162,8 @@ jobs:
 
   package:
     needs: build
+    permissions:
+      contents: write
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -107,6 +177,8 @@ jobs:
             name: fitness_tracker-arm64
     steps:
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
 
       - name: Download full
         uses: actions/download-artifact@v7
@@ -127,7 +199,7 @@ jobs:
         uses: ruby/setup-ruby@v1
         with:
           ruby-version: ruby
-          
+
       - name: Install fpm
         run: gem install fpm
 
@@ -140,7 +212,7 @@ jobs:
             dist/fitness_tracker=/usr/bin/fitness-tracker \
             dist/fitness_tracker.pex=/usr/bin/fitness-tracker.pex \
             data/fitness-tracker.desktop=/usr/share/applications/fitness-tracker.desktop \
-            data/fitness-tracker.svg=/usr/share/icons/hicolor/scalable/apps/fitness-tracker.svg 
+            data/fitness-tracker.svg=/usr/share/icons/hicolor/scalable/apps/fitness-tracker.svg
 
       - name: Upload Package
         uses: actions/upload-artifact@v7
@@ -159,9 +231,14 @@ jobs:
           file_glob: true
 
   pebble:
+    needs: test
+    permissions:
+      contents: write
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
 
       - name: Install uv
         uses: astral-sh/setup-uv@v7
@@ -188,7 +265,7 @@ jobs:
           name: fitness_tracker.pbw
           path: |
             dist/fitness_tracker.pbw
-      
+
       - name: Upload Pebble app to GitHub Releases
         if: startsWith(github.ref, 'refs/tags/')
         uses: svenstaro/upload-release-action@v2

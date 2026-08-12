@@ -52,7 +52,7 @@ modules:
     sources:
       - type: git
         url: https://github.com/luigi311/bleaksport
-        commit: 4fb34ff69dbab6ec160a130a476fd95b2f682d1e
+        commit: b56861d2823c6e56bd4764fde52bde66d6b6e85c
 
   - name: python3-libpebble2
     buildsystem: simple
