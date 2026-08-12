@@ -8,7 +8,6 @@ from workout_parser import (
     Workout,
 )
 
-from fitness_tracker.core.guidance import apply_target_bias, format_step_duration
 from fitness_tracker.core.units import (
     DurationStyle,
     UnitSystem,
