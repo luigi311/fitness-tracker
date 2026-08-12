@@ -1,6 +1,6 @@
+from fitness_tracker.core.guidance import format_step_duration
 from fitness_tracker.workout_execution import WorkoutExecution
 from fitness_tracker.workouts import (
-    format_step_duration,
     format_step_remaining,
     format_workout_summary,
 )
