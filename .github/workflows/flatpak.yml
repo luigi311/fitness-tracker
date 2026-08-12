@@ -39,8 +39,14 @@ jobs:
       - name: Install deps
         run: uv sync --dev --frozen --group flatpak
 
+      - name: Verify Flatpak source pins
+        run: uv run --no-sync python scripts/sync_flatpak_sources.py --check
+
       - name: Generate flatpak files
         run: ./regenerate_flatpak_deps.sh .
+
+      - name: Ensure generation did not modify tracked metadata
+        run: git diff --exit-code -- com.luigi311.fitness-tracker.yaml
 
       - uses: flatpak/flatpak-github-actions/flatpak-builder@v6
         with:

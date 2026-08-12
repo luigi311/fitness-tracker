@@ -11,6 +11,8 @@
 
 set -euo pipefail
 
+PROJECT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+
 uv sync --dev --frozen --group flatpak
 
 # Export from uv.lock → requirements.txt.
@@ -20,6 +22,7 @@ uv sync --dev --frozen --group flatpak
 #    --no-group            : skip flatpak group
 #    --no-emit-package X   : skip packages we handle elsewhere
 uv export \
+    --frozen \
     --format requirements-txt \
     --no-hashes \
     --no-emit-project \
@@ -51,19 +54,17 @@ OUT_BUILDERS="${DIR}/builders.json"
 OUT_PIP="${DIR}/pip-sources.json"
 
 # For some reason doesnt work with uv run and only works if ran directly.
-.venv/bin/python -m flatpak_pip_generator \
+"$PROJECT_DIR/.venv/bin/python" -m flatpak_pip_generator \
     --runtime='org.gnome.Sdk//50' \
     --requirements-file=builder-requirements.txt \
     --output="$OUT_BUILDERS"
 
 # Match target platforms to python version in the gnome sdk
-.venv/bin/python -m req2flatpak --requirements-file requirements.txt --target-platforms 313-x86_64 313-aarch64 > "$OUT_PIP"
+"$PROJECT_DIR/.venv/bin/python" -m req2flatpak --requirements-file requirements.txt --target-platforms 313-x86_64 313-aarch64 > "$OUT_PIP"
 
 # Notify that files were written
 echo "Wrote $OUT_BUILDERS"
 echo "Wrote $OUT_PIP"
 
-# Sanity: verify the commits in the manifest match uv.lock.
-echo
-echo "Git commits in uv.lock — confirm these match your .yaml manifest:"
-grep -E '^\s*source = \{ git = ' uv.lock | sed 's/.*"\(http[^"]*\)".*/\1/'
+# Keep the manually maintained Git source section synchronized with uv.lock.
+"$PROJECT_DIR/.venv/bin/python" "$PROJECT_DIR/scripts/sync_flatpak_sources.py"

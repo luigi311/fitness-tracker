@@ -42,7 +42,7 @@ modules:
     sources:
       - type: git
         url: https://github.com/luigi311/python-pyftms
-        commit: b72174016b6fc8dc70f2af82da2a8f0014e745f6
+        commit: 7c828fcf8b47f4ec917edec8b9a1585db4e35352
 
   - name: python3-bleaksport
     buildsystem: simple

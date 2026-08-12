@@ -33,6 +33,10 @@ https://fitness-tracker.luigi311.com/devices/
 
 ## Usage
 
+After installing the project with `uv sync`, the canonical application command is
+`uv run fitness-tracker [options]`. From a source checkout, `uv run python main.py
+[options]` is also supported and delegates to the same argument parser.
+
 * **Tracker Page**: Used to start your session, select the sport and enviornment and then start a workout/freerun and then click start when ready
 
 * **History Page**: See previous sessions with filter for Last 7 Days, Last 30 Days, or All Time. Tick individual sessions and click compare to see more detailed graphs.

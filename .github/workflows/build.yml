@@ -11,6 +11,63 @@ on:
       - "*.md"
 
 jobs:
+  test:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version-file: ".python-version"
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libcairo2-dev \
+            pkg-config \
+            libgirepository-2.0-dev
+
+      - name: Install dependencies
+        run: uv sync --dev --frozen
+
+      - name: Validate release metadata
+        run: uv run python scripts/validate_release.py
+
+      - name: Verify Pebble protocol generation
+        run: uv run python scripts/generate_pebble_protocol.py --check
+
+      - name: Run tests
+        run: uv run pytest
+
+      - name: Run ty
+        run: uv run ty check src
+
+  lint:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version-file: ".python-version"
+
+      - name: Install lint dependencies
+        run: uv sync --only-group dev --no-install-project --frozen
+
+      - name: Run Ruff
+        run: uv run --no-sync ruff check src tests scripts
+
   build:
     runs-on: ${{ matrix.os }}
     strategy:
