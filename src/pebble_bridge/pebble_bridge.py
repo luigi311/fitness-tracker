@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import threading
 import time
+from typing import TYPE_CHECKING
 from uuid import UUID
 
 from libpebble2.communication import PebbleConnection
@@ -12,12 +14,35 @@ from libpebble2.communication.transports.websocket import WebsocketTransport
 from libpebble2.services.appmessage import AppMessageService, Uint8, Uint16, Uint32
 from loguru import logger
 
+from pebble_bridge.protocol import (
+    KEY_CADENCE,
+    KEY_DISTANCE,
+    KEY_HR,
+    KEY_PACE,
+    KEY_PACE_SCALE,
+    KEY_POWER,
+    KEY_SYNC_REQUEST,
+    KEY_TGT_HI,
+    KEY_TGT_KIND,
+    KEY_TGT_LO,
+    KEY_UNITS,
+    KEY_WIDTHS,
+    KEY_WORKOUT_OUTDOOR,
+    KEY_WORKOUT_STEP,
+    TARGET_KIND_SCALE,
+    TGT_PACE,
+)
+
+if TYPE_CHECKING:
+    from collections.abc import Callable, Coroutine
+
 # cobble_client talks to the long-lived cobbled daemon over D-Bus. It has
 # no BLE/BlueZ requirement itself (the daemon owns the radio), but it is still
 # Linux/D-Bus oriented and may not be installed; degrade gracefully if so.
 try:
     from cobble_client import CobbleClient as _CobbleClient
     from cobble_client import DaemonNotRunningError
+    from cobble_client import Int as _CobbleInt
     from cobble_client import u8 as _cobble_u8
     from cobble_client import u16 as _cobble_u16
     from cobble_client import u32 as _cobble_u32
@@ -27,36 +52,16 @@ except (ImportError, RuntimeError) as _e:  # pragma: no cover - platform depende
     HAVE_COBBLE = False
     _COBBLE_UNAVAILABLE_REASON = repr(_e)
 
-KEY_HR = 1
-KEY_SPEED = 2
-KEY_CADENCE = 3
-KEY_DISTANCE = 4
-KEY_STATUS = 5
-KEY_UNITS = 6
-KEY_POWER = 7
-KEY_TGT_KIND = 8
-KEY_TGT_LO = 9
-KEY_TGT_HI = 10
-KEY_WORKOUT_OUTDOOR = 11
-KEY_WORKOUT_STEP = 12
 
-# The EXACT widths the watchapp's C handler reads each key as
-# (t->value->uint8/uint16/uint32). Every backend pins to these so the watch
-# decodes correctly regardless of transport.
-_KEY_WIDTH = {
-    KEY_HR: 16,
-    KEY_SPEED: 16,
-    KEY_CADENCE: 16,
-    KEY_DISTANCE: 32,
-    KEY_STATUS: 8,
-    KEY_UNITS: 8,
-    KEY_POWER: 16,
-    KEY_TGT_KIND: 8,
-    KEY_TGT_LO: 16,
-    KEY_TGT_HI: 16,
-    KEY_WORKOUT_OUTDOOR: 8,
-    KEY_WORKOUT_STEP: 16,
-}
+def _clamp_wire_value(value: int, width: int) -> int:
+    """Clamp an integer to the unsigned range of a Pebble AppMessage field."""
+    return max(0, min(value, (1 << width) - 1))
+
+
+def _target_wire_value(value: float, kind: int | None) -> int:
+    """Encode a target using the canonical whole-unit or pace scaling rule."""
+    scale = TARGET_KIND_SCALE[TGT_PACE] if kind is None else TARGET_KIND_SCALE[kind]
+    return round(value * scale)
 
 
 class _CobbleBackend:
@@ -77,10 +82,12 @@ class _CobbleBackend:
     def __init__(
         self,
         app_uuid: str,
+        on_app_message: Callable[[str, dict[int, object]], None],
         connect_timeout: float = 10.0,
         send_timeout: float = 10.0,
     ) -> None:
         self._app_uuid = app_uuid
+        self._message_callback = on_app_message
         self._connect_timeout = connect_timeout
         self._send_timeout = send_timeout
         self._loop: asyncio.AbstractEventLoop | None = None
@@ -106,11 +113,23 @@ class _CobbleBackend:
             raise
 
     def _run_loop(self) -> None:
-        asyncio.set_event_loop(self._loop)
-        self._loop.run_forever()
+        loop = self._loop
+        if loop is None:
+            message = "Pebble bridge event loop was not initialized"
+            raise RuntimeError(message)
+        asyncio.set_event_loop(loop)
+        loop.run_forever()
 
-    def _call(self, coro, timeout: float):
-        return asyncio.run_coroutine_threadsafe(coro, self._loop).result(timeout)
+    def _call[T](
+        self,
+        coro: Coroutine[object, object, T],
+        timeout: float,
+    ) -> T:
+        loop = self._loop
+        if loop is None:
+            message = "Pebble bridge is not connected"
+            raise RuntimeError(message)
+        return asyncio.run_coroutine_threadsafe(coro, loop).result(timeout)
 
     async def _async_connect(self) -> None:
         client = _CobbleClient()
@@ -120,6 +139,7 @@ class _CobbleBackend:
         # backend.
         await client.connect(require_daemon=True)
         self._client = client
+        client.on_app_message(self._handle_app_message)
         # Bring the watchapp to the foreground; an app that isn't running just
         # NACKs every AppMessage. Best-effort: it may already be open.
         try:
@@ -127,6 +147,13 @@ class _CobbleBackend:
             await asyncio.sleep(1.0)
         except Exception as e:
             logger.debug(f"daemon launch_app failed (app may already be open): {e!r}")
+
+    def _handle_app_message(self, app_uuid: str, data: dict[int, object]) -> None:
+        value = data.get(KEY_SYNC_REQUEST)
+        if isinstance(value, _CobbleInt):
+            data = dict(data)
+            data[KEY_SYNC_REQUEST] = value.value
+        self._message_callback(app_uuid, data)
 
     def send(self, data: dict) -> None:
         if self._client is None or self._loop is None:
@@ -168,54 +195,122 @@ class _Libpebble2Backend:
     def __init__(
         self,
         app_uuid: str,
+        on_app_message: Callable[[str, dict[int, object]], None],
         mac: str | None = None,
         *,
         use_emulator: bool = False,
         port: int = 47527,
     ) -> None:
         self._app_uuid = app_uuid
+        self._message_callback = on_app_message
         self._mac = mac
         self._use_emulator = use_emulator
         self._port = port
         self._conn: PebbleConnection | None = None
         self._appmsg: AppMessageService | None = None
+        self._send_timeout = 10.0
+        self._delivery_condition = threading.Condition()
+        self._delivery_results: dict[int, bool] = {}
+        self._closed = False
         self.name = "emulator" if use_emulator else "serial"
         self.int_types = {8: Uint8, 16: Uint16, 32: Uint32}
 
     def connect(self) -> None:
+        try:
+            self._create_connection()
+            self._initialize_connection()
+        except BaseException:
+            with contextlib.suppress(Exception):
+                self.close()
+            raise
+
+    def _create_connection(self) -> None:
         if self._use_emulator:
             logger.debug("Connecting via emulator")
             # Try WS first (pypkjs), then fall back to QEMU
             try:
-                self._conn = PebbleConnection(WebsocketTransport(f"ws://127.0.0.1:{self._port}/"))
+                self._conn = PebbleConnection(
+                    WebsocketTransport(f"ws://127.0.0.1:{self._port}/"),
+                )
             except Exception:
                 self._conn = PebbleConnection(QemuTransport("127.0.0.1", self._port))
-        else:
-            if not self._mac:
-                msg = "Invalid MAC address for real Pebble"
-                raise ValueError(msg)
-            logger.debug(f"Connecting via Bluetooth serial: {self._mac}")
-            self._conn = PebbleConnection(SerialTransport(self._mac))
+            return
 
-        self._conn.connect()
-        self._conn.run_async()
+        if not self._mac:
+            msg = "Invalid MAC address for real Pebble"
+            raise ValueError(msg)
+        logger.debug(f"Connecting via Bluetooth serial: {self._mac}")
+        self._conn = PebbleConnection(SerialTransport(self._mac))
 
-        if not self._conn.connected:
+    def _initialize_connection(self) -> None:
+        conn = self._conn
+        if conn is None:
+            msg = f"libpebble2 ({self.name}) connection was not created"
+            raise RuntimeError(msg)
+        conn.connect()
+        conn.run_async()
+
+        if not conn.connected:
             # Raise instead of limping on so the bridge loop's backoff/retry
             # (and a future BLE re-attempt) actually kicks in.
             msg = f"libpebble2 ({self.name}) failed to connect"
             raise RuntimeError(msg)
 
-        self._appmsg = AppMessageService(self._conn)
+        self._appmsg = AppMessageService(conn)
+        self._appmsg.register_handler("appmessage", self._handle_app_message)
+        self._appmsg.register_handler("ack", self._handle_ack)
+        self._appmsg.register_handler("nack", self._handle_nack)
+        with self._delivery_condition:
+            self._closed = False
+            self._delivery_results.clear()
+
+    def _handle_app_message(
+        self,
+        _transaction_id: int,
+        app_uuid: UUID,
+        data: dict[int, object],
+    ) -> None:
+        self._message_callback(str(app_uuid), data)
+
+    def _record_delivery(self, transaction_id: int, *, acknowledged: bool) -> None:
+        with self._delivery_condition:
+            if not self._closed:
+                self._delivery_results[transaction_id] = acknowledged
+                self._delivery_condition.notify_all()
+
+    def _handle_ack(self, transaction_id: int, _app_uuid: UUID | None) -> None:
+        self._record_delivery(transaction_id, acknowledged=True)
+
+    def _handle_nack(self, transaction_id: int, _app_uuid: UUID | None) -> None:
+        self._record_delivery(transaction_id, acknowledged=False)
 
     def send(self, data: dict) -> None:
-        if self._appmsg is None:
+        appmsg = self._appmsg
+        if appmsg is None:
             msg = f"{self.name} backend not connected"
             raise RuntimeError(msg)
-        self._appmsg.send_message(UUID(self._app_uuid), data)
+        transaction_id = appmsg.send_message(UUID(self._app_uuid), data)
+        deadline = time.monotonic() + self._send_timeout
+        with self._delivery_condition:
+            while transaction_id not in self._delivery_results and not self._closed:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    msg = f"{self.name} AppMessage transaction {transaction_id} timed out"
+                    raise TimeoutError(msg)
+                self._delivery_condition.wait(timeout=remaining)
+            if self._closed:
+                msg = f"{self.name} backend closed before AppMessage acknowledgement"
+                raise RuntimeError(msg)
+            acknowledged = self._delivery_results.pop(transaction_id)
+        if not acknowledged:
+            msg = f"{self.name} AppMessage transaction {transaction_id} was rejected"
+            raise RuntimeError(msg)
 
     def close(self) -> None:
         conn, self._conn = self._conn, None
+        with self._delivery_condition:
+            self._closed = True
+            self._delivery_condition.notify_all()
         self._appmsg = None
         if conn:
             conn.close()
@@ -244,7 +339,10 @@ class PebbleBridge:
         self.use_emulator = use_emulator
         self.port = port
         self._lock = threading.Lock()
-        self._state = {}  # latest metrics, key -> plain int
+        self._wake = threading.Event()
+        self._state: dict[int, int] = {}  # latest metrics, key -> plain int
+        self._dirty_keys: set[int] = set()
+        self._full_request_id = 0
         self._running = False
         self._t: threading.Thread | None = None
         self._backend: _CobbleBackend | _Libpebble2Backend | None = None
@@ -260,18 +358,74 @@ class PebbleBridge:
     def stop(self) -> None:
         """Stop the background thread and disconnect."""
         self._running = False
-        if self._t:
-            self._t.join(timeout=1.0)
-            self._t = None
+        self._wake.set()
         self._close_backend()
+        thread = self._t
+        if thread:
+            thread.join(timeout=1.0)
+            if not thread.is_alive():
+                self._t = None
+
+    def _update_metrics(
+        self,
+        *,
+        hr: int | None,
+        speed_mps: float | None,
+        cadence: int | None,
+        dist_m: int | None,
+        power_w: int | None,
+        units: int | None,
+    ) -> None:
+        """Apply metric and display-unit changes; caller must hold ``self._lock``."""
+        if hr is not None:
+            self._set_state(KEY_HR, int(hr))
+        if speed_mps is not None:
+            self._set_state(KEY_PACE, round(speed_mps * KEY_PACE_SCALE))
+        if cadence is not None:
+            self._set_state(KEY_CADENCE, int(cadence))
+        if dist_m is not None:
+            self._set_state(KEY_DISTANCE, int(dist_m))
+        if units is not None:
+            # 0 metric, 1 imperial (optional)
+            self._set_state(KEY_UNITS, int(units))
+        if power_w is not None:
+            self._set_state(KEY_POWER, int(power_w))
+
+    def _update_target_state(
+        self,
+        *,
+        tgt_kind: int | None,
+        tgt_lo: float | None,
+        tgt_hi: float | None,
+    ) -> None:
+        """Apply target-domain and target-band changes; caller must hold ``self._lock``."""
+        if tgt_kind is not None:
+            self._set_state(KEY_TGT_KIND, int(tgt_kind))
+        target_kind = tgt_kind if tgt_kind is not None else self._state.get(KEY_TGT_KIND)
+        if tgt_lo is not None:
+            self._set_state(KEY_TGT_LO, _target_wire_value(tgt_lo, target_kind))
+        if tgt_hi is not None:
+            self._set_state(KEY_TGT_HI, _target_wire_value(tgt_hi, target_kind))
+
+    def _update_workout_state(
+        self,
+        *,
+        workout_outdoor: bool | None,
+        workout_step: int | None,
+    ) -> None:
+        """Apply workout-state changes; caller must hold ``self._lock``."""
+        if workout_outdoor is not None:
+            self._set_state(KEY_WORKOUT_OUTDOOR, int(workout_outdoor))
+        if workout_step is not None:
+            self._set_state(KEY_WORKOUT_STEP, int(workout_step))
 
     def update(
         self,
+        *,
         hr: int | None = None,
         speed_mps: float | None = None,
         cadence: int | None = None,
         dist_m: int | None = None,
-        status: int | None = None,
         power_w: int | None = None,
         units: int | None = None,
         tgt_kind: int | None = None,
@@ -282,37 +436,35 @@ class PebbleBridge:
     ) -> None:
         """Update the latest metrics (None = no change)."""
         with self._lock:
-            if hr is not None:
-                self._state[KEY_HR] = int(hr)
-            if speed_mps is not None:
-                self._state[KEY_SPEED] = round(speed_mps * 100)
-            if cadence is not None:
-                self._state[KEY_CADENCE] = int(cadence)
-            if dist_m is not None:
-                self._state[KEY_DISTANCE] = int(dist_m)
-            if status is not None:
-                self._state[KEY_STATUS] = int(status)
-            if units is not None:
-                # 0 metric, 1 imperial (optional)
-                self._state[KEY_UNITS] = int(units)
-            if power_w is not None:
-                self._state[KEY_POWER] = int(power_w)
-            if tgt_kind is not None:
-                # 0 none, 1 power, 2 pace
-                self._state[KEY_TGT_KIND] = int(tgt_kind)
-            if tgt_lo is not None:
-                # Power/HR use whole units; pace uses m/s * 100.
-                val = round(tgt_lo if tgt_kind in (1, 3) else (tgt_lo * 100.0))
-                self._state[KEY_TGT_LO] = val
-            if tgt_hi is not None:
-                val = round(tgt_hi if tgt_kind in (1, 3) else (tgt_hi * 100.0))
-                self._state[KEY_TGT_HI] = val
-            if workout_outdoor is not None:
-                self._state[KEY_WORKOUT_OUTDOOR] = int(workout_outdoor)
-            if workout_step is not None:
-                self._state[KEY_WORKOUT_STEP] = int(workout_step)
+            self._update_metrics(
+                hr=hr,
+                speed_mps=speed_mps,
+                cadence=cadence,
+                dist_m=dist_m,
+                power_w=power_w,
+                units=units,
+            )
+            self._update_target_state(tgt_kind=tgt_kind, tgt_lo=tgt_lo, tgt_hi=tgt_hi)
+            self._update_workout_state(
+                workout_outdoor=workout_outdoor,
+                workout_step=workout_step,
+            )
 
     # --- internal ---
+    def _on_app_message(self, app_uuid: str, data: dict[int, object]) -> None:
+        if app_uuid.casefold() != self.app_uuid.casefold():
+            return
+        if data.get(KEY_SYNC_REQUEST) != 1:
+            return
+        with self._lock:
+            self._full_request_id += 1
+        self._wake.set()
+
+    def _set_state(self, key: int, value: int) -> None:
+        if self._state.get(key) != value:
+            self._dirty_keys.add(key)
+        self._state[key] = value
+
     def _connect(self) -> None:
         if self._backend:
             logger.debug("Already connected")
@@ -320,7 +472,12 @@ class PebbleBridge:
 
         # Emulator: libpebble2 WS/QEMU, exactly as before.
         if self.use_emulator:
-            backend = _Libpebble2Backend(self.app_uuid, use_emulator=True, port=self.port)
+            backend = _Libpebble2Backend(
+                self.app_uuid,
+                self._on_app_message,
+                use_emulator=True,
+                port=self.port,
+            )
             backend.connect()
             self._backend = backend
             logger.success("Connected to Pebble (emulator)")
@@ -334,7 +491,7 @@ class PebbleBridge:
 
         # 1. Shared daemon (cobble_client). Preferred when one is running.
         if HAVE_COBBLE:
-            backend = _CobbleBackend(self.app_uuid)
+            backend = _CobbleBackend(self.app_uuid, self._on_app_message)
             try:
                 backend.connect()
             except DaemonNotRunningError as e:
@@ -355,7 +512,7 @@ class PebbleBridge:
             )
 
         # 2. Serial fallback (libpebble2).
-        backend = _Libpebble2Backend(self.app_uuid, mac=self.mac)
+        backend = _Libpebble2Backend(self.app_uuid, self._on_app_message, mac=self.mac)
         backend.connect()
         self._backend = backend
         logger.success("Connected to Pebble over Bluetooth serial")
@@ -372,7 +529,11 @@ class PebbleBridge:
         with self._lock:
             if not self._state:
                 return
-            payload = dict(self._state)  # snapshot; never iterate live dict unlocked
+            payload = {
+                key: value for key, value in self._state.items() if full or key in self._dirty_keys
+            }
+            if not payload:
+                return
 
         backend = self._backend
         if not backend:
@@ -381,27 +542,49 @@ class PebbleBridge:
         # Pin every value to the exact width the watchapp reads, using
         # whichever wrapper types the active backend speaks.
         wrap = backend.int_types
-        d = {key: wrap[_KEY_WIDTH.get(key, 16)](value) for key, value in payload.items()}
+        d = {
+            key: wrap[KEY_WIDTHS[key]](_clamp_wire_value(value, KEY_WIDTHS[key]))
+            for key, value in payload.items()
+        }
         backend.send(d)
+
+        with self._lock:
+            for key, value in payload.items():
+                if self._state.get(key) == value:
+                    self._dirty_keys.discard(key)
 
     def _loop(self) -> None:
         backoff = 1.0
         full_after_reconnect = False
-        while self._running:
-            try:
-                if not self._backend:
-                    self._connect()
-                    full_after_reconnect = True
-                    backoff = 1.0
-                # Re-check after a (possibly slow) connect: if stop() fired
-                # while we were connecting, don't push a final stale frame.
-                if not self._running:
-                    break
-                self._send_once(full=full_after_reconnect)
-                full_after_reconnect = False
-                time.sleep(0.5)
-            except Exception as e:
-                logger.error(f"PebbleBridge error: {e!r}")
-                self._close_backend()
-                time.sleep(backoff)
-                backoff = min(10.0, backoff * 2)
+        try:
+            while self._running:
+                try:
+                    if not self._backend:
+                        self._connect()
+                        full_after_reconnect = True
+                        backoff = 1.0
+                    # Re-check after a (possibly slow) connect: if stop() fired
+                    # while we were connecting, don't push a final stale frame.
+                    if not self._running:
+                        break
+                    with self._lock:
+                        request_id = self._full_request_id
+                    self._send_once(full=full_after_reconnect or request_id > 0)
+                    if request_id:
+                        with self._lock:
+                            if self._full_request_id == request_id:
+                                self._full_request_id = 0
+                    full_after_reconnect = False
+                    if self._running:
+                        self._wake.wait(0.5)
+                        self._wake.clear()
+                except Exception as e:
+                    if not self._running:
+                        break
+                    logger.error(f"PebbleBridge error: {e!r}")
+                    self._close_backend()
+                    if self._wake.wait(backoff):
+                        self._wake.clear()
+                    backoff = min(10.0, backoff * 2)
+        finally:
+            self._close_backend()
