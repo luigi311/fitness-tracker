@@ -1,0 +1,105 @@
+version = 1
+
+[[keys]]
+name = "KEY_HR"
+id = 1
+width = 16
+unit = "bpm"
+scale = 1
+
+[[keys]]
+name = "KEY_PACE"
+id = 2
+width = 16
+unit = "m/s"
+scale = 100
+
+[[keys]]
+name = "KEY_CADENCE"
+id = 3
+width = 16
+unit = "steps/min"
+scale = 1
+
+[[keys]]
+name = "KEY_DISTANCE"
+id = 4
+width = 32
+unit = "m"
+scale = 1
+
+[[keys]]
+name = "KEY_UNITS"
+id = 6
+width = 8
+unit = "0=metric, 1=imperial"
+scale = 1
+
+[[keys]]
+name = "KEY_POWER"
+id = 7
+width = 16
+unit = "W"
+scale = 1
+
+[[keys]]
+name = "KEY_TGT_KIND"
+id = 8
+width = 8
+unit = "target kind"
+scale = 1
+
+[[keys]]
+name = "KEY_TGT_LO"
+id = 9
+width = 16
+unit = "target lower bound"
+scale = "target_kind"
+
+[[keys]]
+name = "KEY_TGT_HI"
+id = 10
+width = 16
+unit = "target upper bound"
+scale = "target_kind"
+
+[[keys]]
+name = "KEY_WORKOUT_OUTDOOR"
+id = 11
+width = 8
+unit = "0=indoor, 1=outdoor"
+scale = 1
+
+[[keys]]
+name = "KEY_WORKOUT_STEP"
+id = 12
+width = 16
+unit = "expanded step index"
+scale = 1
+
+[[keys]]
+name = "KEY_SYNC_REQUEST"
+id = 13
+width = 8
+unit = "watch launch state sync request"
+scale = 1
+
+[[target_kinds]]
+name = "TGT_NONE"
+value = 0
+scale = 1
+
+[[target_kinds]]
+name = "TGT_POWER"
+value = 1
+scale = 1
+
+[[target_kinds]]
+name = "TGT_PACE"
+value = 2
+scale = 100
+
+[[target_kinds]]
+name = "TGT_HEART_RATE"
+value = 3
+scale = 1

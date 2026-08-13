@@ -25,11 +25,20 @@
       "media": []
     },
     "messageKeys": [
+      "RESERVED_PROTOCOL_KEY_0",
       "KEY_HR",
       "KEY_PACE",
       "KEY_CADENCE",
       "KEY_DISTANCE",
-      "KEY_STATUS"
+      "RESERVED_PROTOCOL_KEY_5",
+      "KEY_UNITS",
+      "KEY_POWER",
+      "KEY_TGT_KIND",
+      "KEY_TGT_LO",
+      "KEY_TGT_HI",
+      "KEY_WORKOUT_OUTDOOR",
+      "KEY_WORKOUT_STEP",
+      "KEY_SYNC_REQUEST"
     ]
   }
 }
