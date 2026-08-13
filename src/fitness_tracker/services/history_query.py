@@ -128,7 +128,8 @@ def downsample_lttb(
     available through the repository for exports and other consumers.
     """
     if max_points <= 0:
-        raise ValueError
+        message = f"max_points must be positive, got {max_points}"
+        raise ValueError(message)
     valid = tuple((float(x), float(y)) for x, y in points if y is not None and isfinite(float(y)))
     if len(valid) <= max_points:
         return valid

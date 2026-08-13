@@ -3,7 +3,7 @@ import os
 import sqlite3
 import tempfile
 from datetime import UTC, datetime
-from functools import partial
+from functools import cache, partial
 from pathlib import Path
 from threading import Lock
 from typing import Any
@@ -67,15 +67,13 @@ def _build_alembic_config() -> Config:
     return config
 
 
+@cache
 def _alembic_head_revision() -> str:
     revision = ScriptDirectory.from_config(_build_alembic_config()).get_current_head()
     if revision is None:
         message = "Alembic migration history has no head revision"
         raise RuntimeError(message)
     return revision
-
-
-ALEMBIC_HEAD_REVISION = _alembic_head_revision()
 
 
 def _sqlite_pragmas(dbapi_con: sqlite3.Connection, _con_record: object) -> None:
@@ -341,7 +339,7 @@ class DatabaseManager:
             try:
                 config = _build_alembic_config()
                 config.attributes["connection"] = connection
-                command.upgrade(config, ALEMBIC_HEAD_REVISION)
+                command.upgrade(config, _alembic_head_revision())
                 transaction.commit()
             except Exception:
                 transaction.rollback()
@@ -393,7 +391,7 @@ class DatabaseManager:
         with engine.connect() as connection:
             alembic_revision = DatabaseManager._alembic_revision(connection)
 
-        if alembic_revision != ALEMBIC_HEAD_REVISION:
+        if alembic_revision != _alembic_head_revision():
             return True
 
         return bool(DatabaseManager._schema_invariant_errors(inspector))
@@ -408,19 +406,17 @@ class DatabaseManager:
             )
             raise RuntimeError(message)
 
-        database = engine.url.database
-        if database is None or database == ":memory:" or database.startswith("file:"):
+        database_path = sqlite_database_path(engine)
+        if database_path is None:
             message = "A file-backed SQLite database is required for migration backup"
             raise RuntimeError(message)
-
-        database_path = Path(database).expanduser().absolute()
         secure_file(database_path)
         if not database_path.is_file():
             message = f"SQLite database file does not exist: {database_path}"
             raise RuntimeError(message)
 
         backup_path = database_path.with_name(
-            f"{database_path.name}.pre-{ALEMBIC_HEAD_REVISION}",
+            f"{database_path.name}.pre-{_alembic_head_revision()}",
         )
         return database_path, backup_path
 
@@ -448,6 +444,8 @@ class DatabaseManager:
             destination = sqlite3.connect(temporary_path)
             source.backup(destination)
             destination.commit()
+            destination.close()
+            destination = None
             temporary_path.replace(backup_path)
             secure_file(backup_path)
             return backup_path
@@ -503,10 +501,11 @@ class DatabaseManager:
 
         with engine.connect() as conn:
             alembic_revision = DatabaseManager._alembic_revision(conn)
-        if alembic_revision != ALEMBIC_HEAD_REVISION:
+        head_revision = _alembic_head_revision()
+        if alembic_revision != head_revision:
             message = (
                 f"Database migration ended at Alembic revision {alembic_revision}; "
-                f"expected {ALEMBIC_HEAD_REVISION}"
+                f"expected {head_revision}"
             )
             raise RuntimeError(message)
 

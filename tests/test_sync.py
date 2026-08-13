@@ -1,5 +1,7 @@
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from threading import Barrier
 from unittest.mock import Mock
 from uuid import UUID, uuid4
 
@@ -101,7 +103,7 @@ def test_sync_migrates_legacy_sqlite_remote_with_backup(tmp_path: Path) -> None:
         column["name"] for column in inspect(remote_engine).get_columns("activities")
     }
     assert remote_path.with_name(
-        f"{remote_path.name}.pre-{database_module.ALEMBIC_HEAD_REVISION}",
+        f"{remote_path.name}.pre-{database_module._alembic_head_revision()}",  # noqa: SLF001
     ).is_file()
     remote = _manager(remote_path)
     assert _activity(remote, public_id).public_id == public_id
@@ -230,6 +232,65 @@ def test_new_samples_invalidate_successful_uploads(tmp_path: Path) -> None:
     assert [activity.id for activity in db.repository.list_not_uploaded(PROVIDER)] == [activity_id]
 
 
+def test_concurrent_upload_updates_share_one_provider_row(tmp_path: Path) -> None:
+    db = _manager(tmp_path / "database.db")
+    activity_id = db.start_activity(SportTypesEnum.running)
+    workers = 6
+    barrier = Barrier(workers, timeout=5.0)
+
+    def update_upload(index: int) -> None:
+        barrier.wait()
+        if index % 2:
+            db.repository.mark_upload_failed(
+                activity_id,
+                PROVIDER,
+                f"failure-{index}",
+                payload_hash=f"hash-{index}",
+            )
+        else:
+            db.repository.mark_upload_ok(
+                activity_id,
+                PROVIDER,
+                provider_activity_id=f"remote-{index}",
+                payload_hash=f"hash-{index}",
+            )
+
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        list(executor.map(update_upload, range(workers)))
+
+    with db.Session() as session:
+        uploads = session.query(ActivityUpload).filter_by(activity_id=activity_id).all()
+    assert len(uploads) == 1
+    assert uploads[0].status in {"ok", "failed"}
+    assert uploads[0].payload_hash is not None
+
+
+def test_older_failure_does_not_overwrite_newer_success(tmp_path: Path) -> None:
+    db = _manager(tmp_path / "database.db")
+    activity_id = db.start_activity(SportTypesEnum.running)
+    future = datetime.now(UTC) + timedelta(days=1)
+    with db.Session() as session:
+        session.add(
+            ActivityUpload(
+                activity_id=activity_id,
+                provider=PROVIDER,
+                status="ok",
+                uploaded_at=future,
+                updated_at=future,
+                provider_activity_id="remote-success",
+            ),
+        )
+        session.commit()
+
+    db.repository.mark_upload_failed(activity_id, PROVIDER, "late worker failure")
+
+    with db.Session() as session:
+        upload = session.query(ActivityUpload).filter_by(activity_id=activity_id).one()
+    assert upload.status == "ok"
+    assert upload.provider_activity_id == "remote-success"
+    assert upload.last_error is None
+
+
 def test_sync_translates_remote_artifact_hardening_errors(tmp_path: Path) -> None:
     local = _manager(tmp_path / "local.db")
     victim_path = tmp_path / "victim.txt"
@@ -273,6 +334,28 @@ def test_remote_cleanup_error_does_not_mask_sync_error(
     assert harden.call_count == EXPECTED_HARDEN_CALL_COUNT
 
 
+def test_sync_disposes_remote_engine_when_preparation_fails() -> None:
+    engine = create_engine("sqlite:///:memory:")
+    dispose = Mock(wraps=engine.dispose)
+    engine.dispose = dispose
+
+    def fail_prepare(_engine) -> None:
+        message = "prepare failed"
+        raise RuntimeError(message)
+
+    synchronizer = DatabaseSynchronizer(
+        prepare_remote_database=fail_prepare,
+        local_session_factory=Session,
+        sync_direction=lambda _source, _destination: None,
+        engine_factory=lambda _dsn: engine,
+    )
+
+    with pytest.raises(RuntimeError, match="prepare failed"):
+        synchronizer.sync("sqlite:///:memory:")
+
+    dispose.assert_called_once_with()
+
+
 def test_sync_rejects_legacy_postgresql_without_explicit_backup(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -285,6 +368,9 @@ def test_sync_rejects_legacy_postgresql_without_explicit_backup(
 
     class FakeEngine:
         url = FakeUrl()
+
+        def dispose(self):
+            return None
 
         def connect(self):
             class Connection:
@@ -386,6 +472,35 @@ def test_sync_transfers_sport_and_rebuilds_derived_stats(tmp_path: Path) -> None
         stats = session.query(ActivityStats).filter_by(activity_id=activity.id).one()
         assert sport.sport_type_id == SportTypesEnum.biking.value
         assert stats.sport_type_id == SportTypesEnum.biking.value
+
+
+def test_reconcile_rebuilds_stats_only_when_metrics_are_copied(tmp_path: Path) -> None:
+    source = _manager(tmp_path / "source.db")
+    destination = _manager(tmp_path / "destination.db")
+    public_id = uuid4()
+    source_id = _insert_activity(source, public_id)
+    _insert_activity(destination, public_id)
+    rebuild_stats = Mock()
+
+    with source.Session() as source_session, destination.Session() as destination_session:
+        DatabaseSynchronizer.reconcile_sessions(
+            source_session,
+            destination_session,
+            rebuild_stats,
+        )
+    rebuild_stats.assert_not_called()
+
+    with source.Session() as session:
+        session.add(HeartRate(activity_id=source_id, timestamp_ms=1_000, bpm=140))
+        session.commit()
+    with source.Session() as source_session, destination.Session() as destination_session:
+        DatabaseSynchronizer.reconcile_sessions(
+            source_session,
+            destination_session,
+            rebuild_stats,
+        )
+
+    rebuild_stats.assert_called_once()
 
 
 def test_sync_preserves_measurements_sharing_timestamp(tmp_path: Path) -> None:

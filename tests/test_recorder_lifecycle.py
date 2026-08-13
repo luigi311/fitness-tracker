@@ -66,7 +66,14 @@ class RecorderLifecycleTests(unittest.TestCase):
 
         recorder._match_discovered_devices()
 
-        for kind, device in zip(RecorderSensorKind, devices, strict=True):
+        expected_devices = {
+            RecorderSensorKind.HEART_RATE: devices[0],
+            RecorderSensorKind.SPEED: devices[1],
+            RecorderSensorKind.CADENCE: devices[2],
+            RecorderSensorKind.POWER: devices[3],
+            RecorderSensorKind.TRAINER: devices[4],
+        }
+        for kind, device in expected_devices.items():
             self.assertIs(recorder._configured_sensors[kind].device, device)
         self.assertTrue(recorder.trainer_configured)
         recorder.shutdown()
@@ -167,15 +174,15 @@ class RecorderLifecycleTests(unittest.TestCase):
         recorder.trainer.erg_disabled = False
 
         recorder.set_target_power(150)
-        self.assertEqual(recorder.trainer.target_mode, "Power")
+        self.assertEqual(recorder.trainer.target_mode, TrainerMode.POWER)
         self.assertEqual(recorder.trainer.pending_target, 150)
 
         recorder.set_target_resistance(25)
-        self.assertEqual(recorder.trainer.target_mode, "Resistance")
+        self.assertEqual(recorder.trainer.target_mode, TrainerMode.RESISTANCE)
         self.assertEqual(recorder.trainer.pending_target, 25)
 
         recorder.set_target_speed(8.5)
-        self.assertEqual(recorder.trainer.target_mode, "Speed")
+        self.assertEqual(recorder.trainer.target_mode, TrainerMode.SPEED)
         self.assertEqual(recorder.trainer.pending_target, 8.5)
 
         recorder.shutdown()
@@ -187,7 +194,7 @@ class RecorderLifecycleTests(unittest.TestCase):
 
         recorder.set_target_power(250)
 
-        self.assertEqual(recorder.trainer.target_mode, "Resistance")
+        self.assertEqual(recorder.trainer.target_mode, TrainerMode.RESISTANCE)
         self.assertEqual(recorder.trainer.pending_target, 5)
         self.assertEqual(recorder.trainer.erg_safeguard_saved_watts, 250)
 
@@ -317,7 +324,7 @@ class RecorderLifecycleTests(unittest.TestCase):
             recorder.set_target_resistance(5)
             await resistance_started.wait()
 
-            self.assertEqual(recorder.trainer.target_mode, "Resistance")
+            self.assertEqual(recorder.trainer.target_mode, TrainerMode.RESISTANCE)
             self.assertEqual(recorder.trainer.pending_target, 5)
 
         asyncio.run(exercise_race())
@@ -332,7 +339,7 @@ class RecorderLifecycleTests(unittest.TestCase):
         recorder.trainer.update_erg_safeguard(4000, 0)
 
         self.assertFalse(recorder.trainer.erg_disabled)
-        self.assertEqual(recorder.trainer.target_mode, "Speed")
+        self.assertEqual(recorder.trainer.target_mode, TrainerMode.SPEED)
         self.assertEqual(recorder.trainer.pending_target, 8.5)
         self.assertIsNone(recorder.trainer.erg_safeguard_saved_watts)
 
@@ -342,10 +349,31 @@ class RecorderLifecycleTests(unittest.TestCase):
         recorder.trainer.update_erg_safeguard(12000, 100)
 
         self.assertTrue(recorder.trainer.erg_disabled)
-        self.assertEqual(recorder.trainer.target_mode, "Speed")
+        self.assertEqual(recorder.trainer.target_mode, TrainerMode.SPEED)
         self.assertEqual(recorder.trainer.pending_target, 8.5)
         self.assertEqual(recorder.trainer.erg_safeguard_saved_watts, 250)
 
+        recorder.shutdown()
+
+    def test_metric_connectivity_combines_sensor_and_trainer_links(self):
+        recorder = _make_recorder(test_mode=True)
+
+        recorder._on_running_link("sensor", connected=True, roles={"rsc": True, "cps": False})
+        recorder._on_trainer_link("trainer", connected=True, _info={})
+        recorder._on_running_link("sensor", connected=False, roles={})
+
+        self.assertTrue(recorder.speed_connected)
+        self.assertTrue(recorder.cadence_connected)
+        self.assertTrue(recorder.distance_connected)
+        self.assertTrue(recorder.power_connected)
+
+        recorder._on_running_link("sensor", connected=True, roles={"rsc": True, "cps": False})
+        recorder._on_trainer_link("trainer", connected=False, _info={})
+
+        self.assertTrue(recorder.speed_connected)
+        self.assertTrue(recorder.cadence_connected)
+        self.assertTrue(recorder.distance_connected)
+        self.assertFalse(recorder.power_connected)
         recorder.shutdown()
 
     def test_trainer_supplied_heart_rate_is_forwarded_and_persisted(self):
@@ -536,7 +564,7 @@ class RecorderLifecycleTests(unittest.TestCase):
 
         self.assertTrue(recorder.trainer_heart_rate_control_available)
         self.assertTrue(recorder.set_target_heart_rate(150))
-        self.assertEqual(recorder.trainer.target_mode, "HeartRate")
+        self.assertEqual(recorder.trainer.target_mode, TrainerMode.HEART_RATE)
         self.assertEqual(recorder.trainer.pending_target, 150)
         recorder.shutdown()
 
@@ -582,6 +610,19 @@ class RecorderLifecycleTests(unittest.TestCase):
         self.assertIsNone(recorder.trainer._power_above_since_ms)
         self.assertIsNone(recorder.trainer._power_below_since_ms)
         retry_task.cancel.assert_called_once_with()
+        recorder.shutdown()
+
+    def test_replacing_trainer_mux_clears_heart_rate_target_availability(self):
+        recorder = _make_recorder(test_mode=True, trainer_supplied_hr=True)
+        recorder.trainer.trainer_mux = types.SimpleNamespace(supports_target_heart_rate=True)
+        recorder.inject_test_sample(TrainerSample(timestamp_ms=1000, heart_rate_bpm=145))
+        self.assertTrue(recorder.set_target_heart_rate(150))
+
+        recorder.trainer.trainer_mux = types.SimpleNamespace(supports_target_heart_rate=True)
+
+        self.assertFalse(recorder.trainer_heart_rate_control_available)
+        self.assertIsNone(recorder.trainer.pending_target)
+        self.assertFalse(recorder.set_target_heart_rate(150))
         recorder.shutdown()
 
     def test_neutralize_biking_trainer_bypasses_erg_gating(self):

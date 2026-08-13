@@ -145,7 +145,7 @@ class Recorder:
         self._shutdown_finalized_activity_id: int | None = None
         self._last_finalized_activity_id: int | None = None
         self._finalization_reconciled = False
-        self.activity_id = None
+        self.activity_id: int | None = None
 
         self._configured_sensors = {
             RecorderSensorKind.HEART_RATE: _ConfiguredSensor(
@@ -183,6 +183,11 @@ class Recorder:
 
         # Connection status
         self.hr_connected = False
+        self._sensor_speed_connected = False
+        self._sensor_cadence_connected = False
+        self._sensor_power_connected = False
+        self._sensor_distance_connected = False
+        self._trainer_link_connected = False
         self.speed_connected = False
         self.cadence_connected = False
         self.power_connected = False
@@ -379,7 +384,7 @@ class Recorder:
     @property
     def trainer_connected(self) -> bool:
         """Return whether the trainer transport is connected."""
-        return self.trainer.trainer_mux is not None
+        return self._trainer_link_connected
 
     @property
     def trainer_configured(self) -> bool:
@@ -700,6 +705,11 @@ class Recorder:
             logger.debug("Cleaning up speed connections")
             await mux.stop()
             self._speed_mux = None
+            self._sensor_speed_connected = False
+            self._sensor_cadence_connected = False
+            self._sensor_power_connected = False
+            self._sensor_distance_connected = False
+            self._refresh_metric_connection_state()
 
     def _on_running_link(
         self,
@@ -707,11 +717,12 @@ class Recorder:
         connected: bool,  # noqa: FBT001 - BLE link callback supplies positional state
         roles: dict[str, bool],
     ) -> None:
-        # RSCS drives both speed & cadence cards
-        self.speed_connected = connected and roles.get("rsc", False)
-        self.cadence_connected = connected and roles.get("rsc", False)
-        self.distance_connected = connected and roles.get("rsc", False)
-        self.power_connected = connected and roles.get("cps", False)
+        # RSCS drives both speed & cadence cards.
+        self._sensor_speed_connected = connected and roles.get("rsc", False)
+        self._sensor_cadence_connected = connected and roles.get("rsc", False)
+        self._sensor_distance_connected = connected and roles.get("rsc", False)
+        self._sensor_power_connected = connected and roles.get("cps", False)
+        self._refresh_metric_connection_state()
 
     async def _trainer_loop(self) -> None:
         trainer = self._configured_sensors[RecorderSensorKind.TRAINER]
@@ -734,6 +745,8 @@ class Recorder:
             with contextlib.suppress(Exception):
                 await mux.stop()
             self.trainer.trainer_mux = None
+            self._trainer_link_connected = False
+            self._refresh_metric_connection_state()
 
     def _on_trainer_link(
         self,
@@ -741,10 +754,8 @@ class Recorder:
         connected: bool,  # noqa: FBT001 - BLE link callback supplies positional state
         _info: dict[str, bool],
     ) -> None:
-        self.speed_connected = connected
-        self.cadence_connected = connected
-        self.power_connected = connected
-        self.distance_connected = connected
+        self._trainer_link_connected = connected
+        self._refresh_metric_connection_state()
 
         if not connected:
             self.trainer.on_link(connected=False)
@@ -752,6 +763,13 @@ class Recorder:
                 self.hr_connected = False
         else:
             self.trainer.on_link(connected=True)
+
+    def _refresh_metric_connection_state(self) -> None:
+        """Combine dedicated-sensor and trainer connectivity for public status."""
+        self.speed_connected = self._sensor_speed_connected or self._trainer_link_connected
+        self.cadence_connected = self._sensor_cadence_connected or self._trainer_link_connected
+        self.power_connected = self._sensor_power_connected or self._trainer_link_connected
+        self.distance_connected = self._sensor_distance_connected or self._trainer_link_connected
 
     async def _hr_loop(self) -> None:
         """Connect to the HR monitor via HeartRateMux and stream samples."""

@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from hashlib import sha256
 from typing import TYPE_CHECKING
 
+from loguru import logger
+
 from fitness_tracker.core.sports import SportTypesEnum
 from fitness_tracker.exporters import activity_to_tcx, infer_sport
 from fitness_tracker.integrations.errors import IntegrationError
@@ -55,19 +57,38 @@ class IntervalsICUUploader:
                 phash = sha256(tcx).hexdigest()
                 prefix = "Run" if sport_type == SportTypesEnum.running else "Ride"
                 name = a.start_time.astimezone().strftime(f"{prefix}_%Y-%m-%d_%H-%M")
-                provider_id = self.client.upload_tcx(name, tcx).provider_id
+                provider_id = self.client.upload_tcx(name, tcx).provider_id or phash
+            except Exception as error:
+                if not isinstance(error, IntegrationError):
+                    logger.exception("Unexpected Intervals.icu upload failure")
+                error_text = str(error)
+                repository.mark_upload_failed(a.id, PROVIDER_NAME, error_text)
+                out.append((a.id, False, error_text))
+                continue
 
+            try:
                 repository.mark_upload_ok(
                     activity_id=a.id,
                     provider=PROVIDER_NAME,
                     provider_activity_id=provider_id,
                     payload_hash=phash,
                 )
-                out.append((a.id, True, None))
-            except IntegrationError as e:
-                repository.mark_upload_failed(a.id, PROVIDER_NAME, str(e))
-                out.append((a.id, False, str(e)))
-            except Exception as e:
-                repository.mark_upload_failed(a.id, PROVIDER_NAME, str(e))
-                out.append((a.id, False, str(e)))
+            except Exception:
+                logger.exception(
+                    "Could not persist successful Intervals.icu upload; retrying local update",
+                )
+                try:
+                    repository.mark_upload_ok(
+                        activity_id=a.id,
+                        provider=PROVIDER_NAME,
+                        provider_activity_id=provider_id,
+                        payload_hash=phash,
+                    )
+                except Exception as retry_error:
+                    logger.exception("Could not persist successful Intervals.icu upload")
+                    error_text = str(retry_error)
+                    out.append((a.id, False, error_text))
+                    continue
+
+            out.append((a.id, True, None))
         return out

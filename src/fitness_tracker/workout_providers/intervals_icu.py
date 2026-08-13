@@ -58,7 +58,11 @@ class IntervalsICUProvider:
         events = self.client.fetch_events(start=start, end=end, ext=self.ext)
         prepared: list[_PreparedRefresh] = []
         results: list[WorkoutRefreshResult] = []
-        invalid_found = False
+        skipped = sum(
+            not self._matches_sport(event, SportTypesEnum.running)
+            and not self._matches_sport(event, SportTypesEnum.biking)
+            for event in events
+        )
         try:
             for sport, out_dir in (
                 (SportTypesEnum.running, running_dir),
@@ -67,13 +71,9 @@ class IntervalsICUProvider:
                 out_dir.mkdir(parents=True, exist_ok=True)
                 current, result = self._prepare_refresh(sport, start, events, out_dir)
                 results.append(result)
-                invalid_found |= result.invalid > 0
                 if current is not None:
                     prepared.append(current)
-            if invalid_found:
-                for current in prepared:
-                    _remove_path(current.stage_dir)
-            elif prepared:
+            if prepared:
                 self._commit_staged(prepared)
         except Exception:
             for current in prepared:
@@ -81,10 +81,8 @@ class IntervalsICUProvider:
             raise
 
         return WorkoutRefreshResult(
-            written=()
-            if invalid_found
-            else tuple(workout for result in results for workout in result.written),
-            skipped=sum(result.skipped for result in results),
+            written=tuple(workout for result in results for workout in result.written),
+            skipped=skipped,
             invalid=sum(result.invalid for result in results),
         )
 
@@ -102,14 +100,12 @@ class IntervalsICUProvider:
             tempfile.mkdtemp(prefix=f".{out_dir.name}.refresh-", dir=out_dir.parent),
         )
         written: list[DownloadedWorkout] = []
-        skipped = 0
         invalid = 0
         used_names: set[str] = set()
         try:
             self._copy_unmanaged_files(out_dir, stage_dir)
             for event in events:
                 if not self._matches_sport(event, sport):
-                    skipped += 1
                     continue
 
                 if not event.workout_file_base64 or not event.workout_filename:
@@ -124,22 +120,12 @@ class IntervalsICUProvider:
                     used_names=used_names,
                 )
                 stage_path = stage_dir / output_name
-                try:
-                    stage_path.write_text(
+                with stage_path.open("w", encoding="utf-8") as handle:
+                    handle.write(
                         json.dumps(event.model_dump(mode="json"), ensure_ascii=False),
-                        encoding="utf-8",
                     )
-                    with stage_path.open("rb") as handle:
-                        os.fsync(handle.fileno())
-                except Exception:
-                    _remove_path(stage_dir)
-                    return (
-                        None,
-                        WorkoutRefreshResult(
-                            skipped=skipped,
-                            invalid=invalid + 1,
-                        ),
-                    )
+                    handle.flush()
+                    os.fsync(handle.fileno())
                 written.append(
                     DownloadedWorkout(
                         path=out_dir / output_name,
@@ -150,7 +136,6 @@ class IntervalsICUProvider:
 
             result = WorkoutRefreshResult(
                 written=tuple(written),
-                skipped=skipped,
                 invalid=invalid,
             )
             if not written:

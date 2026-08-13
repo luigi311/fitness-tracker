@@ -2,6 +2,7 @@
 
 from datetime import UTC, datetime
 
+import pytest
 from fitness_tracker.core.sports import SportTypesEnum
 from fitness_tracker.core.units import UnitSystem
 from fitness_tracker.data.models import RunningMetrics
@@ -14,7 +15,7 @@ from fitness_tracker.services.history_query import (
     build_compare_chart_data,
     downsample_lttb,
 )
-from fitness_tracker.services.jobs import CancellationToken
+from fitness_tracker.services.jobs import CancellationToken, JobCancelledError
 from sqlalchemy import event
 
 PEAK_INDEX = 50
@@ -102,3 +103,18 @@ def test_compare_query_is_batched_and_caps_two_hour_series() -> None:
     assert len(data.series[0].xs) <= MAX_COMPARE_POINTS
     assert data.series[0].xs[0] == 0.0
     assert data.series[0].xs[-1] == sample_count - 1
+
+
+def test_compare_query_honors_pre_cancelled_token() -> None:
+    db = DatabaseManager("sqlite:///:memory:")
+    request = CompareChartRequest(
+        generation=GENERATION,
+        metric="hr",
+        unit_system=UnitSystem.METRIC,
+        activities=(),
+    )
+    token = CancellationToken()
+    token.cancel()
+
+    with pytest.raises(JobCancelledError):
+        build_compare_chart_data(request, db.repository, token)

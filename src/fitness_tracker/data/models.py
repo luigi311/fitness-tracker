@@ -40,10 +40,26 @@ class Activity(Base):
     # Wall-clock timestamps are not identity: two activities may start together.
     __table_args__ = (UniqueConstraint("public_id", name="uq_activities_public_id"),)
 
-    heart_rates: Mapped[list[HeartRate]] = relationship(back_populates="activity")
-    running_metrics: Mapped[list[RunningMetrics]] = relationship(back_populates="activity")
-    cycling_metrics: Mapped[list[CyclingMetrics]] = relationship(back_populates="activity")
-    uploads: Mapped[list[ActivityUpload]] = relationship(back_populates="activity")
+    heart_rates: Mapped[list[HeartRate]] = relationship(
+        back_populates="activity",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+    running_metrics: Mapped[list[RunningMetrics]] = relationship(
+        back_populates="activity",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+    cycling_metrics: Mapped[list[CyclingMetrics]] = relationship(
+        back_populates="activity",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+    uploads: Mapped[list[ActivityUpload]] = relationship(
+        back_populates="activity",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
 
 
 class ActivitySport(Base):
@@ -68,10 +84,14 @@ class HeartRate(Base):
     __tablename__ = "heart_rate"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    activity_id: Mapped[int] = mapped_column(ForeignKey("activities.id"), nullable=False)
+    activity_id: Mapped[int] = mapped_column(
+        ForeignKey("activities.id", ondelete="CASCADE"),
+        nullable=False,
+    )
     timestamp_ms: Mapped[int] = mapped_column(BigInteger, nullable=False)
     bpm: Mapped[int] = mapped_column(Integer, nullable=False)
     rr_interval: Mapped[float | None] = mapped_column(Float)
+    energy_kj: Mapped[float | None] = mapped_column(Float)
 
     activity: Mapped[Activity] = relationship(back_populates="heart_rates")
 
@@ -88,7 +108,10 @@ class RunningMetrics(Base):
     __tablename__ = "running_metrics"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    activity_id: Mapped[int] = mapped_column(ForeignKey("activities.id"), nullable=False)
+    activity_id: Mapped[int] = mapped_column(
+        ForeignKey("activities.id", ondelete="CASCADE"),
+        nullable=False,
+    )
     timestamp_ms: Mapped[int] = mapped_column(BigInteger, nullable=False)
 
     # core metrics
@@ -115,7 +138,10 @@ class CyclingMetrics(Base):
     __tablename__ = "cycling_metrics"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    activity_id: Mapped[int] = mapped_column(ForeignKey("activities.id"), nullable=False)
+    activity_id: Mapped[int] = mapped_column(
+        ForeignKey("activities.id", ondelete="CASCADE"),
+        nullable=False,
+    )
     timestamp_ms: Mapped[int] = mapped_column(BigInteger, nullable=False)
 
     speed_mps: Mapped[float] = mapped_column(Float, nullable=False)  # speed (m/s)
@@ -206,6 +232,11 @@ class ActivityStats(Base):
         nullable=False,
         default=0.0,
     )
+
+    @property
+    def total_energy_kj(self) -> float:
+        """Expose the retained legacy energy column to existing readers."""
+        return self._legacy_total_energy_kj
 
     # Cadence / power
     avg_cadence: Mapped[float | None] = mapped_column(Float)

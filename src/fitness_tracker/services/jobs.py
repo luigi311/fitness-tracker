@@ -148,7 +148,7 @@ class BackgroundJobRunner:
         error: Exception | None = None
         try:
             result = job.work(job.token)
-        except Exception as exc:
+        except Exception as exc:  # Broad catch isolates the worker boundary.
             error = self._classify_and_log(job.name, exc)
 
         def deliver() -> bool:
@@ -159,7 +159,7 @@ class BackgroundJobRunner:
         while True:
             try:
                 self._marshal_to_ui(deliver)
-            except Exception:
+            except Exception:  # Broad catch isolates the UI marshalling boundary.
                 if job.delivered:
                     return
                 marshal_failures += 1
@@ -192,10 +192,16 @@ class BackgroundJobRunner:
         with self._lock:
             if job.delivered:
                 return
-            job.delivered = True
-            self._jobs.pop(job.name, None)
             if self._shutdown:
-                return
+                discard = True
+            else:
+                discard = False
+                job.delivered = True
+                self._jobs.pop(job.name, None)
+
+        if discard:
+            self._discard_delivery(job)
+            return
 
         try:
             if not job.token.cancelled:
@@ -234,14 +240,14 @@ class BackgroundJobRunner:
         if job.on_discard is not None:
             try:
                 job.on_discard()
-            except Exception:
+            except Exception:  # Broad catch isolates the discard callback boundary.
                 logger.exception("Background job {} discard callback failed", job.name)
 
     @staticmethod
     def _invoke_callback(name: str, kind: str, callback: Callable[[], None]) -> None:
         try:
             callback()
-        except Exception:
+        except Exception:  # Broad catch isolates the UI callback boundary.
             logger.exception("Background job {} {} callback failed", name, kind)
 
     @staticmethod

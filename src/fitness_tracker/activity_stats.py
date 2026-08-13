@@ -148,8 +148,7 @@ class StatsCalculator:
             if existing is not None:
                 session.delete(existing)
             return None
-        cls._upsert(session, row)
-        return row
+        return cls._apply(session, row, existing)
 
     def compute_all(self, *, force: bool = False) -> int:
         """Compute stats for every activity.
@@ -275,25 +274,35 @@ class StatsCalculator:
         )
 
     @staticmethod
-    def _upsert(session: Session, row: ActivityStats) -> None:
+    def _upsert(session: Session, row: ActivityStats) -> ActivityStats:
         """Insert or update the stats row for row.activity_id."""
         existing = session.scalar(
             select(ActivityStats).where(ActivityStats.activity_id == row.activity_id),
         )
+        return StatsCalculator._apply(session, row, existing)
+
+    @staticmethod
+    def _apply(
+        session: Session,
+        row: ActivityStats,
+        existing: ActivityStats | None,
+    ) -> ActivityStats:
+        """Add a new row or copy values into its managed existing row."""
         if existing is None:
             session.add(row)
-        else:
-            # Update all mutable fields in-place so the session tracks the change.
-            existing.sport_type_id = row.sport_type_id
-            existing.start_time = row.start_time
-            existing.end_time = row.end_time
-            existing.duration_s = row.duration_s
-            existing.distance_m = row.distance_m
-            existing.avg_speed_mps = row.avg_speed_mps
-            existing.avg_bpm = row.avg_bpm
-            existing.max_bpm = row.max_bpm
-            existing.avg_cadence = row.avg_cadence
-            existing.avg_power_watts = row.avg_power_watts
-            existing.total_ascent_m = row.total_ascent_m
-            existing.total_descent_m = row.total_descent_m
-            existing.computed_at = row.computed_at
+            return row
+        # Update all mutable fields in-place so the session tracks the change.
+        existing.sport_type_id = row.sport_type_id
+        existing.start_time = row.start_time
+        existing.end_time = row.end_time
+        existing.duration_s = row.duration_s
+        existing.distance_m = row.distance_m
+        existing.avg_speed_mps = row.avg_speed_mps
+        existing.avg_bpm = row.avg_bpm
+        existing.max_bpm = row.max_bpm
+        existing.avg_cadence = row.avg_cadence
+        existing.avg_power_watts = row.avg_power_watts
+        existing.total_ascent_m = row.total_ascent_m
+        existing.total_descent_m = row.total_descent_m
+        existing.computed_at = row.computed_at
+        return existing

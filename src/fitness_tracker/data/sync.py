@@ -60,22 +60,24 @@ class DatabaseSynchronizer:
 
     def sync(self, database_dsn: str) -> None:
         """Synchronize activity aggregates in both directions without deletions."""
-        try:
-            remote_engine = self.engine_factory(database_dsn)
-            remote_sqlite_path = sqlite_database_path(remote_engine)
-            if remote_sqlite_path is not None:
-                prepare_private_sqlite_database(remote_sqlite_path)
-            with remote_engine.connect() as _:
-                pass
-        except OSError as error:
-            message = f"❌  Could not prepare remote SQLite database: {error}"
-            raise DatabaseConnectionError(message) from error
-        except exc.SQLAlchemyError as error:
-            message = f"❌  Could not connect to remote database: {error}"
-            raise DatabaseConnectionError(message) from error
-
+        remote_engine: Engine | None = None
+        remote_sqlite_path = None
         synchronization_completed = False
         try:
+            try:
+                remote_engine = self.engine_factory(database_dsn)
+                remote_sqlite_path = sqlite_database_path(remote_engine)
+                if remote_sqlite_path is not None:
+                    prepare_private_sqlite_database(remote_sqlite_path)
+                with remote_engine.connect() as _:
+                    pass
+            except OSError as error:
+                message = f"❌  Could not prepare remote SQLite database: {error}"
+                raise DatabaseConnectionError(message) from error
+            except exc.SQLAlchemyError as error:
+                message = f"❌  Could not connect to remote database: {error}"
+                raise DatabaseConnectionError(message) from error
+
             try:
                 self.prepare_remote_database(remote_engine)
                 if remote_sqlite_path is not None:
@@ -96,18 +98,22 @@ class DatabaseSynchronizer:
                 raise DatabaseConnectionError(message) from error
             synchronization_completed = True
         finally:
-            if remote_sqlite_path is not None:
-                try:
-                    secure_sqlite_files(remote_sqlite_path)
-                except OSError as error:
-                    if synchronization_completed:
-                        message = "❌  Could not secure remote SQLite database artifacts"
-                        raise DatabaseConnectionError(message) from error
-                    logger.warning(
-                        "Could not harden remote SQLite artifacts after an earlier "
-                        "synchronization error: {}",
-                        error,
-                    )
+            try:
+                if remote_sqlite_path is not None:
+                    try:
+                        secure_sqlite_files(remote_sqlite_path)
+                    except OSError as error:
+                        if synchronization_completed:
+                            message = "❌  Could not secure remote SQLite database artifacts"
+                            raise DatabaseConnectionError(message) from error
+                        logger.warning(
+                            "Could not harden remote SQLite artifacts after an earlier "
+                            "synchronization error: {}",
+                            error,
+                        )
+            finally:
+                if remote_engine is not None:
+                    remote_engine.dispose()
 
     @staticmethod
     def reconcile_sessions(
@@ -139,8 +145,9 @@ class DatabaseSynchronizer:
                     destination_activity,
                 )
 
+            copied_metrics = False
             for model in (HeartRate, RunningMetrics, CyclingMetrics):
-                DatabaseSynchronizer._copy_metric_rows(
+                copied_metrics |= DatabaseSynchronizer._copy_metric_rows(
                     source,
                     destination,
                     source_activity,
@@ -159,8 +166,9 @@ class DatabaseSynchronizer:
                 source_activity,
                 destination_activity,
             )
-            destination.flush()
-            rebuild_stats(destination, destination_activity.id)
+            if copied_metrics:
+                destination.flush()
+                rebuild_stats(destination, destination_activity.id)
 
     @staticmethod
     def _reconcile_activity(source: Activity, destination: Activity) -> None:
@@ -205,14 +213,14 @@ class DatabaseSynchronizer:
         source_activity: Activity,
         destination_activity: Activity,
         model: DATABASE_MODEL,
-    ) -> None:
+    ) -> bool:
         source_rows = source_session.scalars(
             select(model)
             .where(model.activity_id == source_activity.id)
             .order_by(model.timestamp_ms),
         ).all()
         if not source_rows:
-            return
+            return False
         mapped_attributes = DatabaseSynchronizer._mapped_metric_attributes(model)
         destination_rows = destination_session.scalars(
             select(model).where(model.activity_id == destination_activity.id),
@@ -236,6 +244,7 @@ class DatabaseSynchronizer:
             )
         if rows:
             destination_session.bulk_insert_mappings(model, rows)
+        return bool(rows)
 
     @staticmethod
     def _mapped_metric_attributes(model: DATABASE_MODEL) -> tuple[str, ...]:

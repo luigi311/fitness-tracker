@@ -39,7 +39,7 @@ def _create_client(athlete_id: str | None, api_key: str | None) -> IntervalsICUC
             api_key=api_key or "",
         )
     except ValidationError as exc:
-        message = str(exc)
+        message = "required configuration values must not be empty"
         raise IntegrationConfigurationError(_INTEGRATION_NAME, message) from exc
     return IntervalsICUClient(credentials)
 

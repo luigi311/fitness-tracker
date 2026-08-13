@@ -6,7 +6,9 @@ from collections import defaultdict
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Protocol
 
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
+from sqlalchemy.dialects.postgresql import insert as postgresql_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from fitness_tracker.core.sports import SportTypesEnum
 from fitness_tracker.data.models import (
@@ -22,6 +24,8 @@ from fitness_tracker.data.models import (
 if TYPE_CHECKING:
     from collections.abc import Collection
 
+    from sqlalchemy.dialects.postgresql.dml import Insert as PostgreSQLInsert
+    from sqlalchemy.dialects.sqlite.dml import Insert as SQLiteInsert
     from sqlalchemy.orm import Session, sessionmaker
 
 
@@ -287,22 +291,36 @@ class SqlAlchemyActivityRepository:
     ) -> None:
         """Record a successful upload and its provider metadata."""
         with self._session_factory() as session:
-            row = session.scalar(
-                select(ActivityUpload).where(
-                    ActivityUpload.activity_id == activity_id,
-                    ActivityUpload.provider == provider,
-                ),
-            )
-            if row is None:
-                row = ActivityUpload(activity_id=activity_id, provider=provider)
-                session.add(row)
             now = datetime.now(UTC)
-            row.status = "ok"
-            row.uploaded_at = now
-            row.updated_at = now
-            row.provider_activity_id = provider_activity_id or row.provider_activity_id
-            row.payload_hash = payload_hash or row.payload_hash
-            row.last_error = None
+            insert = self._upload_insert(session)
+            excluded = insert.excluded
+            statement = insert.values(
+                activity_id=activity_id,
+                provider=provider,
+                status="ok",
+                uploaded_at=now,
+                updated_at=now,
+                provider_activity_id=provider_activity_id or None,
+                payload_hash=payload_hash or None,
+                last_error=None,
+            ).on_conflict_do_update(
+                index_elements=["activity_id", "provider"],
+                set_={
+                    "status": "ok",
+                    "uploaded_at": now,
+                    "updated_at": now,
+                    "provider_activity_id": func.coalesce(
+                        excluded.provider_activity_id,
+                        ActivityUpload.provider_activity_id,
+                    ),
+                    "payload_hash": func.coalesce(
+                        excluded.payload_hash,
+                        ActivityUpload.payload_hash,
+                    ),
+                    "last_error": None,
+                },
+            )
+            session.execute(statement)
             session.commit()
 
     def mark_upload_failed(
@@ -314,19 +332,44 @@ class SqlAlchemyActivityRepository:
     ) -> None:
         """Record a failed upload and its truncated error message."""
         with self._session_factory() as session:
-            row = session.scalar(
-                select(ActivityUpload).where(
-                    ActivityUpload.activity_id == activity_id,
-                    ActivityUpload.provider == provider,
+            now = datetime.now(UTC)
+            insert = self._upload_insert(session)
+            excluded = insert.excluded
+            statement = insert.values(
+                activity_id=activity_id,
+                provider=provider,
+                status="failed",
+                uploaded_at=None,
+                updated_at=now,
+                payload_hash=payload_hash or None,
+                last_error=error_message[:1000],
+            ).on_conflict_do_update(
+                index_elements=["activity_id", "provider"],
+                set_={
+                    "status": "failed",
+                    "uploaded_at": None,
+                    "updated_at": now,
+                    "payload_hash": func.coalesce(
+                        excluded.payload_hash,
+                        ActivityUpload.payload_hash,
+                    ),
+                    "last_error": excluded.last_error,
+                },
+                where=or_(
+                    ActivityUpload.status != "ok",
+                    ActivityUpload.updated_at <= excluded.updated_at,
                 ),
             )
-            if row is None:
-                row = ActivityUpload(activity_id=activity_id, provider=provider)
-                session.add(row)
-            row.status = "failed"
-            row.updated_at = datetime.now(UTC)
-            row.uploaded_at = None
-            row.last_error = error_message[:1000]
-            if payload_hash:
-                row.payload_hash = payload_hash
+            session.execute(statement)
             session.commit()
+
+    @staticmethod
+    def _upload_insert(session: Session) -> SQLiteInsert | PostgreSQLInsert:
+        """Return the native upsert constructor for the configured database."""
+        dialect = session.get_bind().dialect.name
+        if dialect == "sqlite":
+            return sqlite_insert(ActivityUpload)
+        if dialect == "postgresql":
+            return postgresql_insert(ActivityUpload)
+        message = f"Activity upload upserts are unsupported for {dialect}"
+        raise RuntimeError(message)

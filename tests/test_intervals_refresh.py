@@ -1,13 +1,19 @@
 # ruff: noqa: EM101, PLR2004, TRY003
 
 import json
+import os
 from datetime import date
 from pathlib import Path
 from typing import Any
 
 import pytest
-from fitness_tracker.integrations.errors import IntegrationResponseError
+import requests
+from fitness_tracker.integrations.errors import (
+    IntegrationResponseError,
+    IntegrationTransportError,
+)
 from fitness_tracker.integrations.intervals_icu import (
+    IcuUploadResponse,
     IntervalsICUClient,
     IntervalsICUCredentials,
 )
@@ -40,6 +46,11 @@ class _Transport:
             self.calls.append({"url": url, **kwargs})
         return _Response(self.events)
 
+    def post(self, url: str, **kwargs: Any) -> _Response:
+        if self.calls is not None:
+            self.calls.append({"url": url, **kwargs})
+        return _Response(self.events)
+
 
 def _event(
     event_type: str,
@@ -59,12 +70,10 @@ def _event(
 
 
 def _provider(
-    monkeypatch: pytest.MonkeyPatch,
     events: Any,
     *,
     calls: list[dict[str, Any]] | None = None,
 ) -> IntervalsICUProvider:
-    del monkeypatch
     client = IntervalsICUClient(
         IntervalsICUCredentials(athlete_id="athlete", api_key="key"),
         transport=_Transport(events, calls),
@@ -94,11 +103,10 @@ def _managed_files(out_dir: Path) -> set[Path]:
 
 def test_mixed_run_and_ride_response_is_filtered_by_sport(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     events = [_event("Run", name="Run workout"), _event("Ride", name="Ride workout")]
     calls: list[dict[str, Any]] = []
-    provider = _provider(monkeypatch, events, calls=calls)
+    provider = _provider(events, calls=calls)
     running_dir = tmp_path / "running"
     cycling_dir = tmp_path / "cycling"
 
@@ -122,13 +130,12 @@ def test_mixed_run_and_ride_response_is_filtered_by_sport(
 
 def test_response_without_requested_sport_preserves_last_known_good_workouts(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     out_dir = tmp_path / "workouts"
     out_dir.mkdir()
     old = out_dir / "2025-12-31 Old.json"
     old.write_text("old", encoding="utf-8")
-    provider = _provider(monkeypatch, [_event("Ride")])
+    provider = _provider([_event("Ride")])
 
     _refresh_running(provider, out_dir)
 
@@ -138,13 +145,12 @@ def test_response_without_requested_sport_preserves_last_known_good_workouts(
 
 def test_empty_response_preserves_last_known_good_workouts(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     out_dir = tmp_path / "workouts"
     out_dir.mkdir()
     old = out_dir / "2025-12-31 Old.json"
     old.write_text("old", encoding="utf-8")
-    provider = _provider(monkeypatch, [])
+    provider = _provider([])
 
     written = _refresh_running(provider, out_dir).written
 
@@ -154,13 +160,12 @@ def test_empty_response_preserves_last_known_good_workouts(
 
 def test_malformed_event_preserves_last_known_good_workouts(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     out_dir = tmp_path / "workouts"
     out_dir.mkdir()
     old = out_dir / "2025-12-31 Old.json"
     old.write_text("old", encoding="utf-8")
-    provider = _provider(monkeypatch, [_event("Run", start_date="not-a-date")])
+    provider = _provider([_event("Run", start_date="not-a-date")])
 
     with pytest.raises(IntegrationResponseError):
         _refresh_running(provider, out_dir)
@@ -179,17 +184,21 @@ def test_mid_write_failure_preserves_old_set_and_writes_no_partial_set(
     old = out_dir / "2025-12-31 Old.json"
     old.write_text("old", encoding="utf-8")
     events = [_event("Run", name="Good"), _event("Run", name="Broken")]
-    provider = _provider(monkeypatch, events)
-    original_write_text = Path.write_text
+    provider = _provider(events)
+    original_fsync = os.fsync
+    fsync_calls = 0
 
-    def failing_write(path: Path, content: str, *args: Any, **kwargs: Any) -> int:
-        if json.loads(content).get("name") == "Broken":
+    def failing_fsync(descriptor: int) -> None:
+        nonlocal fsync_calls
+        fsync_calls += 1
+        if fsync_calls == 2:
             raise OSError("injected write failure")
-        return original_write_text(path, content, *args, **kwargs)
+        original_fsync(descriptor)
 
-    monkeypatch.setattr(Path, "write_text", failing_write)
+    monkeypatch.setattr(os, "fsync", failing_fsync)
 
-    _refresh_running(provider, out_dir)
+    with pytest.raises(OSError, match="injected write failure"):
+        _refresh_running(provider, out_dir)
 
     assert old.exists()
     assert old.read_text(encoding="utf-8") == "old"
@@ -198,13 +207,12 @@ def test_mid_write_failure_preserves_old_set_and_writes_no_partial_set(
 
 def test_sanitized_duplicate_titles_get_distinct_paths(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     events = [
         _event("Run", name="Intervals / Threshold", filename="first.fit"),
         _event("Run", name="Intervals ? Threshold", filename="second.fit"),
     ]
-    provider = _provider(monkeypatch, events)
+    provider = _provider(events)
     out_dir = tmp_path / "workouts"
 
     written = _refresh_running(provider, out_dir).written
@@ -218,7 +226,6 @@ def test_sanitized_duplicate_titles_get_distinct_paths(
 
 def test_successful_replacement_removes_stale_managed_files_only(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     out_dir = tmp_path / "workouts"
     out_dir.mkdir()
@@ -228,7 +235,7 @@ def test_successful_replacement_removes_stale_managed_files_only(
     for path in (stale_json, stale_fit):
         path.write_text("stale", encoding="utf-8")
     unrelated.write_text("keep", encoding="utf-8")
-    provider = _provider(monkeypatch, [_event("Run", name="Fresh")])
+    provider = _provider([_event("Run", name="Fresh")])
 
     _refresh_running(provider, out_dir)
 
@@ -236,3 +243,56 @@ def test_successful_replacement_removes_stale_managed_files_only(
     assert not stale_fit.exists()
     assert unrelated.read_text(encoding="utf-8") == "keep"
     assert len(_managed_files(out_dir)) == 1
+
+
+def test_invalid_matching_event_does_not_discard_valid_workouts(tmp_path: Path) -> None:
+    invalid = _event("Run", name="Missing file")
+    invalid["workout_file_base64"] = ""
+    provider = _provider([_event("Run", name="Valid"), invalid])
+
+    result = _refresh_running(provider, tmp_path / "running")
+
+    assert result.invalid == 1
+    assert len(result.written) == 1
+    assert result.written[0].path.exists()
+
+
+def test_unsupported_event_is_counted_once_across_sports(tmp_path: Path) -> None:
+    provider = _provider([_event("Swim")])
+
+    result = _refresh_running(provider, tmp_path / "running")
+
+    assert result.skipped == 1
+
+
+def test_upload_response_requires_non_empty_list() -> None:
+    with pytest.raises(IntegrationResponseError, match="no upload result"):
+        IcuUploadResponse.from_response(_Response([]))  # type: ignore[arg-type]
+
+
+def test_upload_response_uses_first_list_item() -> None:
+    result = IcuUploadResponse.from_response(  # type: ignore[arg-type]
+        _Response([{"id": 42}, {"id": 99}]),
+    )
+
+    assert result.provider_id == "42"
+
+
+def test_transport_error_does_not_expose_request_url() -> None:
+    response = requests.Response()
+    response.status_code = 403
+
+    def fail_request(url: str, **_kwargs: object) -> requests.Response:
+        response.url = url
+        message = f"403 for {url}"
+        raise requests.HTTPError(message, response=response)
+
+    athlete_id = "private-athlete-id"
+    with pytest.raises(IntegrationTransportError) as error_info:
+        IntervalsICUClient._request(  # noqa: SLF001
+            fail_request,
+            f"https://example.invalid/athlete/{athlete_id}/events",
+        )
+
+    assert error_info.value.status_code == 403
+    assert athlete_id not in str(error_info.value)

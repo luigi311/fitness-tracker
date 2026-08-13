@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, Literal, Protocol, cast
-from xml.etree.ElementTree import Element, SubElement, tostring
+from typing import TYPE_CHECKING, Literal, Protocol
+from xml.etree.ElementTree import Element, SubElement, register_namespace, tostring
 
 from loguru import logger
 
@@ -16,16 +16,35 @@ _TCX_SPORT_NAMES = {
 
 
 class _PrimarySample(Protocol):
-    timestamp_ms: int
-    speed_mps: float | None
-    total_distance_m: float | None
-    cadence_rpm: float | None
-    cadence_spm: float | None
-    power_watts: float | None
-    altitude_m: float | None
+    @property
+    def timestamp_ms(self) -> int: ...
+
+    @property
+    def speed_mps(self) -> float | None: ...
+
+    @property
+    def total_distance_m(self) -> float | None: ...
+
+    @property
+    def power_watts(self) -> float | None: ...
+
+    @property
+    def altitude_m(self) -> float | None: ...
+
+
+class _RunningSample(_PrimarySample, Protocol):
+    @property
+    def cadence_spm(self) -> float | None: ...
+
+
+class _CyclingSample(_PrimarySample, Protocol):
+    @property
+    def cadence_rpm(self) -> float | None: ...
 
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from fitness_tracker.data.models import Activity, CyclingMetrics, HeartRate, RunningMetrics
 # ---------- Helpers ----------
 
@@ -41,7 +60,7 @@ def _iso_with_local_offset(dt: datetime) -> str:
 
 def _sec_str(
     act: Activity,
-    primary_samples: list[_PrimarySample],
+    primary_samples: Sequence[_PrimarySample],
     heart_rates: list[HeartRate],
 ) -> str:
     """
@@ -60,7 +79,7 @@ def _sec_str(
     return f"{max(0.0, tmax / 1000.0):.1f}"
 
 
-def _lap_distance_m_str(primary_samples: list[_PrimarySample]) -> str:
+def _lap_distance_m_str(primary_samples: Sequence[_PrimarySample]) -> str:
     """
     Distance for the lap in meters (string). Prefer the final total_distance_m
     if present; otherwise integrate speed over time as a fallback.
@@ -93,10 +112,11 @@ def _build_tcx_lap(
     *,
     act: Activity,
     heart_rates: list[HeartRate],
-    primary: list[_PrimarySample],
+    primary: Sequence[_PrimarySample],
     sport_type: SportTypesEnum,
 ) -> tuple[Element, Element]:
     """Build the TCX root and the activity track container."""
+    register_namespace("ae", _ACTIVITY_EXTENSION_NS)
     tcx = Element(
         "TrainingCenterDatabase",
         {
@@ -108,7 +128,6 @@ def _build_tcx_lap(
                 "http://www.garmin.com/xmlschemas/ActivityExtension/v2 "
                 "http://www.garmin.com/xmlschemas/ActivityExtensionv2.xsd"
             ),
-            "xmlns:ns3": _ACTIVITY_EXTENSION_NS,
         },
     )
     activities = SubElement(tcx, "Activities")
@@ -128,7 +147,8 @@ def _build_tcx_lap(
 def _sample_time(act: Activity, timestamp_ms: int) -> str:
     """Render a sample timestamp using the activity's local timezone."""
     start = act.start_time if act.start_time.tzinfo else act.start_time.replace(tzinfo=UTC)
-    return _iso_with_local_offset(start.astimezone() + timedelta(milliseconds=timestamp_ms))
+    start_utc = start.astimezone(UTC)
+    return _iso_with_local_offset(start_utc + timedelta(milliseconds=timestamp_ms))
 
 
 def _append_heart_rate(
@@ -167,10 +187,9 @@ def _append_extensions(
     trackpoint: Element,
     sample: _PrimarySample,
     *,
-    timeline_kind: _TimelineKind,
+    cadence_spm: float | None,
 ) -> None:
     """Append optional speed, cadence, and power extension values."""
-    cadence_spm = sample.cadence_spm if timeline_kind == "running" else None
     if sample.speed_mps is None and sample.power_watts is None and cadence_spm is None:
         return
     ext = SubElement(trackpoint, "Extensions")
@@ -194,15 +213,22 @@ def _append_primary_trackpoints(
     *,
     track: Element,
     act: Activity,
-    primary: list[_PrimarySample],
+    primary: Sequence[_PrimarySample],
     heart_rates: list[HeartRate],
     timeline_kind: Literal["running", "cycling"],
+    cadence_rpm_values: Sequence[float | None],
+    cadence_spm_values: Sequence[float | None],
 ) -> None:
     """Append running or cycling samples to a TCX track."""
     last_timestamp_ms = int(primary[0].timestamp_ms)
     last_distance_m = 0.0
     hr_idx = 0
-    for sample in primary:
+    for sample, cadence_rpm, cadence_spm in zip(
+        primary,
+        cadence_rpm_values,
+        cadence_spm_values,
+        strict=True,
+    ):
         timestamp_ms = int(sample.timestamp_ms)
         trackpoint = SubElement(track, "Trackpoint")
         SubElement(trackpoint, "Time").text = _sample_time(act, timestamp_ms)
@@ -220,9 +246,9 @@ def _append_primary_trackpoints(
         last_distance_m = distance_m
 
         hr_idx = _append_heart_rate(trackpoint, heart_rates, hr_idx, timestamp_ms)
-        if timeline_kind == "cycling" and sample.cadence_rpm is not None:
-            SubElement(trackpoint, "Cadence").text = str(round(float(sample.cadence_rpm)))
-        _append_extensions(trackpoint, sample, timeline_kind=timeline_kind)
+        if timeline_kind == "cycling" and cadence_rpm is not None:
+            SubElement(trackpoint, "Cadence").text = str(round(float(cadence_rpm)))
+        _append_extensions(trackpoint, sample, cadence_spm=cadence_spm)
 
 
 def _append_heart_rate_trackpoints(
@@ -271,17 +297,25 @@ def activity_to_tcx(
     cycling = sorted((cycling or []), key=lambda c: c.timestamp_ms)
 
     # Choose timeline
-    timeline_kind: str
-    primary: list[_PrimarySample]
+    timeline_kind: _TimelineKind
+    primary: Sequence[_PrimarySample]
     if sport_type == SportTypesEnum.running and running:
         timeline_kind = "running"
-        primary = cast("list[_PrimarySample]", running)
+        running_samples: Sequence[_RunningSample] = running
+        primary = running_samples
+        cadence_rpm_values = [None] * len(running)
+        cadence_spm_values = [sample.cadence_spm for sample in running_samples]
     elif sport_type == SportTypesEnum.biking and cycling:
         timeline_kind = "cycling"
-        primary = cast("list[_PrimarySample]", cycling)
+        cycling_samples: Sequence[_CyclingSample] = cycling
+        primary = cycling_samples
+        cadence_rpm_values = [sample.cadence_rpm for sample in cycling_samples]
+        cadence_spm_values = [None] * len(cycling)
     else:
         timeline_kind = "hr"
         primary = []
+        cadence_rpm_values = []
+        cadence_spm_values = []
 
     tcx, track = _build_tcx_lap(
         act=act,
@@ -296,6 +330,8 @@ def activity_to_tcx(
             primary=primary,
             heart_rates=heart_rates,
             timeline_kind=timeline_kind,
+            cadence_rpm_values=cadence_rpm_values,
+            cadence_spm_values=cadence_spm_values,
         )
     else:
         _append_heart_rate_trackpoints(track=track, act=act, heart_rates=heart_rates)

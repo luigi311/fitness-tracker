@@ -1,3 +1,4 @@
+import pytest
 from bleaksport import CyclingSample, HeartRateSample, RunningSample, TrainerSample
 from fitness_tracker.hardware.processor import SampleProcessor
 
@@ -61,6 +62,18 @@ def test_running_power_is_not_estimated_for_trainer_samples() -> None:
     assert sample.power_watts == _EXPECTED_BASE_POWER_WATTS
 
 
+def test_running_power_estimation_does_not_require_weight() -> None:
+    processor = SampleProcessor()
+    processor.set_incline(8.0)
+
+    sample = processor.process_running(
+        RunningSample(timestamp_ms=1_000, power_watts=100, speed_mps=3.0),
+        trainer_connected=False,
+    )
+
+    assert sample.power_watts == _EXPECTED_ESTIMATED_POWER_WATTS
+
+
 def test_cycling_and_trainer_samples_rebase_session_values() -> None:
     processor = SampleProcessor()
     processor.set_incline(5.0)
@@ -104,3 +117,26 @@ def test_heart_rate_cleaning_rebases_and_smooths_for_ui_and_persistence() -> Non
     assert all(
         normalized.rr_interval_ms == _EXPECTED_RR_INTERVAL_MS for _sample, normalized in cleaned
     )
+
+
+def test_heart_rate_requires_bpm() -> None:
+    processor = SampleProcessor()
+
+    with pytest.raises(ValueError, match="must contain a BPM value"):
+        processor.process_heart_rate(HeartRateSample(timestamp_ms=1_000))
+
+
+def test_distance_baseline_rebases_after_sensor_reset() -> None:
+    processor = SampleProcessor()
+    processor.process_running(
+        RunningSample(timestamp_ms=1_000, distance_m=100.0),
+        trainer_connected=False,
+    )
+
+    processor.set_distance_baseline(5.0)
+    rebased = processor.process_running(
+        RunningSample(timestamp_ms=2_000, distance_m=8.0),
+        trainer_connected=False,
+    )
+
+    assert rebased.distance_m == _EXPECTED_TRAINER_DISTANCE_DELTA_M

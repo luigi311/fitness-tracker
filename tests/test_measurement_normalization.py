@@ -1,13 +1,15 @@
 """C4 measurement contracts."""
 
-# ruff: noqa: PLC0415, PLR2004
+# ruff: noqa: PLR2004
 
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 
 import pytest
 from bleaksport import HeartRateSample, TrainerSample
 from fitness_tracker import database as database_module
+from fitness_tracker.core.measurements import NormalizedHeartRate
 from fitness_tracker.core.sports import SportTypesEnum
 from fitness_tracker.data.models import (
     Activity,
@@ -20,6 +22,7 @@ from fitness_tracker.data.models import (
 )
 from fitness_tracker.data.sqlite_files import secure_sqlite_files
 from fitness_tracker.database import DatabaseManager, DatabaseMigrationError
+from fitness_tracker.hardware.processor import SampleProcessor
 from sqlalchemy import create_engine, inspect, text
 
 _DATABASE_FIXTURE_DIR = Path(__file__).parent / "fixtures" / "database"
@@ -80,19 +83,71 @@ def test_fresh_migration_matches_upload_metadata() -> None:
     assert database_column["nullable"] is ActivityUpload.__table__.c.updated_at.nullable is False
 
 
+def test_activity_deletion_cascades_to_measurements_and_uploads() -> None:
+    db = _database()
+    activity_id = db.start_activity(SportTypesEnum.running)
+    with db.Session() as session:
+        session.add_all(
+            [
+                HeartRate(activity_id=activity_id, timestamp_ms=1_000, bpm=140),
+                RunningMetrics(
+                    activity_id=activity_id,
+                    timestamp_ms=1_000,
+                    speed_mps=3.0,
+                    cadence_spm=170,
+                ),
+                CyclingMetrics(
+                    activity_id=activity_id,
+                    timestamp_ms=1_000,
+                    speed_mps=8.0,
+                ),
+                ActivityUpload(
+                    activity_id=activity_id,
+                    provider="test",
+                    status="pending",
+                ),
+            ],
+        )
+        session.commit()
+
+    foreign_keys = {
+        table: inspect(db.engine).get_foreign_keys(table)[0]["options"].get("ondelete")
+        for table in ("heart_rate", "running_metrics", "cycling_metrics")
+    }
+    assert set(foreign_keys.values()) == {"CASCADE"}
+
+    with db.engine.begin() as connection:
+        connection.execute(text("DELETE FROM activities WHERE id = :id"), {"id": activity_id})
+
+    with db.Session() as session:
+        assert session.query(HeartRate).count() == 0
+        assert session.query(RunningMetrics).count() == 0
+        assert session.query(CyclingMetrics).count() == 0
+        assert session.query(ActivityUpload).count() == 0
+
+
 def test_migration_secures_sqlite_database_sidecars_and_backup(tmp_path: Path) -> None:
     database_path = tmp_path / "released-v4.db"
     fixture_path = _DATABASE_FIXTURE_DIR / "v4.sql"
-    with sqlite3.connect(database_path) as connection:
+    with closing(sqlite3.connect(database_path)) as connection, connection:
         connection.executescript(fixture_path.read_text())
+        connection.execute(
+            "CREATE INDEX ix_hr_positive_bpm ON heart_rate (bpm) WHERE bpm > 0",
+        )
 
     DatabaseManager(f"sqlite:///{database_path}")
 
     backup_path = database_path.with_name(
-        f"{database_path.name}.pre-{database_module.ALEMBIC_HEAD_REVISION}",
+        f"{database_path.name}.pre-{database_module._alembic_head_revision()}",  # noqa: SLF001
     )
     assert database_path.stat().st_mode & 0o777 == 0o600
     assert backup_path.stat().st_mode & 0o777 == 0o600
+    assert "ix_hr_positive_bpm" in {
+        index["name"]
+        for index in inspect(create_engine(f"sqlite:///{database_path}")).get_indexes(
+            "heart_rate",
+        )
+    }
     for suffix in ("-wal", "-shm"):
         sidecar = database_path.with_name(f"{database_path.name}{suffix}")
         sidecar.touch()
@@ -111,15 +166,16 @@ def test_migrations_upgrade_every_shipped_schema(
 ) -> None:
     database_path = tmp_path / f"v{schema_release}.db"
     fixture_path = _DATABASE_FIXTURE_DIR / f"v{schema_release}.sql"
-    with sqlite3.connect(database_path) as connection:
+    with closing(sqlite3.connect(database_path)) as connection, connection:
         connection.executescript(fixture_path.read_text())
 
     db = DatabaseManager(f"sqlite:///{database_path}")
 
     with db.Session() as session:
         activity = session.query(Activity).one()
+        heart_rate = session.query(HeartRate).one()
         assert activity.public_id is not None
-        assert session.query(HeartRate).count() == 1
+        assert heart_rate.energy_kj == 1.25
         assert session.query(RunningMetrics).count() == int(schema_release >= 2)
         assert session.query(ActivityUpload).count() == int(schema_release >= 2)
         assert session.query(CyclingMetrics).count() == int(schema_release >= 3)
@@ -152,7 +208,7 @@ def test_migrations_upgrade_every_shipped_schema(
     with db.engine.connect() as connection:
         assert (
             connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-            == database_module.ALEMBIC_HEAD_REVISION
+            == database_module._alembic_head_revision()  # noqa: SLF001
         )
         assert (
             connection.execute(text("SELECT energy_kj FROM heart_rate WHERE id = 1")).scalar_one()
@@ -243,7 +299,7 @@ def test_local_migration_rebuilds_identity_preserves_rows_and_creates_backup(
     assert [(row.activity_id, row.bpm, row.rr_interval) for row in heart_rates] == [
         (2, 142, 422.5),
     ]
-    assert alembic_revision == database_module.ALEMBIC_HEAD_REVISION
+    assert alembic_revision == database_module._alembic_head_revision()  # noqa: SLF001
 
     migrated_inspector = inspect(db.engine)
     assert "public_id" in {
@@ -259,7 +315,7 @@ def test_local_migration_rebuilds_identity_preserves_rows_and_creates_backup(
     )
 
     backup_path = database_path.with_name(
-        f"{database_path.name}.pre-{database_module.ALEMBIC_HEAD_REVISION}",
+        f"{database_path.name}.pre-{database_module._alembic_head_revision()}",  # noqa: SLF001
     )
     assert backup_path.is_file()
     assert not list(
@@ -302,7 +358,7 @@ def test_migration_retry_preserves_first_known_good_backup(
         DatabaseManager(f"sqlite:///{database_path}")
 
     backup_path = database_path.with_name(
-        f"{database_path.name}.pre-{database_module.ALEMBIC_HEAD_REVISION}",
+        f"{database_path.name}.pre-{database_module._alembic_head_revision()}",  # noqa: SLF001
     )
     first_backup = backup_path.read_bytes()
     backup_inspector = inspect(create_engine(f"sqlite:///{backup_path}"))
@@ -331,14 +387,16 @@ def test_migration_retry_snapshots_database_state_for_each_attempt(
         DatabaseManager(f"sqlite:///{database_path}")
 
     immutable_path = database_path.with_name(
-        f"legacy.db.pre-{database_module.ALEMBIC_HEAD_REVISION}",
+        f"legacy.db.pre-{database_module._alembic_head_revision()}",  # noqa: SLF001
     )
     first_attempts = sorted(
-        tmp_path.glob(f"legacy.db.pre-{database_module.ALEMBIC_HEAD_REVISION}.attempt-*"),
+        tmp_path.glob(
+            f"legacy.db.pre-{database_module._alembic_head_revision()}.attempt-*",  # noqa: SLF001
+        ),
     )
     assert len(first_attempts) == 1
 
-    with sqlite3.connect(database_path) as connection:
+    with closing(sqlite3.connect(database_path)) as connection, connection:
         connection.execute(
             "INSERT INTO activities (id, start_time, end_time) VALUES "
             "(4, '2026-01-04 08:00:00', '2026-01-04 08:30:00')",
@@ -348,7 +406,9 @@ def test_migration_retry_snapshots_database_state_for_each_attempt(
         DatabaseManager(f"sqlite:///{database_path}")
 
     attempt_paths = sorted(
-        tmp_path.glob(f"legacy.db.pre-{database_module.ALEMBIC_HEAD_REVISION}.attempt-*"),
+        tmp_path.glob(
+            f"legacy.db.pre-{database_module._alembic_head_revision()}.attempt-*",  # noqa: SLF001
+        ),
     )
     assert len(attempt_paths) == 2
     with create_engine(f"sqlite:///{immutable_path}").connect() as connection:
@@ -376,10 +436,12 @@ def test_migration_attempt_snapshots_are_retained_within_limit(
             DatabaseManager(f"sqlite:///{database_path}")
 
     immutable_path = database_path.with_name(
-        f"legacy.db.pre-{database_module.ALEMBIC_HEAD_REVISION}",
+        f"legacy.db.pre-{database_module._alembic_head_revision()}",  # noqa: SLF001
     )
     attempt_paths = sorted(
-        tmp_path.glob(f"legacy.db.pre-{database_module.ALEMBIC_HEAD_REVISION}.attempt-*"),
+        tmp_path.glob(
+            f"legacy.db.pre-{database_module._alembic_head_revision()}.attempt-*",  # noqa: SLF001
+        ),
     )
     assert len(attempt_paths) == database_module.MIGRATION_ATTEMPT_RETENTION
     assert immutable_path.is_file()
@@ -395,7 +457,7 @@ def test_migration_backup_is_keyed_by_target_revision(
     _create_legacy_local_database(database_path)
     engine = create_engine(f"sqlite:///{database_path}")
 
-    monkeypatch.setattr(database_module, "ALEMBIC_HEAD_REVISION", "0004")
+    monkeypatch.setattr(database_module, "_alembic_head_revision", lambda: "0004")
     first_backup = DatabaseManager._backup_before_migration(engine)  # noqa: SLF001
 
     with engine.begin() as connection:
@@ -406,7 +468,7 @@ def test_migration_backup_is_keyed_by_target_revision(
             ),
         )
 
-    monkeypatch.setattr(database_module, "ALEMBIC_HEAD_REVISION", "next-head")
+    monkeypatch.setattr(database_module, "_alembic_head_revision", lambda: "next-head")
     second_backup = DatabaseManager._backup_before_migration(engine)  # noqa: SLF001
 
     assert first_backup.name == "legacy.db.pre-0004"
@@ -442,18 +504,8 @@ def test_measurement_migration_fails_closed_when_backup_fails(
     assert "alembic_version" not in inspect(engine).get_table_names()
 
 
-def _process_heart_rates(samples: list[HeartRateSample]) -> list[object]:
-    """Exercise the Phase 2 SampleProcessor contract before it exists."""
-    try:
-        from fitness_tracker.core.measurements import NormalizedHeartRate
-        from fitness_tracker.hardware.processor import SampleProcessor
-    except ImportError:
-        pytest.fail(
-            "C4 contract requires SampleProcessor and NormalizedHeartRate; "
-            "Phase 2 has not introduced them yet",
-            pytrace=False,
-        )
-
+def _process_heart_rates(samples: list[HeartRateSample]) -> list[NormalizedHeartRate]:
+    """Exercise the SampleProcessor heart-rate normalization contract."""
     processor = SampleProcessor()
     normalized = [processor.process_heart_rate(sample) for sample in samples]
     assert all(isinstance(sample, NormalizedHeartRate) for sample in normalized)

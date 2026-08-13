@@ -59,7 +59,7 @@ class Recorder(HardwareRecorder):
             trainer_name=trainer_name,
             trainer_address=trainer_address,
             trainer_machine_type=(
-                int(trainer_machine_type) if trainer_machine_type is not None else None
+                trainer_machine_type.value if trainer_machine_type is not None else None
             ),
         )
         database = DatabaseManager(database_url=database_url)

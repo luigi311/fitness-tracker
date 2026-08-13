@@ -64,13 +64,18 @@ class IcuUploadResponse(BaseModel):
     def from_response(cls, response: requests.Response) -> IcuUploadResponse:
         """Parse a successful upload response and require its activity identifier."""
         try:
-            payload = cls.model_validate(response.json())
+            payloads = _ICU_UPLOAD_RESPONSES.validate_python(response.json())
         except (ValidationError, ValueError) as exc:
             message = "returned unexpected data"
             raise IntegrationResponseError(
                 _INTEGRATION_NAME,
                 message,
             ) from exc
+
+        if not payloads:
+            message = "returned no upload result"
+            raise IntegrationResponseError(_INTEGRATION_NAME, message)
+        payload = payloads[0]
 
         if payload.provider_id is None:
             message = "returned no activity identifier"
@@ -97,6 +102,7 @@ class _HttpTransport(Protocol):
 
 
 _ICU_WORKOUT_EVENTS = TypeAdapter(list[IcuWorkoutEvent])
+_ICU_UPLOAD_RESPONSES = TypeAdapter(list[IcuUploadResponse])
 
 
 class IntervalsICUClient:
@@ -167,7 +173,7 @@ class IntervalsICUClient:
             response.raise_for_status()
         except requests.RequestException as exc:
             status_code = exc.response.status_code if exc.response is not None else None
-            message = str(exc)
+            message = "request failed"
             raise IntegrationTransportError(
                 _INTEGRATION_NAME,
                 message,

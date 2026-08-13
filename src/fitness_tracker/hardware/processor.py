@@ -77,7 +77,7 @@ class SampleProcessor:
         adjusted_distance_m = self._adjust_distance(sample.distance_m)
         altitude_m = self._accumulate_altitude(sample.distance_m)
 
-        if not trainer_connected and watts and self.weight_kg and self.incline_percent:
+        if not trainer_connected and watts and self.incline_percent:
             # Estimate additional power from incline for footpods. The formula is
             # derived from the QZ reference and Stryd calibration data.
             speed_kmh = sample.speed_kph or 0.0
