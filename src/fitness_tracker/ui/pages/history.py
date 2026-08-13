@@ -59,6 +59,7 @@ def _tz_aware_localize(dt: datetime.datetime) -> datetime.datetime:
 
 @dataclass(frozen=True)
 class _HistoryReloadResult:
+    filter_id: str
     rows: list[ActivityStatsRow]
     heart_rate_series: dict[int, list[tuple[int, int]]]
 
@@ -71,6 +72,21 @@ class _HistoryExportResult:
 
 class _HistoryExportError(RuntimeError):
     """An expected activity-export failure suitable for display."""
+
+
+def _tcx_output_target(gfile: Gio.File) -> Gio.File:
+    """Return the selected Gio target with a TCX suffix."""
+    basename = gfile.get_basename()
+    if not basename:
+        message = "Selected export target has no filename"
+        raise _HistoryExportError(message)
+    if basename.lower().endswith(".tcx"):
+        return gfile
+    parent = gfile.get_parent()
+    if parent is None:
+        message = "Selected export target has no parent"
+        raise _HistoryExportError(message)
+    return parent.get_child(f"{basename}.tcx")
 
 
 # ---------- History Page UI ----------
@@ -93,6 +109,7 @@ class HistoryPageUI:
         self._heart_rate_series: dict[int, list[tuple[int, int]]] = {}
         self._sparkline_charts: list[Sparkline] = []
         self._stats_backfill_in_progress = False
+        self._stats_reload_pending = False
 
         # Compare chart
         self._cmp_chart: CompareChart | None = None
@@ -357,18 +374,19 @@ class HistoryPageUI:
         self._redraw_compare_chart()
 
     # ---- Data fetchers ----
-    def _filter_cutoff(self) -> datetime.datetime | None:
+    def _filter_cutoff(self, filter_id: str | None = None) -> datetime.datetime | None:
         now = datetime.datetime.now().astimezone()
-        if self.filter_id == "week":
+        selected_filter = self.filter_id if filter_id is None else filter_id
+        if selected_filter == "week":
             return now - datetime.timedelta(days=7)
-        if self.filter_id == "month":
+        if selected_filter == "month":
             return now - datetime.timedelta(days=30)
         return None
 
-    def _fetch_stats_rows(self) -> list[ActivityStatsRow]:
+    def _fetch_stats_rows(self, filter_id: str | None = None) -> list[ActivityStatsRow]:
         """Single SELECT against activity_stats with optional cutoff filter."""
         repository = self._get_repository()
-        cutoff = self._filter_cutoff()
+        cutoff = self._filter_cutoff(filter_id)
         # The repository compares the stored UTC value with the local-aware cutoff.
         return repository.list_activity_stats(cutoff)
 
@@ -391,13 +409,19 @@ class HistoryPageUI:
         # Avoid kicking off multiple concurrent backfills if refresh is
         # requested repeatedly while one is already running.
         if self._stats_backfill_in_progress:
+            self._stats_reload_pending = True
             return False
         self._stats_backfill_in_progress = True
+        self._stats_reload_pending = False
 
         stat_calc = self.app.database.stat_calc
+        requested_filter = self.filter_id
 
         def _finish_reload(result: _HistoryReloadResult) -> None:
             """Run lightweight UI updates on the GTK main thread."""
+            if result.filter_id != self.filter_id:
+                self._stats_reload_pending = True
+                return
             rows = self._sort_rows(result.rows)
             self._displayed = rows
             self._heart_rate_series = result.heart_rate_series
@@ -409,11 +433,11 @@ class HistoryPageUI:
             token.raise_if_cancelled()
             stat_calc.compute_all(force=False)
             token.raise_if_cancelled()
-            rows = self._fetch_stats_rows()
+            rows = self._fetch_stats_rows(requested_filter)
             heart_rate_series = self._get_repository().list_heart_rate_series(
                 [stats.activity_id for stats in rows],
             )
-            return _HistoryReloadResult(rows, heart_rate_series)
+            return _HistoryReloadResult(requested_filter, rows, heart_rate_series)
 
         def on_error(error: Exception) -> None:
             logger.error("History stats backfill failed: {}", error)
@@ -421,6 +445,13 @@ class HistoryPageUI:
 
         def on_finally() -> None:
             self._stats_backfill_in_progress = False
+            if self._stats_reload_pending:
+                self._stats_reload_pending = False
+                self._reload_everything()
+
+        def on_discard() -> None:
+            self._stats_backfill_in_progress = False
+            self._stats_reload_pending = False
 
         try:
             self.app.jobs.submit(
@@ -429,7 +460,7 @@ class HistoryPageUI:
                 on_success=_finish_reload,
                 on_error=on_error,
                 on_finally=on_finally,
-                on_discard=on_finally,
+                on_discard=on_discard,
             )
         except DuplicateJobError:
             self._stats_backfill_in_progress = False
@@ -847,18 +878,27 @@ class HistoryPageUI:
                 gfile = dialog.save_finish(response)
                 if not gfile:
                     return
-                path = gfile.get_path() or result.default_name
-                if not path.lower().endswith(".tcx"):
-                    path += ".tcx"
-                out = Gio.File.new_for_path(path)
-                out.replace_contents(
+                gfile = _tcx_output_target(gfile)
+
+                def on_write_done(
+                    target: Gio.File,
+                    write_response: Gio.AsyncResult,
+                    _user_data: object | None = None,
+                ) -> None:
+                    try:
+                        target.replace_contents_finish(write_response)
+                        self.app.show_toast(f"Saved: {target.get_parse_name()}")
+                    except Exception as error:
+                        self.app.show_toast(f"Save failed: {error}")
+
+                gfile.replace_contents_async(
                     result.tcx_bytes,
                     None,
                     make_backup=False,
                     flags=Gio.FileCreateFlags.REPLACE_DESTINATION,
                     cancellable=None,
+                    callback=on_write_done,
                 )
-                self.app.show_toast(f"Saved: {path}")
             except Exception as error:
                 self.app.show_toast(f"Save failed: {error}")
 

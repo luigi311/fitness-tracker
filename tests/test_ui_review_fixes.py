@@ -13,6 +13,7 @@ from fitness_tracker.core.settings import (
 from fitness_tracker.core.sports import SportTypesEnum
 from fitness_tracker.core.units import UnitSystem
 from fitness_tracker.services.jobs import CancellationToken, DuplicateJobError
+from fitness_tracker.ui.pages import history as history_module
 from fitness_tracker.ui.pages.history import HistoryPageUI
 from fitness_tracker.ui.pages.settings import page as settings_page_module
 from fitness_tracker.ui.pages.settings.sections import (
@@ -22,6 +23,8 @@ from fitness_tracker.ui.pages.settings.sections import (
     SensorSection,
 )
 from fitness_tracker.ui.widgets.session_controls import InclineControl
+
+EXPECTED_COALESCED_SUBMISSIONS = 2
 
 
 class _Combo:
@@ -115,6 +118,8 @@ def test_history_backfill_discard_and_duplicate_release_reload_guard() -> None:
         jobs=jobs,
     )
     page._stats_backfill_in_progress = False
+    page._stats_reload_pending = False
+    page.filter_id = "week"
 
     assert page._reload_everything() is False
     assert page._stats_backfill_in_progress
@@ -141,7 +146,9 @@ def test_history_backfill_batches_heart_rates_in_worker_result() -> None:
         jobs=jobs,
     )
     page.sort_id = "date_desc"
+    page.filter_id = "week"
     page._stats_backfill_in_progress = False
+    page._stats_reload_pending = False
     page._fetch_stats_rows = Mock(return_value=[stats])
     page._get_repository = Mock(return_value=repository)
 
@@ -149,8 +156,55 @@ def test_history_backfill_batches_heart_rates_in_worker_result() -> None:
     work = jobs.submit.call_args.args[1]
     result = work(CancellationToken())
 
+    page._fetch_stats_rows.assert_called_once_with("week")
     repository.list_heart_rate_series.assert_called_once_with([7])
+    assert result.filter_id == "week"
     assert result.heart_rate_series == {7: [(0, 120)]}
+
+
+def test_history_backfill_coalesces_reload_for_current_filter() -> None:
+    page = HistoryPageUI.__new__(HistoryPageUI)
+    jobs = Mock()
+    repository = Mock()
+    repository.list_heart_rate_series.return_value = {}
+    page.app = SimpleNamespace(  # ty:ignore[invalid-assignment]
+        database=SimpleNamespace(stat_calc=Mock()),
+        jobs=jobs,
+    )
+    page.filter_id = "week"
+    page.sort_id = "date_desc"
+    page._stats_backfill_in_progress = False
+    page._stats_reload_pending = False
+    page._fetch_stats_rows = Mock(return_value=[])
+    page._get_repository = Mock(return_value=repository)
+    page._bind_summary = Mock()
+    page._bind_list = Mock()
+    page._redraw_compare_chart = Mock()
+
+    page._reload_everything()
+    first_job = jobs.submit.call_args
+    page.filter_id = "month"
+    page._reload_everything()
+    assert jobs.submit.call_count == 1
+
+    first_result = first_job.args[1](CancellationToken())
+    first_job.kwargs["on_success"](first_result)
+    page._bind_summary.assert_not_called()
+    first_job.kwargs["on_finally"]()
+    assert jobs.submit.call_count == EXPECTED_COALESCED_SUBMISSIONS
+
+    second_job = jobs.submit.call_args
+    second_result = second_job.args[1](CancellationToken())
+    second_job.kwargs["on_success"](second_result)
+    second_job.kwargs["on_finally"]()
+
+    assert page._fetch_stats_rows.call_args_list == [
+        (("week",),),
+        (("month",),),
+    ]
+    page._bind_summary.assert_called_once_with([])
+    assert not page._stats_backfill_in_progress
+    assert not page._stats_reload_pending
 
 
 def test_history_export_reads_and_conversion_run_in_submitted_job(monkeypatch) -> None:
@@ -183,6 +237,48 @@ def test_history_export_reads_and_conversion_run_in_submitted_job(monkeypatch) -
     repository.list_cycling_metrics.assert_called_once_with(7)
     repository.get_activity_stats.assert_called_once_with(7)
     assert result.tcx_bytes == b"tcx"
+
+
+def test_history_export_writes_selected_gio_target_asynchronously(monkeypatch) -> None:
+    page = HistoryPageUI.__new__(HistoryPageUI)
+    page.app = SimpleNamespace(window=object(), show_toast=Mock())  # ty:ignore[invalid-assignment]
+    selected = Mock()
+    selected.get_basename.return_value = "activity"
+    parent = Mock()
+    selected.get_parent.return_value = parent
+    target = Mock()
+    target.get_parse_name.return_value = "sftp://example/activity.tcx"
+    parent.get_child.return_value = target
+    write_response = object()
+
+    def replace_async(*_args, **kwargs) -> None:
+        kwargs["callback"](target, write_response)
+
+    target.replace_contents_async.side_effect = replace_async
+    dialog = Mock()
+    dialog.save_finish.return_value = selected
+    dialog.save.side_effect = lambda _window, _cancellable, callback: callback(dialog, object())
+    file_factory = Mock()
+    file_filter = Mock()
+    fake_gtk = SimpleNamespace(
+        FileDialog=SimpleNamespace(new=Mock(return_value=dialog)),
+        FileFilter=Mock(return_value=file_filter),
+    )
+    fake_gio = SimpleNamespace(
+        File=SimpleNamespace(new_for_path=file_factory),
+        FileCreateFlags=SimpleNamespace(REPLACE_DESTINATION=object()),
+    )
+    monkeypatch.setattr(history_module, "Gtk", fake_gtk)
+    monkeypatch.setattr(history_module, "Gio", fake_gio)
+
+    page._show_export_dialog(
+        history_module._HistoryExportResult("activity.tcx", b"tcx"),
+    )
+
+    parent.get_child.assert_called_once_with("activity.tcx")
+    target.replace_contents_async.assert_called_once()
+    target.replace_contents_finish.assert_called_once_with(write_response)
+    page.app.show_toast.assert_called_once_with("Saved: sftp://example/activity.tcx")
 
 
 def test_idle_once_callback_explicitly_removes_source(monkeypatch) -> None:
