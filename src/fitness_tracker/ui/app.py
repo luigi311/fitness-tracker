@@ -74,9 +74,11 @@ class _SensorProfileApplyError(RuntimeError):
         self,
         message: str,
         *,
+        request: _SensorProfileRequest,
         current: Recorder | None,
         clear_current: bool,
     ) -> None:
+        self.request = request
         self.current = current
         self.clear_current = clear_current
         super().__init__(message)
@@ -549,6 +551,7 @@ class FitnessAppUI(Adw.Application):
                     message = f"Unable to stop the current sensor worker: {error}"
                     raise _SensorProfileApplyError(
                         message,
+                        request=request,
                         current=current,
                         clear_current=False,
                     ) from error
@@ -558,6 +561,7 @@ class FitnessAppUI(Adw.Application):
                     )
                     raise _SensorProfileApplyError(
                         message,
+                        request=request,
                         current=current,
                         clear_current=False,
                     )
@@ -588,6 +592,7 @@ class FitnessAppUI(Adw.Application):
                 message = f"Unable to build the sensor worker: {error}"
                 raise _SensorProfileApplyError(
                     message,
+                    request=request,
                     current=current,
                     clear_current=current is not None,
                 ) from error
@@ -657,10 +662,20 @@ class FitnessAppUI(Adw.Application):
             self._sensor_apply_running = False
             if isinstance(error, _SensorProfileApplyError) and error.current is not None:
                 self._sensor_retiring = error.current
+            latest = self._sensor_request
+            retry_latest = (
+                isinstance(error, _SensorProfileApplyError)
+                and latest is not None
+                and latest.generation > error.request.generation
+            )
+            if retry_latest:
+                self._sensor_apply_running = True
         if isinstance(error, _SensorProfileApplyError):
             self.show_toast(str(error))
-            return
-        self.show_toast(f"Unable to apply sensor settings: {error}")
+        else:
+            self.show_toast(f"Unable to apply sensor settings: {error}")
+        if retry_latest:
+            self._submit_sensor_apply()
 
     def do_activate(self) -> None:
         """Create and present the main window when the application activates."""

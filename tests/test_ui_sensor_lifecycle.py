@@ -122,7 +122,11 @@ from fitness_tracker.core.sensor_profile import SensorProfile
 from fitness_tracker.core.sports import SportTypesEnum
 from fitness_tracker.hardware.recorder import FinalizationClaim, FinalizationStatus
 from fitness_tracker.services.jobs import BackgroundJobRunner
-from fitness_tracker.ui.app import FitnessAppUI
+from fitness_tracker.ui.app import (
+    FitnessAppUI,
+    _SensorProfileApplyError,
+    _SensorProfileRequest,
+)
 
 
 class _CurrentRecorder:
@@ -556,6 +560,55 @@ class SensorSettingsLifecycleTests(unittest.TestCase):
         self.assertFalse(app.profile_installed.is_set())
         replacement.shutdown.assert_called_once_with()
         self.assertEqual(app.toasts, ["Unable to start the sensor worker: start failed"])
+
+    def test_failed_stale_sensor_request_resubmits_latest_generation(self):
+        app = self._make_app()
+        failed = _SensorProfileRequest(
+            generation=1,
+            sport_type=SportTypesEnum.running,
+            trainer=False,
+            profile=SensorProfile(hr_address="old"),
+        )
+        app._sensor_request = _SensorProfileRequest(
+            generation=2,
+            sport_type=SportTypesEnum.biking,
+            trainer=False,
+            profile=SensorProfile(hr_address="new"),
+        )
+        app._submit_sensor_apply = Mock()
+        error = _SensorProfileApplyError(
+            "old request failed",
+            request=failed,
+            current=None,
+            clear_current=False,
+        )
+
+        app._on_sensor_apply_error(error)
+
+        self.assertTrue(app._sensor_apply_running)
+        app._submit_sensor_apply.assert_called_once_with()
+
+    def test_failed_current_sensor_request_is_not_retried_immediately(self):
+        app = self._make_app()
+        request = _SensorProfileRequest(
+            generation=1,
+            sport_type=SportTypesEnum.running,
+            trainer=False,
+            profile=SensorProfile(hr_address="current"),
+        )
+        app._sensor_request = request
+        app._submit_sensor_apply = Mock()
+        error = _SensorProfileApplyError(
+            "current request failed",
+            request=request,
+            current=None,
+            clear_current=False,
+        )
+
+        app._on_sensor_apply_error(error)
+
+        self.assertFalse(app._sensor_apply_running)
+        app._submit_sensor_apply.assert_not_called()
 
 
 if __name__ == "__main__":

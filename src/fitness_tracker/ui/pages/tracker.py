@@ -966,11 +966,7 @@ class TrackerPageUI:
         # ---- inject through recorder pipeline ----
         if self.app.recorder:
             # Wall-clock timestamp that the recorder handlers expect (seconds since epoch)
-            wall_ts = (
-                time.time()
-                if self._session_state in (SessionState.RUNNING, SessionState.PAUSED)
-                else time.time() - t_now
-            )
+            wall_ts = time.time()
             wall_ts_ms = int(wall_ts * 1000)
             self._inject_test_reading(reading, wall_ts_ms)
 

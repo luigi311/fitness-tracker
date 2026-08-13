@@ -30,7 +30,7 @@ class InclineControl(Gtk.Frame):
         initial_value: float = 0.0,
     ) -> None:
         super().__init__()
-        self._value: float = initial_value
+        self._value = self._clamp_value(initial_value)
         self._on_change = on_change
 
         outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
@@ -85,7 +85,7 @@ class InclineControl(Gtk.Frame):
         self._refresh()
 
     def _change(self, delta: float) -> None:
-        self._value = max(self.MIN_PCT, min(self.MAX_PCT, round(self._value + delta, 1)))
+        self._value = self._clamp_value(round(self._value + delta, 1))
         self._refresh()
         self._on_change(self._value)
 
@@ -97,8 +97,12 @@ class InclineControl(Gtk.Frame):
 
     def set_value(self, value: float) -> None:
         """Set the displayed incline, clamped to the supported range."""
-        self._value = max(self.MIN_PCT, min(self.MAX_PCT, float(value)))
+        self._value = self._clamp_value(value)
         self._refresh()
+
+    @classmethod
+    def _clamp_value(cls, value: float) -> float:
+        return max(cls.MIN_PCT, min(cls.MAX_PCT, float(value)))
 
 
 class TargetGauge(Gtk.DrawingArea):

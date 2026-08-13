@@ -48,6 +48,13 @@ class TrainerDeviceInfo(TypedDict):
     machine_type: MachineType | int | None
 
 
+class PebbleDeviceInfo(TypedDict):
+    """Advertised and display metadata for one discovered Pebble."""
+
+    name: str
+    address: str
+
+
 type SensorAddressMap = dict[str, str]
 type TrainerDeviceMap = dict[str, TrainerDeviceInfo]
 type SectionMaps = dict[str, SensorAddressMap | TrainerDeviceMap]
@@ -172,7 +179,7 @@ class SensorSection:
             status = (
                 empty_message if isinstance(empty_message, str) else empty_message.get(spec.key, "")
             )
-            row.row.set_subtitle("" if names else status)
+            row.row.set_subtitle("" if mapping else status)
             self._set_combo_items_with_none(row.combo, names, self._active_name(spec))
             self.maps[spec.key] = mapping
 
@@ -488,7 +495,7 @@ class PebbleSection:
         self.port_spin: Gtk.SpinButton | None = None
         self.scan_button: Gtk.Button | None = None
         self.expander: Adw.ExpanderRow | None = None
-        self.device_map: dict[str, str] = {}
+        self.device_map: dict[str, PebbleDeviceInfo] = {}
 
     def build(self) -> Adw.PreferencesGroup:
         """Build and return the Pebble-preferences group."""
@@ -588,7 +595,8 @@ class PebbleSection:
         if self.combo is None or not self.device_map:
             return
         display_name = self.combo.get_active_text() or ""
-        self.combo.set_tooltip_text(self.device_map.get(display_name) or None)
+        device = self.device_map.get(display_name)
+        self.combo.set_tooltip_text(device["address"] if device else None)
 
     def load(self) -> None:
         """Populate controls from the current Pebble settings."""
@@ -597,7 +605,12 @@ class PebbleSection:
         if self.settings.name and self.combo is not None:
             self.combo.append_text(self.settings.name)
             self.combo.set_active(0)
-            self.device_map = {self.settings.name: self.settings.address or ""}
+            self.device_map = {
+                self.settings.name: {
+                    "name": self.settings.name,
+                    "address": self.settings.address or "",
+                },
+            }
 
     def set_settings(self, settings: PebbleSettings) -> None:
         """Use a newly saved settings model for future scans and loads."""
@@ -620,11 +633,11 @@ class PebbleSection:
         if self.row is not None:
             self.row.set_subtitle(message)
 
-    def set_scan_results(self, name_to_mac: Mapping[str, str]) -> None:
+    def set_scan_results(self, devices: list[tuple[str, str]]) -> None:
         """Replace the selector contents with a scan result."""
         if self.combo is None or self.row is None:
             return
-        display_map = self._unique_display_names(name_to_mac)
+        display_map = self._unique_display_names(devices)
         names = sorted(display_map)
         self.combo.remove_all()
         for display_name in names:
@@ -635,27 +648,29 @@ class PebbleSection:
             self.row.set_subtitle("")
             if self.settings.address:
                 for index, display_name in enumerate(names):
-                    if display_map[display_name] == self.settings.address:
+                    if display_map[display_name]["address"] == self.settings.address:
                         self.combo.set_active(index)
                         break
         self.device_map = display_map
 
     @staticmethod
-    def _unique_display_names(name_to_mac: Mapping[str, str]) -> dict[str, str]:
+    def _unique_display_names(
+        devices: list[tuple[str, str]],
+    ) -> dict[str, PebbleDeviceInfo]:
         """Make duplicate device names unambiguous in the selector."""
         counts: dict[str, int] = {}
-        for name in name_to_mac:
+        for name, _address in devices:
             counts[name] = counts.get(name, 0) + 1
         seen_indices: dict[str, int] = {}
-        display_map: dict[str, str] = {}
-        for name, mac in name_to_mac.items():
+        display_map: dict[str, PebbleDeviceInfo] = {}
+        for name, address in devices:
             if counts[name] == 1:
                 display_name = name
             else:
                 index = seen_indices.get(name, 0) + 1
                 seen_indices[name] = index
                 display_name = f"{name} ({index})"
-            display_map[display_name] = mac
+            display_map[display_name] = {"name": name, "address": address}
         return display_map
 
     def settings_data(self) -> dict[str, object]:
@@ -665,12 +680,13 @@ class PebbleSection:
             raise RuntimeError(message)
         use_emulator = self.emu_switch.get_active()
         display_name = self.combo.get_active_text() or ""
+        device = self.device_map.get(display_name)
         return {
             "enable": self.enable_row.get_active(),
             "use_emulator": use_emulator,
             "port": self.port_spin.get_value_as_int() if self.port_spin else self.settings.port,
-            "name": None if use_emulator else display_name or None,
-            "address": None if use_emulator else self.device_map.get(display_name),
+            "name": None if use_emulator or device is None else device["name"],
+            "address": None if use_emulator or device is None else device["address"],
         }
 
 

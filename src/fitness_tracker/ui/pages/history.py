@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import datetime
 import statistics
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 from zoneinfo import ZoneInfo
 
@@ -56,6 +57,22 @@ def _tz_aware_localize(dt: datetime.datetime) -> datetime.datetime:
     return dt.astimezone()
 
 
+@dataclass(frozen=True)
+class _HistoryReloadResult:
+    rows: list[ActivityStatsRow]
+    heart_rate_series: dict[int, list[tuple[int, int]]]
+
+
+@dataclass(frozen=True)
+class _HistoryExportResult:
+    default_name: str
+    tcx_bytes: bytes
+
+
+class _HistoryExportError(RuntimeError):
+    """An expected activity-export failure suitable for display."""
+
+
 # ---------- History Page UI ----------
 
 
@@ -73,7 +90,9 @@ class HistoryPageUI:
         self._listbox: Gtk.ListBox | None = None
         # Cached flat stats rows (ActivityStats ORM objects) in display order.
         self._displayed: list[ActivityStatsRow] = []
+        self._heart_rate_series: dict[int, list[tuple[int, int]]] = {}
         self._sparkline_charts: list[Sparkline] = []
+        self._stats_backfill_in_progress = False
 
         # Compare chart
         self._cmp_chart: CompareChart | None = None
@@ -137,6 +156,9 @@ class HistoryPageUI:
 
         # Add to internal cache; resort and rebind so current sort order is preserved
         self._displayed.append(row)
+        self._heart_rate_series[activity_id] = repository.list_heart_rate_series(
+            [activity_id],
+        ).get(activity_id, [])
         if self._listbox:
             # Re-apply active sort and rebuild the listbox/summary bindings
             self._resort_and_rebind()
@@ -368,23 +390,30 @@ class HistoryPageUI:
     def _reload_everything(self) -> bool:
         # Avoid kicking off multiple concurrent backfills if refresh is
         # requested repeatedly while one is already running.
-        if getattr(self, "_stats_backfill_in_progress", False):
+        if self._stats_backfill_in_progress:
             return False
         self._stats_backfill_in_progress = True
 
         stat_calc = self.app.database.stat_calc
 
-        def _finish_reload(_result: object) -> None:
+        def _finish_reload(result: _HistoryReloadResult) -> None:
             """Run lightweight UI updates on the GTK main thread."""
-            rows = self._sort_rows(self._fetch_stats_rows())
+            rows = self._sort_rows(result.rows)
             self._displayed = rows
+            self._heart_rate_series = result.heart_rate_series
             self._bind_summary(rows)
             self._bind_list(rows)
             self._redraw_compare_chart()
 
-        def work(token: CancellationToken) -> None:
+        def work(token: CancellationToken) -> _HistoryReloadResult:
             token.raise_if_cancelled()
             stat_calc.compute_all(force=False)
+            token.raise_if_cancelled()
+            rows = self._fetch_stats_rows()
+            heart_rate_series = self._get_repository().list_heart_rate_series(
+                [stats.activity_id for stats in rows],
+            )
+            return _HistoryReloadResult(rows, heart_rate_series)
 
         def on_error(error: Exception) -> None:
             logger.error("History stats backfill failed: {}", error)
@@ -400,8 +429,10 @@ class HistoryPageUI:
                 on_success=_finish_reload,
                 on_error=on_error,
                 on_finally=on_finally,
+                on_discard=on_finally,
             )
         except DuplicateJobError:
+            self._stats_backfill_in_progress = False
             logger.debug("History stats backfill is already running")
 
         # Returning False removes the idle source that invoked this method.
@@ -472,13 +503,10 @@ class HistoryPageUI:
             self._listbox.append(row)
             return
 
-        heart_rate_series = self._get_repository().list_heart_rate_series(
-            [stats.activity_id for stats in items],
-        )
         for stats in items:
             row = self._make_activity_row(
                 stats,
-                heart_rate_series.get(stats.activity_id, []),
+                self._heart_rate_series.get(stats.activity_id, []),
             )
             self._listbox.append(row)
 
@@ -565,7 +593,9 @@ class HistoryPageUI:
         if stats.avg_power_watts is not None:
             parts.append(f"{round(stats.avg_power_watts)} W")
         if stats.total_ascent_m:
-            parts.append(f"↑ {stats.total_ascent_m:.0f} m")
+            parts.append(
+                f"↑ {format_distance(stats.total_ascent_m, self.app.unit_system)}",
+            )
         parts.append(sport.name)
         return parts
 
@@ -576,21 +606,7 @@ class HistoryPageUI:
         sport: SportTypesEnum,
     ) -> None:
         """Append the formatted metric summary to an activity row."""
-        metrics_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        metrics_box.set_can_focus(False)
-
-        def add_chip(text: str) -> None:
-            lbl = Gtk.Label(label=text)
-            lbl.add_css_class("dim-label")
-            lbl.set_can_focus(False)
-            lbl.set_focusable(False)
-            lbl.set_selectable(False)
-            metrics_box.append(lbl)
-
         parts = self._activity_metric_parts(stats, sport)
-        add_chip(parts[0])
-        add_chip(parts[1])
-
         metrics_lbl = Gtk.Label(label="  ·  ".join(parts))
         metrics_lbl.add_css_class("dim-label")
         metrics_lbl.set_wrap(True)
@@ -668,6 +684,8 @@ class HistoryPageUI:
         # Draw HR zones only for the HR metric
         hr_mode = self._cmp_metric_id == "hr"
         self._apply_chart_style(ax, draw_hr_zones=hr_mode)
+        ax.set_xlabel("Time (s)", color=self.app.chart_theme.foreground)
+        canvas.draw_idle()
 
         self._compare_generation += 1
         generation = self._compare_generation
@@ -778,82 +796,90 @@ class HistoryPageUI:
         canvas.draw_idle()
 
     # Export
-    def _on_export_clicked(self, act_id: int) -> None:
+    def _prepare_export(
+        self,
+        act_id: int,
+        token: CancellationToken,
+    ) -> _HistoryExportResult:
         repository = self._get_repository()
-        # Build a default filename from the activity start time
+        token.raise_if_cancelled()
         act = repository.get_activity(act_id)
         if not act:
-            self.app.show_toast("Activity not found")
-            return
-        local_start = _tz_aware_localize(act.start_time)
-
-        # Gather samples
+            message = "Activity not found"
+            raise _HistoryExportError(message)
         hrs = repository.list_heart_rates(act_id)
         runs = repository.list_running_metrics(act_id)
         cycles = repository.list_cycling_metrics(act_id)
         stats_row = repository.get_activity_stats(act_id)
-
+        token.raise_if_cancelled()
         sport_type = (
             SportTypesEnum(stats_row.sport_type_id)
             if stats_row
             else infer_sport(hrs, runs, cycles, act_id)
         )
-
         if sport_type == SportTypesEnum.unknown:
-            msg = f"Cannot export: Unknown sport for activity {act_id}"
-            logger.warning(msg)
-            self.app.show_toast(msg)
-            return
-
+            message = f"Cannot export: Unknown sport for activity {act_id}"
+            logger.warning(message)
+            raise _HistoryExportError(message)
+        tcx_bytes = activity_to_tcx(
+            act=act,
+            heart_rates=hrs,
+            running=runs,
+            cycling=cycles,
+            sport_type=sport_type,
+        )
+        local_start = _tz_aware_localize(act.start_time)
         default_name = f"{local_start.strftime('%Y-%m-%d_%H-%M-%S')}_{sport_type.name}.tcx"
+        return _HistoryExportResult(default_name, tcx_bytes)
 
-        try:
-            tcx_bytes = activity_to_tcx(
-                act=act,
-                heart_rates=hrs,
-                running=runs,
-                cycling=cycles,
-                sport_type=sport_type,
-            )
-        except Exception as e:
-            self.app.show_toast(f"Export failed: {e}")
-            return
-
-        # File save dialog
+    def _show_export_dialog(self, result: _HistoryExportResult) -> None:
         dialog = Gtk.FileDialog.new()
         dialog.set_title("Save TCX")
-        # Suggest default name
-        init_file = Gio.File.new_for_path(default_name)
+        init_file = Gio.File.new_for_path(result.default_name)
         dialog.set_initial_file(init_file)
-        # Limit to .tcx by default (still lets user change)
         filter_tcx = Gtk.FileFilter()
         filter_tcx.set_name("TCX files")
         filter_tcx.add_suffix("tcx")
         dialog.set_default_filter(filter_tcx)
 
-        def _on_save_done(_dlg: Gtk.FileDialog, res: Gio.AsyncResult) -> None:
+        def on_save_done(_dialog: Gtk.FileDialog, response: Gio.AsyncResult) -> None:
             try:
-                gfile = dialog.save_finish(res)
+                gfile = dialog.save_finish(response)
                 if not gfile:
-                    return  # user cancelled
-                # Ensure .tcx extension
-                path = gfile.get_path() or default_name
+                    return
+                path = gfile.get_path() or result.default_name
                 if not path.lower().endswith(".tcx"):
                     path += ".tcx"
-                # Write bytes
                 out = Gio.File.new_for_path(path)
                 out.replace_contents(
-                    tcx_bytes,
-                    None,  # etag
+                    result.tcx_bytes,
+                    None,
                     make_backup=False,
                     flags=Gio.FileCreateFlags.REPLACE_DESTINATION,
                     cancellable=None,
                 )
                 self.app.show_toast(f"Saved: {path}")
-            except Exception as e:
-                self.app.show_toast(f"Save failed: {e}")
+            except Exception as error:
+                self.app.show_toast(f"Save failed: {error}")
 
-        dialog.save(self.app.window, None, _on_save_done)
+        dialog.save(self.app.window, None, on_save_done)
+
+    def _on_export_clicked(self, act_id: int) -> None:
+        def on_error(error: Exception) -> None:
+            message = (
+                str(error) if isinstance(error, _HistoryExportError) else f"Export failed: {error}"
+            )
+            self.app.show_toast(message)
+
+        try:
+            self.app.jobs.submit(
+                f"history-export-{act_id}",
+                lambda token: self._prepare_export(act_id, token),
+                on_success=self._show_export_dialog,
+                on_error=on_error,
+            )
+        except DuplicateJobError:
+            self.app.show_toast("Export already in progress")
 
     # ------------------------------------------------------------------
     # Chart style helper

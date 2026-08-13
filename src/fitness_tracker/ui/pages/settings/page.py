@@ -40,6 +40,17 @@ from fitness_tracker.ui.pages.settings.sections import (
 gi.require_versions({"Gtk": "4.0", "Adw": "1"})
 from gi.repository import Adw, GLib, Gtk  # noqa: E402  # ty:ignore[unresolved-import]
 
+
+def _idle_once(callback: Callable[[], object]) -> None:
+    """Schedule a callback that is always removed after its first invocation."""
+
+    def invoke() -> bool:
+        callback()
+        return False
+
+    GLib.idle_add(invoke)
+
+
 if TYPE_CHECKING:
     from fitness_tracker.ui.app import FitnessAppUI
 
@@ -217,8 +228,18 @@ class SettingsPageUI:
         self,
         scan_factory: Callable[[], Coroutine[Any, Any, T]],
     ) -> T:
+        """Run one scan while holding the BLE lock for its full five-second window.
+
+        The job runner creates a thread per submitted job, so a waiting scan
+        does not prevent unrelated background work from starting.
+        """
         with self._ble_scan_lock:
             return asyncio.run(scan_factory())
+
+    @staticmethod
+    async def _scan_heart_rate_devices() -> dict[str, str]:
+        devices = await discover_heart_rate_devices(scan_timeout=5.0)
+        return {device.name: device.address for device in devices if device.name}
 
     def _submit_scan[T](
         self,
@@ -308,14 +329,10 @@ class SettingsPageUI:
             section.apply_scan_result(scan_group, mapping, empty_message)
 
     def _fill_devices_hr(self) -> None:
-        async def _scan() -> dict[str, str]:
-            devices = await discover_heart_rate_devices(scan_timeout=5.0)
-            return {d.name: d.address for d in devices if d.name}
-
         self._submit_sensor_scan(
             name="ble-scan-hr",
             scan_group="hr",
-            scan_factory=_scan,
+            scan_factory=self._scan_heart_rate_devices,
             scanning_message="Scanning for HRM…",
             empty_message="No HRM found",
         )
@@ -350,14 +367,10 @@ class SettingsPageUI:
         )
 
     def _fill_devices_trainer_hr(self, scan_group: str, job_name: str) -> None:
-        async def _scan() -> dict[str, str]:
-            devices = await discover_heart_rate_devices(scan_timeout=5.0)
-            return {d.name: d.address for d in devices if d.name}
-
         self._submit_sensor_scan(
             name=job_name,
             scan_group=scan_group,
-            scan_factory=_scan,
+            scan_factory=self._scan_heart_rate_devices,
             scanning_message="Scanning for HRM…",
             empty_message="No HRM found",
         )
@@ -413,8 +426,8 @@ class SettingsPageUI:
         if section is None:
             return
 
-        async def _scan() -> dict[str, str]:
-            mapping: dict[str, str] = {}
+        async def _scan() -> list[tuple[str, str]]:
+            devices: list[tuple[str, str]] = []
             bus = MessageBus(bus_type=BusType.SYSTEM)
             try:
                 await bus.connect()
@@ -432,16 +445,16 @@ class SettingsPageUI:
                         continue
                     name, mac = name_v.value, addr_v.value
                     if "pebble" in name.lower():
-                        mapping[name] = mac
+                        devices.append((name, mac))
             finally:
                 with contextlib.suppress(Exception):
                     bus.disconnect()
                 with contextlib.suppress(Exception):
                     await bus.wait_for_disconnect()
-            return mapping
+            return devices
 
-        def on_success(name_to_mac: dict[str, str]) -> None:
-            section.set_scan_results(name_to_mac)
+        def on_success(devices: list[tuple[str, str]]) -> None:
+            section.set_scan_results(devices)
 
         def on_error(error: Exception) -> None:
             message = f"Scan failed: {error}"
@@ -573,7 +586,7 @@ class SettingsPageUI:
         self._update_actions_state()
 
         # Apply Pebble settings right away (start/stop bridge without restart)
-        GLib.idle_add(self.app.apply_pebble_settings)
+        _idle_once(self.app.apply_pebble_settings)
 
         # Keep the active session's recorder profile stable. The saved sensor
         # selections are picked up when the next session requests its profile.
@@ -589,9 +602,9 @@ class SettingsPageUI:
         toast = Adw.Toast.new("Settings saved successfully")
         GLib.idle_add(self.app.toast_overlay.add_toast, toast)
 
-        GLib.idle_add(self.app.tracker.redraw)
-        GLib.idle_add(self.app.tracker.refresh_units)
-        GLib.idle_add(self.app.history.refresh_units)
+        _idle_once(self.app.tracker.redraw)
+        _idle_once(self.app.tracker.refresh_units)
+        _idle_once(self.app.history.refresh_units)
 
     def _on_sync(self, button: Gtk.Button) -> None:
         # disable the Settings-page sync button
