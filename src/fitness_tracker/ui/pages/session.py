@@ -103,7 +103,8 @@ class SessionView(Gtk.Box):
         self.btn_next.connect("clicked", lambda *_: on_next())
         workout_navigation.append(self.btn_prev)
         workout_navigation.append(self.btn_next)
-        self.workout_panel.append(workout_navigation)
+        workout_navigation.set_hexpand(True)
+        self._workout_navigation = workout_navigation
 
     def _build_workout_panel(
         self,
@@ -229,17 +230,23 @@ class SessionView(Gtk.Box):
         on_stop: Callable[[], None],
         on_start_record: Callable[[], None],
     ) -> None:
-        """Build start and stop controls."""
-        controls = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        controls.set_homogeneous(True)
+        """Build the paired workout navigation and recording controls."""
+        action_pair = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        action_pair.set_homogeneous(True)
+        action_pair.set_hexpand(True)
         self.btn_stop = Gtk.Button.new_with_label("⏹️  Stop")
         self.btn_stop.add_css_class("destructive-action")
         self.btn_start = Gtk.Button.new_with_label("▶️  Start")
         self.btn_start.add_css_class("suggested-action")
         self.btn_stop.connect("clicked", lambda *_: on_stop())
         self.btn_start.connect("clicked", lambda *_: on_start_record())
-        controls.append(self.btn_stop)
-        controls.append(self.btn_start)
+        action_pair.append(self.btn_stop)
+        action_pair.append(self.btn_start)
+
+        controls = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        controls.set_hexpand(True)
+        controls.append(self._workout_navigation)
+        controls.append(action_pair)
         self.append(controls)
 
     def _build_live_chart(self) -> None:
@@ -250,15 +257,17 @@ class SessionView(Gtk.Box):
             resting_hr=self.app.app_settings.personal.resting_hr,
             max_hr=self.app.app_settings.personal.max_hr,
         )
-        frame = Gtk.Frame(label="Live HR / Power")
-        frame.set_child(self.live_chart.canvas)
-        self.append(frame)
+        self._live_chart_frame = Gtk.Frame(label="Live HR / Power")
+        self._live_chart_frame.set_child(self.live_chart.canvas)
+        self.append(self._live_chart_frame)
 
     def set_workout_visible(self, *, visible: bool) -> None:
         """Reveal or hide workout guidance without replacing the session page."""
         self._workout_visible = visible
         self._workout_revealer.set_reveal_child(visible)
         self.timer.set_visible(not visible)
+        self._live_chart_frame.set_visible(not visible)
+        self._workout_navigation.set_visible(visible)
         self.title_label.set_visible(visible)
         if self.trainer_target_control:
             self.trainer_target_control.set_mode_available(

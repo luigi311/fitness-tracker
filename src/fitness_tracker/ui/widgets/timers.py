@@ -29,7 +29,6 @@ class SessionTimer(Gtk.Frame):
             self.value.set_xalign(0.5)
             box.append(self.value)
         else:
-            self.add_css_class("card")
             box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
             box.set_margin_top(8)
             box.set_margin_bottom(8)
