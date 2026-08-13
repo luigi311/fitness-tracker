@@ -1,5 +1,6 @@
 #include <math.h>
 #include <stdio.h>
+#include <string.h>
 
 #include "format.h"
 
@@ -28,20 +29,20 @@ void pebble_format_pace(char *out, size_t n, KEY_PACE_C_TYPE speed_ms_x100,
   }
 
   float ms = speed_ms_x100 / (float)KEY_PACE_SCALE;
-  if (ms < 0.01f) {
+  char value[16];
+  pebble_format_pace_from_ms_value_only(value, sizeof(value), ms, units);
+  if (value[0] == '-') {
     snprintf(out, n, "-");
     return;
   }
 
-  float meters_per_minute =
-    (units == PEBBLE_UNITS_METRIC ? 1000.0f : 1609.344f) / ms / 60.0f;
-  int minutes = (int)meters_per_minute;
-  int seconds = (int)((meters_per_minute - minutes) * 60.0f + 0.5f);
-  if (seconds == 60) {
-    seconds = 0;
-    minutes += 1;
+  char *separator = strchr(value, ':');
+  if (separator == NULL) {
+    snprintf(out, n, "-");
+    return;
   }
-  snprintf(out, n, "%d'%02d\"/%s", minutes, seconds,
+  *separator = '\0';
+  snprintf(out, n, "%s'%s\"/%s", value, separator + 1,
            units == PEBBLE_UNITS_METRIC ? "km" : "mi");
 }
 
@@ -53,20 +54,7 @@ void pebble_format_pace_value_only(char *out, size_t n,
   }
 
   float ms = state->last_pace_x100 / (float)KEY_PACE_SCALE;
-  if (ms < 0.01f) {
-    snprintf(out, n, "-");
-    return;
-  }
-
-  float meters_per_minute =
-    (state->units == PEBBLE_UNITS_METRIC ? 1000.0f : 1609.344f) / ms / 60.0f;
-  int minutes = (int)meters_per_minute;
-  int seconds = (int)((meters_per_minute - minutes) * 60.0f + 0.5f);
-  if (seconds == 60) {
-    seconds = 0;
-    minutes += 1;
-  }
-  snprintf(out, n, "%d:%02d", minutes, seconds);
+  pebble_format_pace_from_ms_value_only(out, n, ms, state->units);
 }
 
 void pebble_format_pace_from_ms_value_only(char *out, size_t n, float ms,
@@ -76,10 +64,10 @@ void pebble_format_pace_from_ms_value_only(char *out, size_t n, float ms,
     return;
   }
 
-  float meters_per_minute =
+  float minutes_per_unit =
     (units == PEBBLE_UNITS_METRIC ? 1000.0f : 1609.344f) / ms / 60.0f;
-  int minutes = (int)meters_per_minute;
-  int seconds = (int)((meters_per_minute - minutes) * 60.0f + 0.5f);
+  int minutes = (int)minutes_per_unit;
+  int seconds = (int)((minutes_per_unit - minutes) * 60.0f + 0.5f);
   if (seconds == 60) {
     seconds = 0;
     minutes += 1;
@@ -151,7 +139,7 @@ void pebble_gauge_texts(char *current_line, size_t current_n,
                                           state->units);
     pebble_format_pace_from_ms_value_only(high_text, sizeof(high_text), high_ms,
                                           state->units);
-    snprintf(target_line, target_n, "Target: %s–%s %s", low_text, high_text,
+    snprintf(target_line, target_n, "Target: %s–%s %s", high_text, low_text,
              state->units == PEBBLE_UNITS_METRIC ? "/km" : "/mi");
   } else if (state->target_kind == TGT_HEART_RATE) {
     int low = (int)state->target_lo;
@@ -211,6 +199,7 @@ GColor pebble_zone_color(const PebbleProtocolState *state) {
 
 const char *pebble_zone_word(const PebbleProtocolState *state, GColor color) {
 #ifdef PBL_COLOR
+  (void)state;
   return (color.argb == GColorGreen.argb) ? "IN" :
          (color.argb == GColorPastelYellow.argb) ? "NEAR" : "OUT";
 #else

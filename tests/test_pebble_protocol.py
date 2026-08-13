@@ -1,6 +1,7 @@
 # ruff: noqa: PLR2004, SLF001
 
 import json
+import runpy
 import threading
 from pathlib import Path
 
@@ -10,6 +11,7 @@ import pytest
 from pebble_bridge import PebbleBridge
 
 ROOT = Path(__file__).parents[1]
+PROTOCOL_GENERATOR = runpy.run_path(str(ROOT / "scripts/generate_pebble_protocol.py"))
 EXPECTED_MESSAGE_KEY_IDS = {
     "KEY_HR": 1,
     "KEY_PACE": 2,
@@ -24,6 +26,22 @@ EXPECTED_MESSAGE_KEY_IDS = {
     "KEY_WORKOUT_STEP": 12,
     "KEY_SYNC_REQUEST": 13,
 }
+EXPECTED_MESSAGE_KEY_NAMES = [
+    "RESERVED_PROTOCOL_KEY_0",
+    "KEY_HR",
+    "KEY_PACE",
+    "KEY_CADENCE",
+    "KEY_DISTANCE",
+    "RESERVED_PROTOCOL_KEY_5",
+    "KEY_UNITS",
+    "KEY_POWER",
+    "KEY_TGT_KIND",
+    "KEY_TGT_LO",
+    "KEY_TGT_HI",
+    "KEY_WORKOUT_OUTDOOR",
+    "KEY_WORKOUT_STEP",
+    "KEY_SYNC_REQUEST",
+]
 
 
 class _Backend:
@@ -73,16 +91,72 @@ def test_python_c_and_manifest_use_the_same_protocol_keys() -> None:
 
     assert pebble_module.KEY_PACE == 2
     assert not hasattr(pebble_module, "KEY_STATUS")
-    assert manifest["pebble"]["messageKeys"] == EXPECTED_MESSAGE_KEY_IDS
+    assert manifest["pebble"]["messageKeys"] == EXPECTED_MESSAGE_KEY_NAMES
     assert {
         name: getattr(pebble_module, name) for name in EXPECTED_MESSAGE_KEY_IDS
     } == EXPECTED_MESSAGE_KEY_IDS
+    for name, key_id in EXPECTED_MESSAGE_KEY_IDS.items():
+        assert manifest["pebble"]["messageKeys"][key_id] == name
+        assert f"  {name} = {key_id}," in generated_header
     assert '#include "generated_protocol.h"' in protocol_header
-    assert "KEY_STATUS" not in generated_header
-    assert "#define KEY_HR_WIDTH 16" in generated_header
-    assert "#define KEY_HR_C_TYPE uint16_t" in generated_header
-    assert "#define KEY_PACE_SCALE 100" in generated_header
-    assert "#define KEY_PACE_TUPLE_VALUE(tuple)" in generated_header
+
+
+def test_manifest_key_positions_do_not_depend_on_schema_order() -> None:
+    keys, _targets = PROTOCOL_GENERATOR["_load_schema"](ROOT / "pebble/protocol.toml")
+
+    generated = PROTOCOL_GENERATOR["_manifest_source"](
+        ROOT / "pebble/package.json",
+        list(reversed(keys)),
+    )
+
+    assert json.loads(generated)["pebble"]["messageKeys"] == EXPECTED_MESSAGE_KEY_NAMES
+
+
+def test_generated_protocol_artefacts_are_current() -> None:
+    for path, expected in PROTOCOL_GENERATOR["_artefacts"](ROOT).items():
+        actual = path.read_text(encoding="utf-8")
+        assert actual == expected, (
+            f"stale generated Pebble protocol artefact: {path.relative_to(ROOT)}"
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("id", -1, "id must be between 0 and 255"),
+        ("id", 256, "id must be between 0 and 255"),
+        ("scale", "unknown", "scale has unsupported symbolic name: unknown"),
+    ],
+)
+def test_protocol_schema_rejects_invalid_key_ids_and_symbolic_scales(
+    field: str,
+    value: int | str,
+    message: str,
+) -> None:
+    raw_key = {
+        "name": "KEY_TEST",
+        "id": 1,
+        "width": 8,
+        "unit": "test",
+        "scale": 1,
+    }
+    raw_key[field] = value
+
+    with pytest.raises(PROTOCOL_GENERATOR["ProtocolSchemaError"], match=message):
+        PROTOCOL_GENERATOR["_load_key"](0, raw_key, set(), set())
+
+
+def test_manifest_rejects_sparse_key_id_above_repository_limit() -> None:
+    oversized_key = {"name": "KEY_SPARSE", "id": 256}
+
+    with pytest.raises(
+        PROTOCOL_GENERATOR["ProtocolSchemaError"],
+        match="protocol key id must be between 0 and 255",
+    ):
+        PROTOCOL_GENERATOR["_manifest_source"](
+            ROOT / "pebble/package.json",
+            [oversized_key],
+        )
 
 
 @pytest.mark.parametrize(
@@ -131,6 +205,11 @@ def test_target_values_use_kind_specific_wire_scaling(
     expected_scale = protocol_module.TARGET_KIND_SCALE[kind]
     assert values[pebble_module.KEY_TGT_LO] == round(lower * expected_scale)
     assert values[pebble_module.KEY_TGT_HI] == round(upper * expected_scale)
+
+
+@pytest.mark.parametrize("kind", [None, 999])
+def test_unknown_target_kinds_use_safe_unscaled_wire_values(kind: int | None) -> None:
+    assert pebble_module._target_wire_value(2.5, kind) == 2
 
 
 def test_steady_state_sends_only_changed_keys() -> None:
@@ -183,6 +262,61 @@ def test_libpebble2_send_waits_for_ack() -> None:
         try:
             backend.send({})
         except BaseException as error:
+            errors.append(error)
+
+    thread = threading.Thread(target=send)
+    thread.start()
+    assert appmessage.sent.wait(timeout=1)
+    assert thread.is_alive()
+
+    backend._handle_ack(7, None)
+    thread.join(timeout=1)
+
+    assert not thread.is_alive()
+    assert errors == []
+
+
+def test_libpebble2_send_discards_stale_result_for_reused_transaction() -> None:
+    backend, appmessage = _libpebble_backend()
+    backend._delivery_results[7] = True
+    errors: list[Exception] = []
+
+    def send() -> None:
+        try:
+            backend.send({})
+        except Exception as error:
+            errors.append(error)
+
+    thread = threading.Thread(target=send)
+    thread.start()
+    assert appmessage.sent.wait(timeout=1)
+    assert thread.is_alive()
+
+    backend._handle_ack(7, None)
+    thread.join(timeout=1)
+
+    assert not thread.is_alive()
+    assert errors == []
+
+
+def test_libpebble2_late_ack_cannot_satisfy_reused_transaction() -> None:
+    backend, appmessage = _libpebble_backend()
+    backend._send_timeout = 0.001
+
+    with pytest.raises(TimeoutError, match="timed out"):
+        backend.send({})
+
+    backend._handle_ack(7, None)
+    assert backend._delivery_results == {}
+
+    backend._send_timeout = 0.1
+    appmessage.sent.clear()
+    errors: list[Exception] = []
+
+    def send() -> None:
+        try:
+            backend.send({})
+        except Exception as error:
             errors.append(error)
 
     thread = threading.Thread(target=send)
@@ -273,6 +407,54 @@ def test_libpebble2_connect_closes_connection_after_setup_failure(
     assert backend._conn is None
 
 
+def test_emulator_falls_back_to_qemu_when_websocket_connect_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attempts: list[str] = []
+
+    class _Connection:
+        def __init__(self, transport: str) -> None:
+            self.transport = transport
+            self.connected = False
+
+        def connect(self) -> None:
+            attempts.append(self.transport)
+            if self.transport == "websocket":
+                message = "websocket unavailable"
+                raise RuntimeError(message)
+            self.connected = True
+
+        def run_async(self) -> None:
+            return None
+
+        def close(self) -> None:
+            self.connected = False
+
+    class _AppMessageService:
+        def __init__(self, _connection: _Connection) -> None:
+            pass
+
+        def register_handler(self, _event: str, _handler: object) -> None:
+            return None
+
+    monkeypatch.setattr(pebble_module, "WebsocketTransport", lambda _url: "websocket")
+    monkeypatch.setattr(pebble_module, "QemuTransport", lambda _host, _port: "qemu")
+    monkeypatch.setattr(pebble_module, "PebbleConnection", _Connection)
+    monkeypatch.setattr(pebble_module, "AppMessageService", _AppMessageService)
+    backend = pebble_module._Libpebble2Backend(
+        "00000000-0000-0000-0000-000000000000",
+        lambda _app_uuid, _data: None,
+        use_emulator=True,
+    )
+
+    backend.connect()
+
+    assert attempts == ["websocket", "qemu"]
+    assert backend._conn is not None
+    assert backend._conn.connected
+    backend.close()
+
+
 def test_stop_closes_libpebble2_ack_wait_before_joining() -> None:
     bridge = PebbleBridge("00000000-0000-0000-0000-000000000000")
     backend, appmessage = _libpebble_backend()
@@ -341,7 +523,6 @@ def test_reconnect_requests_a_full_state_resend(monkeypatch: pytest.MonkeyPatch)
 
     monkeypatch.setattr(bridge, "_connect", fake_connect)
     monkeypatch.setattr(bridge, "_send_once", fake_send)
-    monkeypatch.setattr(pebble_module.time, "sleep", lambda _seconds: None)
 
     bridge._loop()
 
@@ -387,8 +568,7 @@ def test_watch_launch_requests_a_full_state_resend(
 def test_cobble_uint8_watch_launch_request_is_normalized() -> None:
     cobble_client = pytest.importorskip("cobble_client")
     bridge = PebbleBridge("00000000-0000-0000-0000-000000000000")
-    backend = pebble_module._CobbleBackend.__new__(pebble_module._CobbleBackend)
-    backend._message_callback = bridge._on_app_message
+    backend = pebble_module._CobbleBackend(bridge.app_uuid, bridge._on_app_message)
 
     backend._handle_app_message(
         bridge.app_uuid,

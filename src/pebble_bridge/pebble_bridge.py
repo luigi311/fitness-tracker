@@ -30,7 +30,7 @@ from pebble_bridge.protocol import (
     KEY_WORKOUT_OUTDOOR,
     KEY_WORKOUT_STEP,
     TARGET_KIND_SCALE,
-    TGT_PACE,
+    TGT_NONE,
 )
 
 if TYPE_CHECKING:
@@ -60,7 +60,8 @@ def _clamp_wire_value(value: int, width: int) -> int:
 
 def _target_wire_value(value: float, kind: int | None) -> int:
     """Encode a target using the canonical whole-unit or pace scaling rule."""
-    scale = TARGET_KIND_SCALE[TGT_PACE] if kind is None else TARGET_KIND_SCALE[kind]
+    target_kind = TGT_NONE if kind is None else kind
+    scale = TARGET_KIND_SCALE.get(target_kind, TARGET_KIND_SCALE[TGT_NONE])
     return round(value * scale)
 
 
@@ -211,6 +212,7 @@ class _Libpebble2Backend:
         self._send_timeout = 10.0
         self._delivery_condition = threading.Condition()
         self._delivery_results: dict[int, bool] = {}
+        self._pending_transaction: int | None = None
         self._closed = False
         self.name = "emulator" if use_emulator else "serial"
         self.int_types = {8: Uint8, 16: Uint16, 32: Uint32}
@@ -218,7 +220,6 @@ class _Libpebble2Backend:
     def connect(self) -> None:
         try:
             self._create_connection()
-            self._initialize_connection()
         except BaseException:
             with contextlib.suppress(Exception):
                 self.close()
@@ -232,8 +233,15 @@ class _Libpebble2Backend:
                 self._conn = PebbleConnection(
                     WebsocketTransport(f"ws://127.0.0.1:{self._port}/"),
                 )
+                self._initialize_connection()
             except Exception:
+                connection, self._conn = self._conn, None
+                if connection is not None:
+                    with contextlib.suppress(Exception):
+                        connection.close()
+                self._appmsg = None
                 self._conn = PebbleConnection(QemuTransport("127.0.0.1", self._port))
+                self._initialize_connection()
             return
 
         if not self._mac:
@@ -241,6 +249,7 @@ class _Libpebble2Backend:
             raise ValueError(msg)
         logger.debug(f"Connecting via Bluetooth serial: {self._mac}")
         self._conn = PebbleConnection(SerialTransport(self._mac))
+        self._initialize_connection()
 
     def _initialize_connection(self) -> None:
         conn = self._conn
@@ -263,6 +272,7 @@ class _Libpebble2Backend:
         with self._delivery_condition:
             self._closed = False
             self._delivery_results.clear()
+            self._pending_transaction = None
 
     def _handle_app_message(
         self,
@@ -274,7 +284,7 @@ class _Libpebble2Backend:
 
     def _record_delivery(self, transaction_id: int, *, acknowledged: bool) -> None:
         with self._delivery_condition:
-            if not self._closed:
+            if not self._closed and transaction_id == self._pending_transaction:
                 self._delivery_results[transaction_id] = acknowledged
                 self._delivery_condition.notify_all()
 
@@ -289,19 +299,26 @@ class _Libpebble2Backend:
         if appmsg is None:
             msg = f"{self.name} backend not connected"
             raise RuntimeError(msg)
-        transaction_id = appmsg.send_message(UUID(self._app_uuid), data)
-        deadline = time.monotonic() + self._send_timeout
         with self._delivery_condition:
-            while transaction_id not in self._delivery_results and not self._closed:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    msg = f"{self.name} AppMessage transaction {transaction_id} timed out"
-                    raise TimeoutError(msg)
-                self._delivery_condition.wait(timeout=remaining)
-            if self._closed:
-                msg = f"{self.name} backend closed before AppMessage acknowledgement"
-                raise RuntimeError(msg)
-            acknowledged = self._delivery_results.pop(transaction_id)
+            transaction_id = appmsg.send_message(UUID(self._app_uuid), data)
+            deadline = time.monotonic() + self._send_timeout
+            self._delivery_results.pop(transaction_id, None)
+            self._pending_transaction = transaction_id
+            try:
+                while transaction_id not in self._delivery_results and not self._closed:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        msg = f"{self.name} AppMessage transaction {transaction_id} timed out"
+                        raise TimeoutError(msg)
+                    self._delivery_condition.wait(timeout=remaining)
+                if self._closed:
+                    msg = f"{self.name} backend closed before AppMessage acknowledgement"
+                    raise RuntimeError(msg)
+                acknowledged = self._delivery_results.pop(transaction_id)
+            finally:
+                if self._pending_transaction == transaction_id:
+                    self._pending_transaction = None
+                self._delivery_results.pop(transaction_id, None)
         if not acknowledged:
             msg = f"{self.name} AppMessage transaction {transaction_id} was rejected"
             raise RuntimeError(msg)
@@ -310,6 +327,8 @@ class _Libpebble2Backend:
         conn, self._conn = self._conn, None
         with self._delivery_condition:
             self._closed = True
+            self._pending_transaction = None
+            self._delivery_results.clear()
             self._delivery_condition.notify_all()
         self._appmsg = None
         if conn:

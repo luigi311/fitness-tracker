@@ -24,19 +24,21 @@
     "resources": {
       "media": []
     },
-    "messageKeys": {
-      "KEY_HR": 1,
-      "KEY_PACE": 2,
-      "KEY_CADENCE": 3,
-      "KEY_DISTANCE": 4,
-      "KEY_UNITS": 6,
-      "KEY_POWER": 7,
-      "KEY_TGT_KIND": 8,
-      "KEY_TGT_LO": 9,
-      "KEY_TGT_HI": 10,
-      "KEY_WORKOUT_OUTDOOR": 11,
-      "KEY_WORKOUT_STEP": 12,
-      "KEY_SYNC_REQUEST": 13
-    }
+    "messageKeys": [
+      "RESERVED_PROTOCOL_KEY_0",
+      "KEY_HR",
+      "KEY_PACE",
+      "KEY_CADENCE",
+      "KEY_DISTANCE",
+      "RESERVED_PROTOCOL_KEY_5",
+      "KEY_UNITS",
+      "KEY_POWER",
+      "KEY_TGT_KIND",
+      "KEY_TGT_LO",
+      "KEY_TGT_HI",
+      "KEY_WORKOUT_OUTDOOR",
+      "KEY_WORKOUT_STEP",
+      "KEY_SYNC_REQUEST"
+    ]
   }
 }

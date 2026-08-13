@@ -41,5 +41,6 @@ void pebble_protocol_init(PebbleProtocolState *state);
 void pebble_protocol_start(PebbleProtocolState *state,
                            PebbleProtocolUpdate update,
                            void *context);
+void pebble_protocol_stop(void);
 
 #endif

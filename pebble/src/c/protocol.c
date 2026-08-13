@@ -6,7 +6,7 @@
 static PebbleProtocolUpdate s_update;
 static void *s_update_context;
 static PebbleProtocolState *s_state;
-static bool s_sync_retry_pending;
+static AppTimer *s_sync_retry_timer;
 
 #define SYNC_RETRY_INITIAL_MS 250
 #define SYNC_RETRY_MAX_MS 5000
@@ -23,17 +23,17 @@ static bool retryable_sync_failure(AppMessageResult reason) {
 
 static void retry_full_state(void *context) {
   (void)context;
-  s_sync_retry_pending = false;
+  s_sync_retry_timer = NULL;
   request_full_state();
 }
 
 static void schedule_full_state_retry(AppMessageResult reason) {
-  if (!retryable_sync_failure(reason) || s_sync_retry_pending) {
+  if (!retryable_sync_failure(reason) || s_sync_retry_timer != NULL) {
     return;
   }
-  s_sync_retry_pending = app_timer_register(
-      s_sync_retry_delay_ms, retry_full_state, NULL) != NULL;
-  if (s_sync_retry_pending && s_sync_retry_delay_ms < SYNC_RETRY_MAX_MS) {
+  s_sync_retry_timer = app_timer_register(
+      s_sync_retry_delay_ms, retry_full_state, NULL);
+  if (s_sync_retry_timer != NULL && s_sync_retry_delay_ms < SYNC_RETRY_MAX_MS) {
     s_sync_retry_delay_ms *= 2;
     if (s_sync_retry_delay_ms > SYNC_RETRY_MAX_MS) {
       s_sync_retry_delay_ms = SYNC_RETRY_MAX_MS;
@@ -44,6 +44,10 @@ static void schedule_full_state_retry(AppMessageResult reason) {
 static void outbox_sent(DictionaryIterator *iterator, void *context) {
   (void)iterator;
   (void)context;
+  if (s_sync_retry_timer != NULL) {
+    app_timer_cancel(s_sync_retry_timer);
+    s_sync_retry_timer = NULL;
+  }
   s_sync_retry_delay_ms = SYNC_RETRY_INITIAL_MS;
 }
 
@@ -108,10 +112,13 @@ static void inbox_received(DictionaryIterator *iter, void *context) {
   }
 
   if ((tuple = dict_find(iter, KEY_TGT_KIND))) {
-    state->target_kind = (PebbleTargetKind)KEY_TGT_KIND_TUPLE_VALUE(tuple);
-    if (state->target_kind == TGT_NONE) {
-      state->have_workout_step = false;
+    PebbleTargetKind next_kind =
+      (PebbleTargetKind)KEY_TGT_KIND_TUPLE_VALUE(tuple);
+    if (state->target_kind == TGT_NONE && next_kind != TGT_NONE &&
+        state->have_workout_step) {
+      state->step_changed = true;
     }
+    state->target_kind = next_kind;
   }
   if ((tuple = dict_find(iter, KEY_TGT_LO))) {
     state->target_lo = KEY_TGT_LO_TUPLE_VALUE(tuple);
@@ -124,15 +131,12 @@ static void inbox_received(DictionaryIterator *iter, void *context) {
   }
   if ((tuple = dict_find(iter, KEY_WORKOUT_STEP))) {
     KEY_WORKOUT_STEP_C_TYPE next_step = KEY_WORKOUT_STEP_TUPLE_VALUE(tuple);
-    if (state->target_kind != TGT_NONE) {
-      if (state->have_workout_step && next_step != state->workout_step) {
-        state->step_changed = true;
-      }
-      state->workout_step = next_step;
-      state->have_workout_step = true;
-    } else {
-      state->have_workout_step = false;
+    if (state->target_kind != TGT_NONE && state->have_workout_step &&
+        next_step != state->workout_step) {
+      state->step_changed = true;
     }
+    state->workout_step = next_step;
+    state->have_workout_step = true;
   }
 
   if (s_update) {
@@ -157,4 +161,16 @@ void pebble_protocol_start(PebbleProtocolState *state,
   app_message_register_outbox_failed(outbox_failed);
   app_message_open(256, 64);
   request_full_state();
+}
+
+void pebble_protocol_stop(void) {
+  if (s_sync_retry_timer != NULL) {
+    app_timer_cancel(s_sync_retry_timer);
+    s_sync_retry_timer = NULL;
+  }
+  s_sync_retry_delay_ms = SYNC_RETRY_INITIAL_MS;
+  app_message_deregister_callbacks();
+  s_update = NULL;
+  s_update_context = NULL;
+  s_state = NULL;
 }

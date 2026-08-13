@@ -25,6 +25,12 @@ static HeroMetric s_hero = HERO_HR;
 static FocusMode s_focus = FOCUS_GRID;
 static ViewMode s_view = VIEW_FREE;
 
+static int clamp_int(int value, int minimum, int maximum) {
+  if (value < minimum) return minimum;
+  if (value > maximum) return maximum;
+  return value;
+}
+
 // ---------- UI: hero + grid ----------
 static TextLayer *s_hero_value;
 static TextLayer *s_hero_label;
@@ -32,7 +38,6 @@ static TextLayer *s_hero_label;
 typedef struct {
   TextLayer *label;
   TextLayer *value;
-  const char *name;
   bool *have_flag;
   int id;
 } MetricCellID;
@@ -117,18 +122,11 @@ static void view_protocol_updated(void *context) {
 }
 
 // ---------- Font helpers ----------
-static GFont pick_font_label(int h, bool is_hero, bool in_focus) {
+static GFont pick_font_label(int h, bool is_hero) {
   if (is_hero) {
-    // Hero label: larger in focus, bold in grid (safe thresholds)
-    if (in_focus) {
-      if (h >= 22) return fonts_get_system_font(FONT_KEY_GOTHIC_24);
-      if (h >= 18) return fonts_get_system_font(FONT_KEY_GOTHIC_18);
-      return fonts_get_system_font(FONT_KEY_GOTHIC_14);
-    } else {
-      if (h >= 22) return fonts_get_system_font(FONT_KEY_GOTHIC_24);
-      if (h >= 18) return fonts_get_system_font(FONT_KEY_GOTHIC_18);
-      return fonts_get_system_font(FONT_KEY_GOTHIC_14);
-    }
+    if (h >= 22) return fonts_get_system_font(FONT_KEY_GOTHIC_24);
+    if (h >= 18) return fonts_get_system_font(FONT_KEY_GOTHIC_18);
+    return fonts_get_system_font(FONT_KEY_GOTHIC_14);
   } else {
     // Grid labels
     if (h >= 18) return fonts_get_system_font(FONT_KEY_GOTHIC_18);
@@ -387,7 +385,7 @@ static void layout_layers(Window *w) {
 
   text_layer_set_font(
     s_hero_label,
-    pick_font_label(label_h, /*is_hero=*/true, /*in_focus=*/(s_focus == FOCUS_HERO_ONLY))
+    pick_font_label(label_h, /*is_hero=*/true)
   );
 
   text_layer_set_font(
@@ -496,7 +494,7 @@ static void layout_layers(Window *w) {
     layer_set_frame(text_layer_get_layer(active[i]->label),
                 GRect(x, y, cell_w, cell_label_h));
     text_layer_set_font(active[i]->label,
-      pick_font_label(cell_label_h, /*is_hero=*/false, /*in_focus=*/false));
+      pick_font_label(cell_label_h, /*is_hero=*/false));
     text_layer_set_text_alignment(active[i]->label, GTextAlignmentCenter);
     layer_set_hidden(text_layer_get_layer(active[i]->label), false);
 
@@ -517,10 +515,12 @@ static void layout_layers(Window *w) {
   layer_set_hidden(s_underbar_layer, true);
 }
 
+#if PBL_API_EXISTS(unobstructed_area_service_subscribe)
 static void unobstructed_change(AnimationProgress progress, void *context) {
   (void)progress;
   layout_layers((Window *)context);
 }
+#endif
 
 // ---------- Rendering ----------
 static void render_all(void) {
@@ -667,6 +667,7 @@ static void underbar_update_proc(Layer *layer, GContext *ctx) {
 
   float ctr = 0.5f*(lo+hi);
   float dmin = ctr*0.5f, dmax = ctr*1.5f;
+  if (dmax <= dmin) return;
 
   float cur = view_current_value_for_kind();
   float t = (cur - dmin) / (dmax - dmin);
@@ -761,11 +762,11 @@ static void win_load(Window *w) {
   make_label_and_value(&s_dist_label,    &s_dist_value);
   make_label_and_value(&s_power_label,   &s_power_value);
 
-  s_cells[0] = (MetricCellID){ .label=s_hr_label_grid,  .value=s_hr_value_grid,  .name="HR",   .have_flag=&s_protocol.have_hr,   .id=CELL_HR   };
-  s_cells[1] = (MetricCellID){ .label=s_pace_label,     .value=s_pace_value,     .name="PACE", .have_flag=&s_protocol.have_pace, .id=CELL_PACE };
-  s_cells[2] = (MetricCellID){ .label=s_cad_label,      .value=s_cad_value,      .name="CAD",  .have_flag=&s_protocol.have_cad,  .id=CELL_CAD  };
-  s_cells[3] = (MetricCellID){ .label=s_dist_label,     .value=s_dist_value,     .name="DIST", .have_flag=&s_protocol.have_dist, .id=CELL_DIST };
-  s_cells[4] = (MetricCellID){ .label=s_power_label,    .value=s_power_value,    .name="PWR",  .have_flag=&s_protocol.have_power,.id=CELL_PWR  };
+  s_cells[0] = (MetricCellID){ .label=s_hr_label_grid,  .value=s_hr_value_grid,  .have_flag=&s_protocol.have_hr,   .id=CELL_HR   };
+  s_cells[1] = (MetricCellID){ .label=s_pace_label,     .value=s_pace_value,     .have_flag=&s_protocol.have_pace, .id=CELL_PACE };
+  s_cells[2] = (MetricCellID){ .label=s_cad_label,      .value=s_cad_value,      .have_flag=&s_protocol.have_cad,  .id=CELL_CAD  };
+  s_cells[3] = (MetricCellID){ .label=s_dist_label,     .value=s_dist_value,     .have_flag=&s_protocol.have_dist, .id=CELL_DIST };
+  s_cells[4] = (MetricCellID){ .label=s_power_label,    .value=s_power_value,    .have_flag=&s_protocol.have_power,.id=CELL_PWR  };
 
   TextLayer *all_grid[] = {
     s_hr_label_grid, s_hr_value_grid,
@@ -829,23 +830,36 @@ static void win_load(Window *w) {
   // Start protocol after all layers exist.
   pebble_protocol_init(&s_protocol);
   if (persist_exists(PKEY_UNITS)) s_protocol.units = (PebbleUnits)persist_read_int(PKEY_UNITS);
-  if (persist_exists(PKEY_HERO))  s_hero  = (HeroMetric)persist_read_int(PKEY_HERO);
-  if (persist_exists(PKEY_FOCUS)) s_focus = (FocusMode)persist_read_int(PKEY_FOCUS);
+  if (persist_exists(PKEY_HERO)) {
+    int hero = persist_read_int(PKEY_HERO);
+    s_hero = (HeroMetric)clamp_int(hero, HERO_HR, HERO_POWER);
+  }
+  if (persist_exists(PKEY_FOCUS)) {
+    int focus = persist_read_int(PKEY_FOCUS);
+    s_focus = (FocusMode)clamp_int(focus, FOCUS_GRID, FOCUS_HERO_ONLY);
+  }
 
   s_view = (s_protocol.target_kind == TGT_NONE) ? VIEW_FREE : VIEW_WORKOUT;
   pebble_protocol_start(&s_protocol, view_protocol_updated, NULL);
 
   render_all();
 
-  UnobstructedAreaHandlers h = { .will_change=NULL, .change=unobstructed_change, .did_change=NULL };
-  (void)h;
+#if PBL_API_EXISTS(unobstructed_area_service_subscribe)
+  UnobstructedAreaHandlers h = {
+    .will_change = NULL,
+    .change = unobstructed_change,
+    .did_change = NULL,
+  };
   unobstructed_area_service_subscribe(h, w);
+#endif
 }
 
 static void win_unload(Window *w) {
   (void)w;
+  pebble_protocol_stop();
+#if PBL_API_EXISTS(unobstructed_area_service_unsubscribe)
   unobstructed_area_service_unsubscribe();
-  accel_tap_service_unsubscribe();
+#endif
 
   TextLayer *all[] = {
     s_hero_label,  s_hero_value,

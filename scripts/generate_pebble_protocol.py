@@ -12,6 +12,11 @@ from typing import NoReturn
 
 _IDENTIFIER = re.compile(r"^[A-Z][A-Z0-9_]*$")
 _WIRE_WIDTHS = {8, 16, 32}
+# Repository protocol IDs occupy one byte even though Pebble dictionary keys
+# are wider. This also caps generated manifest placeholders at 256 entries.
+_MAX_PROTOCOL_KEY_ID = (1 << 8) - 1
+_SYMBOLIC_SCALES = {"target_kind"}
+_RESERVED_MESSAGE_KEY_PREFIX = "RESERVED_PROTOCOL_KEY_"
 _C_TUPLE_FIELDS = {8: "uint8", 16: "uint16", 32: "uint32"}
 _C_VALUE_TYPES = {8: "uint8_t", 16: "uint16_t", 32: "uint32_t"}
 _C_WRITE_FUNCTIONS = {8: "uint8", 16: "uint16", 32: "uint32"}
@@ -29,6 +34,13 @@ def _integer(value: object, label: str) -> int:
     if type(value) is not int:
         _schema_error(f"{label} must be an integer")
     return value
+
+
+def _protocol_key_id(value: object, label: str) -> int:
+    key_id = _integer(value, label)
+    if not 0 <= key_id <= _MAX_PROTOCOL_KEY_ID:
+        _schema_error(f"{label} must be between 0 and {_MAX_PROTOCOL_KEY_ID}")
+    return key_id
 
 
 def _identifier(value: object, label: str) -> str:
@@ -59,7 +71,7 @@ def _load_key(
     if not isinstance(raw_key, dict):
         _schema_error(f"{label} must be a table")
     name = _identifier(raw_key.get("name"), f"{label}.name")
-    key_id = _integer(raw_key.get("id"), f"{label}.id")
+    key_id = _protocol_key_id(raw_key.get("id"), f"{label}.id")
     width = _integer(raw_key.get("width"), f"{label}.width")
     unit = raw_key.get("unit")
     scale = raw_key.get("scale")
@@ -71,6 +83,8 @@ def _load_key(
         _schema_error(f"{label}.unit must be a non-empty string")
     if not isinstance(scale, (int, str)) or isinstance(scale, bool):
         _schema_error(f"{label}.scale must be an integer or symbolic name")
+    if isinstance(scale, str) and scale not in _SYMBOLIC_SCALES:
+        _schema_error(f"{label}.scale has unsupported symbolic name: {scale}")
     key_ids.add(key_id)
     key_names.add(name)
     return {"name": name, "id": key_id, "width": width, "unit": unit, "scale": scale}
@@ -201,7 +215,13 @@ def _c_source(
 
 def _manifest_source(path: Path, keys: list[dict[str, object]]) -> str:
     manifest = json.loads(path.read_text(encoding="utf-8"))
-    manifest["pebble"]["messageKeys"] = {key["name"]: key["id"] for key in keys}
+    message_keys: list[str] = []
+    for key in sorted(keys, key=lambda item: _protocol_key_id(item["id"], "protocol key id")):
+        key_id = _protocol_key_id(key["id"], "protocol key id")
+        while len(message_keys) < key_id:
+            message_keys.append(f"{_RESERVED_MESSAGE_KEY_PREFIX}{len(message_keys)}")
+        message_keys.append(_identifier(key["name"], "protocol key name"))
+    manifest["pebble"]["messageKeys"] = message_keys
     return json.dumps(manifest, indent=2) + "\n"
 
 
