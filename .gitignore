@@ -1,11 +1,15 @@
-*.txt
-*.json
+# Flatpak-generated dependency files
+/builder-requirements.txt
+/builders.json
+/pip-sources.json
+/requirements.raw.txt
+/requirements.txt
+
 build-dir
 repo
 
 
 **.db
-*.sh
 *.lock-*
 
 # Python-generated files
