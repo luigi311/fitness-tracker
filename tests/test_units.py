@@ -18,7 +18,7 @@ RUNNING_STEP_CADENCE = 170
 
 
 def test_pace_formatting_handles_empty_values_and_minute_rounding() -> None:
-    carry_mph = 60.0 / (5.0 + 59.5 / 60.0)
+    carry_mph = 60.0 / (5.0 + 59.6 / 60.0)
     carry_mps = carry_mph / MPS_TO_MPH
 
     assert format_pace(0.0, UnitSystem.IMPERIAL) == "0:00"

@@ -8,6 +8,8 @@ from workout_parser import DistanceDuration, OpenDuration, TimeDuration, Workout
 
 TIME_STEP_SECONDS = 10
 DISTANCE_STEP_METERS = 100
+FIRST_STEP_INDEX = 0
+SECOND_STEP_INDEX = 1
 FINAL_STEP_INDEX = 2
 
 
@@ -79,11 +81,11 @@ def test_distance_accumulator_ignores_missing_and_invalid_readings() -> None:
 
 
 def test_starts_on_first_time_step() -> None:
-    execution = WorkoutExecution([_step(TimeDuration(seconds=10))])
+    execution = WorkoutExecution([_step(TimeDuration(seconds=TIME_STEP_SECONDS))])
 
     snapshot = execution.update(0, 0)
 
-    assert snapshot.active_index == 0
+    assert snapshot.active_index == FIRST_STEP_INDEX
     assert snapshot.progress == 0
     assert snapshot.remaining_seconds == TIME_STEP_SECONDS
     assert snapshot.remaining_meters is None
@@ -95,12 +97,12 @@ def test_starts_on_first_time_step() -> None:
 
 def test_time_overshoot_carries_into_next_time_step() -> None:
     execution = WorkoutExecution(
-        [_step(TimeDuration(seconds=10)), _step(TimeDuration(seconds=5))],
+        [_step(TimeDuration(seconds=TIME_STEP_SECONDS)), _step(TimeDuration(seconds=5))],
     )
 
     snapshot = execution.update(12, 0)
 
-    assert snapshot.active_index == 1
+    assert snapshot.active_index == SECOND_STEP_INDEX
     assert snapshot.progress == pytest.approx(0.4)
     assert snapshot.remaining_seconds == pytest.approx(3)
     assert snapshot.step_changed
@@ -113,7 +115,7 @@ def test_distance_progress_and_overshoot() -> None:
 
     snapshot = execution.update(0, 12)
 
-    assert snapshot.active_index == 1
+    assert snapshot.active_index == SECOND_STEP_INDEX
     assert snapshot.progress == pytest.approx(0.4)
     assert snapshot.remaining_meters == pytest.approx(3)
     assert snapshot.remaining_seconds is None
@@ -121,11 +123,11 @@ def test_distance_progress_and_overshoot() -> None:
 
 def test_time_to_distance_switch_starts_distance_baseline_at_boundary() -> None:
     execution = WorkoutExecution(
-        [_step(TimeDuration(seconds=5)), _step(DistanceDuration(meters=100))],
+        [_step(TimeDuration(seconds=5)), _step(DistanceDuration(meters=DISTANCE_STEP_METERS))],
     )
 
     snapshot = execution.update(5, 20)
-    assert snapshot.active_index == 1
+    assert snapshot.active_index == SECOND_STEP_INDEX
     assert snapshot.progress == 0
     assert snapshot.remaining_meters == DISTANCE_STEP_METERS
 
@@ -135,11 +137,14 @@ def test_time_to_distance_switch_starts_distance_baseline_at_boundary() -> None:
 
 def test_distance_to_time_switch_starts_time_baseline_at_boundary() -> None:
     execution = WorkoutExecution(
-        [_step(DistanceDuration(meters=100)), _step(TimeDuration(seconds=10))],
+        [
+            _step(DistanceDuration(meters=DISTANCE_STEP_METERS)),
+            _step(TimeDuration(seconds=TIME_STEP_SECONDS)),
+        ],
     )
 
     snapshot = execution.update(20, 100)
-    assert snapshot.active_index == 1
+    assert snapshot.active_index == SECOND_STEP_INDEX
     assert snapshot.progress == 0
     assert snapshot.remaining_seconds == TIME_STEP_SECONDS
 
@@ -149,15 +154,18 @@ def test_distance_to_time_switch_starts_time_baseline_at_boundary() -> None:
 
 def test_mixed_workout_does_not_complete_from_elapsed_time_alone() -> None:
     execution = WorkoutExecution(
-        [_step(DistanceDuration(meters=100)), _step(TimeDuration(seconds=10))],
+        [
+            _step(DistanceDuration(meters=DISTANCE_STEP_METERS)),
+            _step(TimeDuration(seconds=TIME_STEP_SECONDS)),
+        ],
     )
 
     snapshot = execution.update(100, 50)
     assert not snapshot.completed
-    assert snapshot.active_index == 0
+    assert snapshot.active_index == FIRST_STEP_INDEX
 
     snapshot = execution.update(100, 100)
-    assert snapshot.active_index == 1
+    assert snapshot.active_index == SECOND_STEP_INDEX
     assert not snapshot.completed
 
     snapshot = execution.update(110, 100)
@@ -169,15 +177,15 @@ def test_mixed_workout_does_not_complete_from_elapsed_time_alone() -> None:
 def test_previous_and_next_enter_steps_at_zero_progress() -> None:
     execution = WorkoutExecution(
         [
-            _step(TimeDuration(seconds=10)),
-            _step(DistanceDuration(meters=100)),
-            _step(TimeDuration(seconds=10)),
+            _step(TimeDuration(seconds=TIME_STEP_SECONDS)),
+            _step(DistanceDuration(meters=DISTANCE_STEP_METERS)),
+            _step(TimeDuration(seconds=TIME_STEP_SECONDS)),
         ],
     )
     execution.update(5, 30)
 
     snapshot = execution.next_step()
-    assert snapshot.active_index == 1
+    assert snapshot.active_index == SECOND_STEP_INDEX
     assert snapshot.progress == 0
 
     snapshot = execution.next_step()
@@ -185,32 +193,32 @@ def test_previous_and_next_enter_steps_at_zero_progress() -> None:
     assert snapshot.progress == 0
 
     snapshot = execution.previous_step()
-    assert snapshot.active_index == 1
+    assert snapshot.active_index == SECOND_STEP_INDEX
     assert snapshot.progress == 0
 
     snapshot = execution.previous_step()
-    assert snapshot.active_index == 0
+    assert snapshot.active_index == FIRST_STEP_INDEX
     assert snapshot.progress == 0
 
     snapshot = execution.previous_step()
-    assert snapshot.active_index == 0
+    assert snapshot.active_index == FIRST_STEP_INDEX
     assert snapshot.progress == 0
 
 
 def test_next_on_final_step_restarts_final_step() -> None:
-    execution = WorkoutExecution([_step(TimeDuration(seconds=10))])
+    execution = WorkoutExecution([_step(TimeDuration(seconds=TIME_STEP_SECONDS))])
     execution.update(5, 0)
 
     snapshot = execution.next_step()
 
-    assert snapshot.active_index == 0
+    assert snapshot.active_index == FIRST_STEP_INDEX
     assert snapshot.progress == 0
     assert not snapshot.completed
 
 
 def test_completed_workout_navigation_preserves_completion_and_reenters_final_step() -> None:
     execution = WorkoutExecution(
-        [_step(TimeDuration(seconds=5)), _step(DistanceDuration(meters=100))],
+        [_step(TimeDuration(seconds=5)), _step(DistanceDuration(meters=DISTANCE_STEP_METERS))],
     )
     execution.update(5, 0)
 
@@ -224,7 +232,7 @@ def test_completed_workout_navigation_preserves_completion_and_reenters_final_st
     assert preserved.progress == completed.progress
 
     previous = execution.previous_step()
-    assert previous.active_index == 1
+    assert previous.active_index == SECOND_STEP_INDEX
     assert previous.progress == 0
     assert previous.remaining_meters == DISTANCE_STEP_METERS
     assert not previous.completed
@@ -248,7 +256,7 @@ def test_empty_workout_is_rejected() -> None:
 )
 def test_invalid_measurements_are_rejected(field: str, value: float) -> None:
     with pytest.raises(ValueError, match=f"{field} must be finite and non-negative"):
-        WorkoutExecution([_step(TimeDuration(seconds=10))], **{field: value})
+        WorkoutExecution([_step(TimeDuration(seconds=TIME_STEP_SECONDS))], **{field: value})
 
 
 def test_open_ended_steps_are_rejected_with_specific_message() -> None:

@@ -3,7 +3,6 @@
 import contextlib
 import json
 import os
-import shutil
 import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
@@ -23,7 +22,7 @@ from pydantic import (
 from pydantic_file_settings import FileSettings
 from pydantic_settings import SettingsConfigDict
 
-from fitness_tracker.core.file_permissions import secure_directory, secure_file
+from fitness_tracker.core.file_permissions import read_private_file, secure_directory, secure_file
 from fitness_tracker.core.units import UnitSystem
 
 SETTINGS_SCHEMA_VERSION = 1
@@ -234,23 +233,24 @@ class AppSettings(FileSettings):
         secure_directory(settings_dir)
         cls._secure_rejected_files(settings_dir)
         settings_path = settings_dir / cls.__FILENAME__
-        if not settings_path.exists():
-            return super().load(settings_dir, create_if_missing=create_if_missing)
 
         try:
-            secure_file(settings_path)
-            raw_text = settings_path.read_text(encoding="utf8")
+            raw_bytes = read_private_file(settings_path)
+        except FileNotFoundError:
+            return super().load(settings_dir, create_if_missing=create_if_missing)
         except OSError as exc:
             message = f"Unable to read private settings file {settings_path}: {exc}"
             raise ValueError(message) from exc
         try:
-            settings = cls.model_validate_json(raw_text)
+            settings = cls.model_validate_json(raw_bytes)
         except (ValidationError, ValueError) as exc:
-            backup_path, backup_error = cls._backup_rejected_file(settings_path)
+            backup_path, backup_error = cls._backup_rejected_file(settings_path, raw_bytes)
             try:
-                raw_data: object = json.loads(raw_text)
+                raw_data: object = json.loads(raw_bytes)
             except ValueError:
                 raw_data = {}
+            if cls._uses_newer_schema(raw_data):
+                raise
             settings = _recover_settings_model(cls, raw_data)
             settings._settings_dir = settings_dir  # noqa: SLF001 - initialize inherited FileSettings state
             if backup_path is not None:
@@ -264,6 +264,13 @@ class AppSettings(FileSettings):
 
         settings._settings_dir = settings_dir  # noqa: SLF001 - initialize inherited FileSettings state
         return settings
+
+    @classmethod
+    def _uses_newer_schema(cls, raw_data: object) -> bool:
+        if not isinstance(raw_data, dict):
+            return False
+        version = raw_data.get("schema_version")
+        return isinstance(version, int) and version > cls.CURRENT_SCHEMA_VERSION
 
     def save(self) -> None:
         """Persist settings using user-only directory and file permissions."""
@@ -310,9 +317,13 @@ class AppSettings(FileSettings):
                 secure_file(backup_path)
 
     @staticmethod
-    def _backup_rejected_file(settings_path: Path) -> tuple[Path | None, str | None]:
+    def _backup_rejected_file(
+        settings_path: Path,
+        source_bytes: bytes,
+    ) -> tuple[Path | None, str | None]:
+        descriptor: int | None = None
+        backup_path: Path | None = None
         try:
-            source_bytes = settings_path.read_bytes()
             for backup_path in sorted(
                 settings_path.parent.glob(f"{_SETTINGS_RECOVERY_PREFIX}*"),
             ):
@@ -324,11 +335,23 @@ class AppSettings(FileSettings):
                     continue
 
             timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
-            backup_path = settings_path.with_name(f"{_SETTINGS_RECOVERY_PREFIX}{timestamp}")
-            shutil.copy2(settings_path, backup_path)
+            descriptor, backup_name = tempfile.mkstemp(
+                prefix=f"{_SETTINGS_RECOVERY_PREFIX}{timestamp}-",
+                dir=settings_path.parent,
+            )
+            backup_path = Path(backup_name)
+            os.fchmod(descriptor, 0o600)
+            with os.fdopen(descriptor, "wb") as stream:
+                descriptor = None
+                stream.write(source_bytes)
+                stream.flush()
+                os.fsync(stream.fileno())
             secure_file(backup_path)
         except OSError as exc:
             return None, str(exc)
+        finally:
+            if descriptor is not None:
+                os.close(descriptor)
         return backup_path, None
 
     @classmethod

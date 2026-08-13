@@ -66,4 +66,10 @@ class TrainerModeConfig(BaseModel):
         if self.minimum >= self.maximum:
             message = "minimum must be below maximum"
             raise ValueError(message)
+        if self.step <= 0:
+            message = "step must be greater than zero"
+            raise ValueError(message)
+        if self.decimals < 0:
+            message = "decimals must not be negative"
+            raise ValueError(message)
         return self

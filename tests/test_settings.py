@@ -12,6 +12,7 @@ from pydantic import ValidationError
 PRIVATE_DIRECTORY_MODE = 0o700
 PRIVATE_FILE_MODE = 0o600
 VALID_WEIGHT_KG = 72.0
+REOPENED_SETTINGS_MESSAGE = "settings path was reopened"
 
 
 def test_legacy_values_are_migrated_and_optional_strings_normalized() -> None:
@@ -74,6 +75,51 @@ def test_invalid_settings_preserve_the_original_and_recover_valid_fields(tmp_pat
     rejected = list(tmp_path.glob("settings.json.rejected-*"))
     assert len(rejected) == 1
     assert json.loads(rejected[0].read_text(encoding="utf8")) == payload
+
+
+def test_newer_settings_schema_is_preserved_and_rejected(tmp_path: Path) -> None:
+    payload = {"schema_version": AppSettings.CURRENT_SCHEMA_VERSION + 1}
+    settings_path = tmp_path / "settings.json"
+    source_bytes = json.dumps(payload).encode()
+    settings_path.write_bytes(source_bytes)
+
+    with pytest.raises(ValidationError, match="newer than supported"):
+        AppSettings.load(tmp_path)
+
+    rejected = list(tmp_path.glob("settings.json.rejected-*"))
+    assert len(rejected) == 1
+    assert rejected[0].read_bytes() == source_bytes
+
+
+def test_recovery_does_not_reopen_the_validated_settings_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings_path = tmp_path / "settings.json"
+    source_bytes = b'{"personal":{"ftp_watts":0}}'
+    settings_path.write_bytes(source_bytes)
+    original_read_bytes = Path.read_bytes
+    original_read_text = Path.read_text
+
+    def guarded_read_bytes(path: Path) -> bytes:
+        if path == settings_path:
+            raise AssertionError(REOPENED_SETTINGS_MESSAGE)
+        return original_read_bytes(path)
+
+    def guarded_read_text(path: Path, *args: object, **kwargs: object) -> str:
+        if path == settings_path:
+            raise AssertionError(REOPENED_SETTINGS_MESSAGE)
+        return original_read_text(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_bytes", guarded_read_bytes)
+    monkeypatch.setattr(Path, "read_text", guarded_read_text)
+
+    settings = AppSettings.load(tmp_path)
+
+    assert settings.personal.ftp_watts == AppSettings().personal.ftp_watts
+    rejected = list(tmp_path.glob("settings.json.rejected-*"))
+    assert len(rejected) == 1
+    assert original_read_bytes(rejected[0]) == source_bytes
 
 
 def test_settings_paths_are_created_and_repaired_with_private_permissions(tmp_path: Path) -> None:

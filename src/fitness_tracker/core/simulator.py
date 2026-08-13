@@ -113,6 +113,10 @@ class SensorSimulator:
                 -_TARGET_SPEED_NOISE_MPS,
                 _TARGET_SPEED_NOISE_MPS,
             )
+            self._speed_mps = max(
+                _MIN_SPEED_MPS,
+                min(_MAX_SPEED_MPS, self._speed_mps),
+            )
         else:
             self._speed_mps = max(
                 _MIN_SPEED_MPS,

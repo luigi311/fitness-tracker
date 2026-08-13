@@ -1,10 +1,12 @@
 from fitness_tracker.core.guidance import (
     PebbleTargetKind,
     TargetDomain,
+    resolve_heart_rate_target,
     resolve_step_guidance,
 )
 from fitness_tracker.core.settings import PersonalSettings
 from fitness_tracker.core.units import UnitSystem
+from fitness_tracker.core.zones import HeartRateZones, ZoneThresholds
 from workout_parser import DistanceDuration, PointTarget, RampTarget, RangeTarget, WorkoutStep
 
 
@@ -12,14 +14,45 @@ def _personal() -> PersonalSettings:
     return PersonalSettings(resting_hr=60, max_hr=190, lthr_bpm=150)
 
 
-def _zones() -> dict[str, tuple[float, float]]:
-    return {
-        "Zone 1": (125.0, 138.0),
-        "Zone 2": (138.0, 151.0),
-        "Zone 3": (151.0, 164.0),
-        "Zone 4": (164.0, 177.0),
-        "Zone 5": (177.0, 190.0),
-    }
+def _zones() -> ZoneThresholds:
+    return HeartRateZones(resting_hr=60, max_hr=190).thresholds
+
+
+def test_heart_rate_target_precedence() -> None:
+    step = WorkoutStep(
+        duration=DistanceDuration(meters=100),
+        heart_rate_bpm=PointTarget(value=120),
+        heart_rate_percent_max=PointTarget(value=80),
+        heart_rate_percent_lthr=PointTarget(value=90),
+        heart_rate_zone=PointTarget(value=2),
+    )
+
+    assert resolve_heart_rate_target(step, personal=_personal(), zones=_zones()) == (
+        120,
+        120,
+        120,
+    )
+
+    step = step.model_copy(update={"heart_rate_bpm": None})
+    assert resolve_heart_rate_target(step, personal=_personal(), zones=_zones()) == (
+        152,
+        152,
+        152,
+    )
+
+    step = step.model_copy(update={"heart_rate_percent_max": None})
+    assert resolve_heart_rate_target(step, personal=_personal(), zones=_zones()) == (
+        135,
+        135,
+        135,
+    )
+
+    step = step.model_copy(update={"heart_rate_percent_lthr": None})
+    assert resolve_heart_rate_target(step, personal=_personal(), zones=_zones()) == (
+        138,
+        144,
+        151,
+    )
 
 
 def test_power_guidance_resolves_bias_and_next_preview() -> None:

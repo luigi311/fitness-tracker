@@ -6,14 +6,21 @@ import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import ClassVar, Self
+from typing import ClassVar
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 RGB = tuple[float, float, float]
 ZoneThresholds = Mapping[str, tuple[float, float]]
 
 _HEX_COLOR = re.compile(r"^#[0-9a-fA-F]{6}$")
+
+
+def _validated_hex_color(value: str) -> str:
+    if not _HEX_COLOR.fullmatch(value):
+        msg = f"Invalid chart colour: {value!r}; expected #RRGGBB"
+        raise ValueError(msg)
+    return value
 
 
 class ChartTheme(BaseModel):
@@ -25,33 +32,23 @@ class ChartTheme(BaseModel):
     foreground: str
     grid: str
     zone_colors: tuple[str, ...] = Field(min_length=1)
-    zone_rgb: tuple[RGB, ...] = Field(default_factory=tuple, exclude=True)
 
     @field_validator("background", "foreground", "grid")
     @classmethod
     def _validate_color(cls, value: str) -> str:
-        if not _HEX_COLOR.fullmatch(value):
-            msg = f"Invalid chart colour: {value!r}; expected #RRGGBB"
-            raise ValueError(msg)
-        return value
+        return _validated_hex_color(value)
 
     @field_validator("zone_colors")
     @classmethod
     def _validate_zone_colors(cls, values: tuple[str, ...]) -> tuple[str, ...]:
         for value in values:
-            if not _HEX_COLOR.fullmatch(value):
-                msg = f"Invalid chart colour: {value!r}; expected #RRGGBB"
-                raise ValueError(msg)
+            _validated_hex_color(value)
         return values
 
-    @model_validator(mode="after")
-    def _parse_zone_colors(self) -> Self:
-        object.__setattr__(
-            self,
-            "zone_rgb",
-            tuple(hex_to_rgb(value) for value in self.zone_colors),
-        )
-        return self
+    @property
+    def zone_rgb(self) -> tuple[RGB, ...]:
+        """Return normalized RGB values derived from the current zone colours."""
+        return tuple(hex_to_rgb(value) for value in self.zone_colors)
 
     @classmethod
     def for_style(cls, is_dark: bool) -> ChartTheme:  # noqa: FBT001
@@ -104,9 +101,12 @@ class HeartRateZones:
 
     resting_hr: float
     max_hr: float
-    _thresholds: ZoneThresholds = field(init=False, repr=False)
+    _thresholds: ZoneThresholds = field(init=False, repr=False, compare=False, hash=False)
 
     def __post_init__(self) -> None:
+        if self.max_hr <= self.resting_hr:
+            message = "max_hr must be greater than resting_hr"
+            raise ValueError(message)
         hr_range = self.max_hr - self.resting_hr
         thresholds = {
             name: (
