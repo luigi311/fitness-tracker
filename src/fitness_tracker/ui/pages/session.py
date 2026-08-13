@@ -61,7 +61,7 @@ class SessionView(Gtk.Box):
         capabilities: SessionCapabilities,
         workout: bool,
     ) -> None:
-        super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=4)
         self.app = app
         self.sport_type = sport_type
         self.capabilities = capabilities
@@ -118,7 +118,7 @@ class SessionView(Gtk.Box):
 
         self._workout_revealer = Gtk.Revealer()
         self._workout_revealer.set_transition_type(Gtk.RevealerTransitionType.SLIDE_DOWN)
-        self.workout_panel = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=3)
+        self.workout_panel = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
         self._workout_revealer.set_child(self.workout_panel)
         self.append(self._workout_revealer)
 
@@ -140,6 +140,7 @@ class SessionView(Gtk.Box):
         self.workout_panel.append(timers)
 
         self.gauge = TargetGauge()
+        self.gauge.set_margin_top(4)
         self.workout_panel.append(self.gauge)
 
         pill_bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
@@ -161,8 +162,8 @@ class SessionView(Gtk.Box):
 
         self.step_progress = Gtk.ProgressBar()
         self.step_progress.set_hexpand(True)
-        self.step_progress.set_margin_top(4)
-        self.step_progress.set_margin_bottom(2)
+        self.step_progress.set_margin_top(2)
+        self.step_progress.set_margin_bottom(1)
         self.step_progress.set_css_classes(["osd"])
         self.workout_panel.append(self.step_progress)
         self._build_workout_navigation(on_prev, on_next)
@@ -175,7 +176,7 @@ class SessionView(Gtk.Box):
         metrics.set_halign(Gtk.Align.FILL)
         metrics.set_homogeneous(True)
         metrics.set_column_spacing(12)
-        metrics.set_row_spacing(4)
+        metrics.set_row_spacing(2)
 
         self.card_hr = MetricTile("Heart Rate", "bpm", sensor=SensorKind.HEART_RATE)
         # Pace uses speed as an approximate source hint, not an authoritative target indicator.

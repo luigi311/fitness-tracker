@@ -17,6 +17,11 @@ if TYPE_CHECKING:
     from cairo import Context
 
 
+_GAUGE_REFERENCE_HEIGHT = 200
+_GAUGE_CONTENT_HEIGHT = 125
+_GAUGE_BOTTOM_PADDING = 15
+
+
 class InclineControl(Gtk.Frame):
     """Large-touch incline control for compatible indoor sessions."""
 
@@ -111,7 +116,7 @@ class TargetGauge(Gtk.DrawingArea):
     def __init__(self) -> None:
         super().__init__()
         self.set_content_width(320)
-        self.set_content_height(200)
+        self.set_content_height(_GAUGE_CONTENT_HEIGHT)
         self.add_css_class("frame")
         self._value = 0.0
         self._headline = "—"
@@ -312,8 +317,9 @@ class TargetGauge(Gtk.DrawingArea):
         width: int,
         height: int,
     ) -> None:
-        center_x, center_y = width / 2.0, height * 0.70
-        radius = min(width, height) * 0.44
+        center_x, center_y = width / 2.0, height - _GAUGE_BOTTOM_PADDING
+        # Keep the original gauge radius while removing unused container height.
+        radius = min(width, _GAUGE_REFERENCE_HEIGHT) * 0.44
         bar_width = max(10.0, radius * 0.14)
         ctx.set_antialias(cairo.Antialias.GRAY)
         ctx.set_line_cap(cairo.LineCap.ROUND)

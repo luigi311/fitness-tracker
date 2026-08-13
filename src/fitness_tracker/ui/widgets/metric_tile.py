@@ -29,8 +29,8 @@ class MetricTile(Gtk.Frame):
         self.set_size_request(120, -1)
 
         inner = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        inner.set_margin_top(8)
-        inner.set_margin_bottom(8)
+        inner.set_margin_top(4)
+        inner.set_margin_bottom(4)
         inner.set_margin_start(8)
         inner.set_margin_end(8)
 
