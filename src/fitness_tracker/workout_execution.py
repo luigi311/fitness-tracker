@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from math import isfinite
 from typing import TYPE_CHECKING
 
+from pydantic import BaseModel, ConfigDict
 from workout_parser import DistanceDuration, OpenDuration, TimeDuration, WorkoutStep
 
 if TYPE_CHECKING:
@@ -84,9 +85,10 @@ class WorkoutDistanceAccumulator:
             self.distance_m += raw_distance - previous
 
 
-@dataclass(frozen=True, slots=True)
-class WorkoutExecutionSnapshot:
+class WorkoutExecutionSnapshot(BaseModel):
     """The active state of a workout after an observation or navigation action."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     active_index: int | None
     step: WorkoutStep | None
