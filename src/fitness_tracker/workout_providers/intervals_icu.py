@@ -1,105 +1,260 @@
 from __future__ import annotations
 
 import json
+import os
+import shutil
+import tempfile
 from dataclasses import dataclass
-from datetime import date
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING
+from uuid import uuid4
 
-import requests
-from loguru import logger
-
-from fitness_tracker.database import SportTypesEnum
-from fitness_tracker.workout_providers.utils import DownloadedWorkout
+from fitness_tracker.core.sports import SportTypesEnum
+from fitness_tracker.workout_providers.utils import DownloadedWorkout, WorkoutRefreshResult
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
+    from collections.abc import Iterable, Sequence
+    from datetime import date
 
-_API_BASE = "https://intervals.icu/api/v1"
+    from fitness_tracker.integrations.intervals_icu import IcuWorkoutEvent, IntervalsICUClient
+
+_MANAGED_SUFFIXES = frozenset({".fit", ".zwo", ".erg", ".mrc", ".json"})
+
+
+@dataclass(frozen=True)
+class _PreparedRefresh:
+    out_dir: Path
+    stage_dir: Path
+    result: WorkoutRefreshResult
+
+
+def _is_managed_file(path: Path) -> bool:
+    return path.is_file() and path.suffix.lower() in _MANAGED_SUFFIXES
+
+
+def _remove_path(path: Path) -> None:
+    if path.is_dir() and not path.is_symlink():
+        shutil.rmtree(path)
+    elif path.exists() or path.is_symlink():
+        path.unlink()
 
 
 @dataclass
 class IntervalsICUProvider:
-    athlete_id: str
-    api_key: str
-    ext: Literal["fit", "zwo", "erg", "mrc", "json"] = "json"
+    """Fetch and atomically replace Intervals.icu workout JSON files."""
 
-    def _auth(self):
-        return requests.auth.HTTPBasicAuth("API_KEY", self.api_key)
+    client: IntervalsICUClient
+    ext: str = "json"
 
-    def fetch_between(
+    def refresh_between(
+        self,
+        *,
+        start: date,
+        end: date,
+        running_dir: Path,
+        cycling_dir: Path,
+    ) -> WorkoutRefreshResult:
+        """Fetch once and prepare both sport directories from one snapshot."""
+        events = self.client.fetch_events(start=start, end=end, ext=self.ext)
+        prepared: list[_PreparedRefresh] = []
+        results: list[WorkoutRefreshResult] = []
+        invalid_found = False
+        try:
+            for sport, out_dir in (
+                (SportTypesEnum.running, running_dir),
+                (SportTypesEnum.biking, cycling_dir),
+            ):
+                out_dir.mkdir(parents=True, exist_ok=True)
+                current, result = self._prepare_refresh(sport, start, events, out_dir)
+                results.append(result)
+                invalid_found |= result.invalid > 0
+                if current is not None:
+                    prepared.append(current)
+            if invalid_found:
+                for current in prepared:
+                    _remove_path(current.stage_dir)
+            elif prepared:
+                self._commit_staged(prepared)
+        except Exception:
+            for current in prepared:
+                _remove_path(current.stage_dir)
+            raise
+
+        return WorkoutRefreshResult(
+            written=()
+            if invalid_found
+            else tuple(workout for result in results for workout in result.written),
+            skipped=sum(result.skipped for result in results),
+            invalid=sum(result.invalid for result in results),
+        )
+
+    def _prepare_refresh(
         self,
         sport: SportTypesEnum,
         start: date,
-        end: date,
+        events: Sequence[IcuWorkoutEvent],
         out_dir: Path,
-    ) -> Iterable[DownloadedWorkout]:
-        """
-        After a successful events request, remove all existing files in out_dir and
-        replace them with the latest week's workouts for the chosen sport.
-        """
-        out_dir.mkdir(parents=True, exist_ok=True)
+    ) -> tuple[_PreparedRefresh | None, WorkoutRefreshResult]:
+        if out_dir.exists() and not out_dir.is_dir():
+            raise NotADirectoryError(out_dir)
 
-        params = {
-            "category": "WORKOUT",
-            "oldest": start.isoformat(),
-            "newest": end.isoformat(),
-            "resolve": "true",
-            "ext": self.ext,  # include workout file payload
-        }
-        url = f"{_API_BASE}/athlete/{self.athlete_id}/events"
+        stage_dir = Path(
+            tempfile.mkdtemp(prefix=f".{out_dir.name}.refresh-", dir=out_dir.parent),
+        )
+        written: list[DownloadedWorkout] = []
+        skipped = 0
+        invalid = 0
+        used_names: set[str] = set()
+        try:
+            self._copy_unmanaged_files(out_dir, stage_dir)
+            for event in events:
+                if not self._matches_sport(event, sport):
+                    skipped += 1
+                    continue
 
-        # Request & parse (raises on HTTP errors)
-        r = requests.get(url, params=params, auth=self._auth(), timeout=20)
-        r.raise_for_status()
-        events = (
-            r.json()
-            if r.headers.get("content-type", "").startswith("application/json")
-            else json.loads(r.text)
+                if not event.workout_file_base64 or not event.workout_filename:
+                    invalid += 1
+                    continue
+
+                workout_date = event.planned_date or start
+                safe_title = self._safe_title(event)
+                output_name = self._unique_output_name(
+                    workout_date=workout_date,
+                    safe_title=safe_title,
+                    used_names=used_names,
+                )
+                stage_path = stage_dir / output_name
+                try:
+                    stage_path.write_text(
+                        json.dumps(event.model_dump(mode="json"), ensure_ascii=False),
+                        encoding="utf-8",
+                    )
+                    with stage_path.open("rb") as handle:
+                        os.fsync(handle.fileno())
+                except Exception:
+                    _remove_path(stage_dir)
+                    return (
+                        None,
+                        WorkoutRefreshResult(
+                            skipped=skipped,
+                            invalid=invalid + 1,
+                        ),
+                    )
+                written.append(
+                    DownloadedWorkout(
+                        path=out_dir / output_name,
+                        start_date=workout_date,
+                        title=safe_title,
+                    ),
+                )
+
+            result = WorkoutRefreshResult(
+                written=tuple(written),
+                skipped=skipped,
+                invalid=invalid,
+            )
+            if not written:
+                _remove_path(stage_dir)
+                return None, result
+            return _PreparedRefresh(out_dir, stage_dir, result), result
+        except Exception:
+            _remove_path(stage_dir)
+            raise
+
+    @staticmethod
+    def _copy_unmanaged_files(out_dir: Path, stage_dir: Path) -> None:
+        if not out_dir.exists():
+            return
+        for child in out_dir.iterdir():
+            if _is_managed_file(child):
+                continue
+            target = stage_dir / child.name
+            if child.is_dir():
+                shutil.copytree(child, target)
+            elif child.is_file():
+                shutil.copy2(child, target)
+
+    @staticmethod
+    def _matches_sport(event: IcuWorkoutEvent, sport: SportTypesEnum) -> bool:
+        event_type = event.type.strip()
+        return (sport == SportTypesEnum.running and event_type == "Run") or (
+            sport == SportTypesEnum.biking and event_type == "Ride"
         )
 
-        if events:
-            # SUCCESSFUL request: clean the folder first (authoritative sync)
-            def _is_workout_file(p: Path) -> bool:
-                return p.is_file() and p.suffix.lower() in (".fit", ".zwo", ".erg", ".mrc", ".json")
+    @staticmethod
+    def _safe_title(event: IcuWorkoutEvent) -> str:
+        filename = event.workout_filename or "workout"
+        title = (event.name or event.title or Path(filename).stem).strip()
+        safe_title = "".join(
+            character if character.isalnum() or character in " -_." else "_" for character in title
+        ).strip(" .")
+        return safe_title or "Workout"
 
-            for old in list(out_dir.iterdir()):
-                if _is_workout_file(old):
-                    try:
-                        old.unlink()
-                    except Exception:
-                        logger.warning(f"Failed to delete old workout file {old}, skipping")
+    @staticmethod
+    def _unique_output_name(
+        *,
+        workout_date: date,
+        safe_title: str,
+        used_names: set[str],
+    ) -> str:
+        stem = f"{workout_date.isoformat()} {safe_title}"
+        output_name = f"{stem}.json"
+        suffix = 2
+        while output_name in used_names:
+            output_name = f"{stem} ({suffix}).json"
+            suffix += 1
+        used_names.add(output_name)
+        return output_name
 
-        # Build the new set of files
-        written: list[DownloadedWorkout] = []
-        for ev in events:
-            ev_type = (ev.get("type") or "").strip()
-            if sport == SportTypesEnum.running and ev_type != "Run":
-                continue
-            if sport == SportTypesEnum.biking and ev_type != "Ride":
-                continue
-
-            wf_b64 = ev.get("workout_file_base64")
-            wf_name = ev.get("workout_filename")
-            if not (wf_b64 and wf_name):
-                continue
-
-            start_date_str = ev.get("start_date_local") or ev.get("start_date")
-            start_date = date.fromisoformat(start_date_str[:10]) if start_date_str else start
-
-            title = (ev.get("name") or ev.get("title") or Path(wf_name).stem).strip()
-            safe_title = "".join(c if c.isalnum() or c in " -_." else "_" for c in title).strip()
-
-            out_name = f"{start_date.isoformat()} {safe_title}.json"
-            out_path = out_dir / out_name
-            try:
-                # Write out the entire ev json
-                out_path.write_text(json.dumps(ev))
-                written.append(
-                    DownloadedWorkout(path=out_path, start_date=start_date, title=safe_title)
+    @staticmethod
+    def _commit_staged(prepared: Iterable[_PreparedRefresh]) -> None:
+        staged = list(prepared)
+        backups: list[tuple[Path, Path | None]] = []
+        installed: list[_PreparedRefresh] = []
+        try:
+            for current in staged:
+                # Keep the ordered loop so a failed rename can be rolled back.
+                backups.append(  # noqa: PERF401
+                    (current.out_dir, IntervalsICUProvider._backup_directory(current.out_dir)),
                 )
-            except Exception:
-                logger.warning(f"Failed to write new workout file {out_path}, skipping")
-                continue
 
-        return written
+            for current in staged:
+                current.stage_dir.replace(current.out_dir)
+                installed.append(current)
+        except Exception:
+            IntervalsICUProvider._rollback_staged(backups, installed)
+            raise
+        else:
+            IntervalsICUProvider._remove_backups(backups)
+        finally:
+            for current in staged:
+                if current.stage_dir.exists():
+                    _remove_path(current.stage_dir)
+
+    @staticmethod
+    def _backup_directory(out_dir: Path) -> Path | None:
+        if not out_dir.exists():
+            return None
+        backup = out_dir.with_name(f".{out_dir.name}.backup-{uuid4().hex}")
+        out_dir.replace(backup)
+        return backup
+
+    @staticmethod
+    def _rollback_staged(
+        backups: list[tuple[Path, Path | None]],
+        installed: list[_PreparedRefresh],
+    ) -> None:
+        for current in reversed(installed):
+            _remove_path(current.out_dir)
+        for out_dir, backup in reversed(backups):
+            if backup is None or not backup.exists():
+                continue
+            if out_dir.exists():
+                _remove_path(out_dir)
+            backup.replace(out_dir)
+
+    @staticmethod
+    def _remove_backups(backups: list[tuple[Path, Path | None]]) -> None:
+        for _out_dir, backup in backups:
+            if backup is not None and backup.exists():
+                _remove_path(backup)

@@ -1,38 +1,26 @@
 from __future__ import annotations
 
-import math
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import TYPE_CHECKING
 from zoneinfo import ZoneInfo
 
 from loguru import logger
-from sqlalchemy import (
-    BigInteger,
-    Column,
-    DateTime,
-    Float,
-    ForeignKey,
-    Index,
-    Integer,
-    String,
-    UniqueConstraint,
-    text,
-)
-from sqlalchemy.orm import Session
+from sqlalchemy import select
 
-from fitness_tracker.database import (
+from fitness_tracker.core.sports import SportTypesEnum
+from fitness_tracker.data.models import (
     Activity,
     ActivitySport,
     ActivityStats,
-    Base,
     CyclingMetrics,
     HeartRate,
     RunningMetrics,
-    SportTypesEnum,
 )
 from fitness_tracker.exporters import infer_sport
 
 if TYPE_CHECKING:
+    from sqlalchemy.orm import Session
+
     from fitness_tracker.database import DatabaseManager
 
 
@@ -70,6 +58,43 @@ def _last_distance(samples: list) -> float | None:
     return None
 
 
+def _activity_timing(act: Activity) -> tuple[datetime, datetime | None, int]:
+    """Return normalized start/end timestamps and duration in seconds."""
+    start = act.start_time
+    if start.tzinfo is None:
+        start = start.replace(tzinfo=ZoneInfo("UTC"))
+
+    if act.end_time is None:
+        return start, None, 0
+
+    end = act.end_time
+    if end.tzinfo is None:
+        end = end.replace(tzinfo=ZoneInfo("UTC"))
+    duration_s = max(0, int((end - start).total_seconds()))
+    return start, end, duration_s
+
+
+def _sport_metrics(
+    sport: SportTypesEnum,
+    runs: list[RunningMetrics],
+    cycles: list[CyclingMetrics],
+) -> tuple[list, list[float], list[float]]:
+    """Select primary rows and cadence/power values for one sport."""
+    if sport == SportTypesEnum.running and runs:
+        return (
+            runs,
+            [float(r.cadence_spm) for r in runs if r.cadence_spm is not None],
+            [float(r.power_watts) for r in runs if r.power_watts is not None],
+        )
+    if sport == SportTypesEnum.biking and cycles:
+        return (
+            cycles,
+            [float(c.cadence_rpm) for c in cycles if c.cadence_rpm is not None],
+            [float(c.power_watts) for c in cycles if c.power_watts is not None],
+        )
+    return [], [], []
+
+
 # ---------------------------------------------------------------------------
 # Calculator
 # ---------------------------------------------------------------------------
@@ -100,17 +125,31 @@ class StatsCalculator:
     def compute_for_activity(self, activity_id: int) -> ActivityStats | None:
         """Compute (or recompute) stats for one activity.  Returns the row."""
         with self.db.Session() as session:
-            act = session.get(Activity, activity_id)
-            if act is None:
-                logger.warning(f"compute_for_activity: activity {activity_id} not found")
-                return None
-            row = self._build_stats_row(session, act)
+            row = self.rebuild_in_session(session, activity_id)
+            session.commit()
             if row is None:
                 return None
-            self._upsert(session, row)
-            session.commit()
             logger.debug(f"Stats computed for activity {activity_id}")
             return row
+
+    @classmethod
+    def rebuild_in_session(cls, session: Session, activity_id: int) -> ActivityStats | None:
+        """Rebuild one derived stats row inside an existing transaction."""
+        act = session.get(Activity, activity_id)
+        if act is None:
+            logger.warning(f"rebuild_in_session: activity {activity_id} not found")
+            return None
+
+        row = cls._build_stats_row(session, act)
+        existing = session.scalar(
+            select(ActivityStats).where(ActivityStats.activity_id == activity_id),
+        )
+        if row is None:
+            if existing is not None:
+                session.delete(existing)
+            return None
+        cls._upsert(session, row)
+        return row
 
     def compute_all(self, *, force: bool = False) -> int:
         """Compute stats for every activity.
@@ -127,16 +166,16 @@ class StatsCalculator:
             # Build a query that either includes all activities (force=True)
             # or only activities that do not yet have an ActivityStats row.
             if force:
-                query = session.query(Activity).order_by(Activity.start_time)
+                statement = select(Activity).order_by(Activity.start_time)
             else:
-                query = (
-                    session.query(Activity)
+                statement = (
+                    select(Activity)
                     .outerjoin(ActivityStats, ActivityStats.activity_id == Activity.id)
-                    .filter(ActivityStats.activity_id.is_(None))
+                    .where(ActivityStats.activity_id.is_(None))
                     .order_by(Activity.start_time)
                 )
 
-            for act in query.yield_per(1000):
+            for act in session.execute(statement).scalars().yield_per(1000):
                 row = self._build_stats_row(session, act)
                 if row is None:
                     continue
@@ -152,45 +191,38 @@ class StatsCalculator:
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _build_stats_row(self, session: Session, act: Activity) -> ActivityStats | None:
+    @staticmethod
+    def _build_stats_row(session: Session, act: Activity) -> ActivityStats | None:
         """Return an *unsaved* ActivityStats for *act* (None if sport unknown)."""
-
-        # ---- Timing ----
-        start = act.start_time
-        if start.tzinfo is None:
-            start = start.replace(tzinfo=ZoneInfo("UTC"))
-
-        if act.end_time:
-            end = act.end_time
-            if end.tzinfo is None:
-                end = end.replace(tzinfo=ZoneInfo("UTC"))
-            duration_s = max(0, int((end - start).total_seconds()))
-        else:
-            end = None
-            duration_s = 0
+        start, end, duration_s = _activity_timing(act)
 
         # ---- Raw data ----
-        hrs: list[HeartRate] = (
-            session.query(HeartRate)
-            .filter_by(activity_id=act.id)
-            .order_by(HeartRate.timestamp_ms)
-            .all()
+        hrs: list[HeartRate] = list(
+            session.scalars(
+                select(HeartRate)
+                .where(HeartRate.activity_id == act.id)
+                .order_by(HeartRate.timestamp_ms),
+            ).all(),
         )
-        runs: list[RunningMetrics] = (
-            session.query(RunningMetrics)
-            .filter_by(activity_id=act.id)
-            .order_by(RunningMetrics.timestamp_ms)
-            .all()
+        runs: list[RunningMetrics] = list(
+            session.scalars(
+                select(RunningMetrics)
+                .where(RunningMetrics.activity_id == act.id)
+                .order_by(RunningMetrics.timestamp_ms),
+            ).all(),
         )
-        cycles: list[CyclingMetrics] = (
-            session.query(CyclingMetrics)
-            .filter_by(activity_id=act.id)
-            .order_by(CyclingMetrics.timestamp_ms)
-            .all()
+        cycles: list[CyclingMetrics] = list(
+            session.scalars(
+                select(CyclingMetrics)
+                .where(CyclingMetrics.activity_id == act.id)
+                .order_by(CyclingMetrics.timestamp_ms),
+            ).all(),
         )
 
         # ---- Sport type ----
-        sport_row = session.query(ActivitySport).filter_by(activity_id=act.id).first()
+        sport_row = session.scalars(
+            select(ActivitySport).where(ActivitySport.activity_id == act.id),
+        ).first()
         if sport_row:
             sport = SportTypesEnum(sport_row.sport_type_id)
         else:
@@ -205,25 +237,11 @@ class StatsCalculator:
             bpms = [h.bpm for h in hrs]
             avg_bpm: float | None = sum(bpms) / len(bpms)
             max_bpm: int | None = max(bpms)
-            total_kj = sum(h.energy_kj or 0.0 for h in hrs)
         else:
             avg_bpm = None
             max_bpm = None
-            total_kj = 0.0
 
-        # ---- Sport-specific stats ----
-        if sport == SportTypesEnum.running and runs:
-            primary = runs
-            cadence_vals = [float(r.cadence_spm) for r in runs if r.cadence_spm is not None]
-            power_vals = [float(r.power_watts) for r in runs if r.power_watts is not None]
-        elif sport == SportTypesEnum.biking and cycles:
-            primary = cycles
-            cadence_vals = [float(c.cadence_rpm) for c in cycles if c.cadence_rpm is not None]
-            power_vals = [float(c.power_watts) for c in cycles if c.power_watts is not None]
-        else:
-            primary = []
-            cadence_vals = []
-            power_vals = []
+        primary, cadence_vals, power_vals = _sport_metrics(sport, runs, cycles)
 
         distance_m = _last_distance(primary)
         avg_cadence = _safe_avg(cadence_vals)
@@ -249,7 +267,6 @@ class StatsCalculator:
             avg_speed_mps=avg_speed_mps,
             avg_bpm=avg_bpm,
             max_bpm=max_bpm,
-            total_energy_kj=total_kj,
             avg_cadence=avg_cadence,
             avg_power_watts=avg_power,
             total_ascent_m=ascent if ascent > 0 else None,
@@ -260,7 +277,9 @@ class StatsCalculator:
     @staticmethod
     def _upsert(session: Session, row: ActivityStats) -> None:
         """Insert or update the stats row for row.activity_id."""
-        existing = session.query(ActivityStats).filter_by(activity_id=row.activity_id).one_or_none()
+        existing = session.scalar(
+            select(ActivityStats).where(ActivityStats.activity_id == row.activity_id),
+        )
         if existing is None:
             session.add(row)
         else:
@@ -273,7 +292,6 @@ class StatsCalculator:
             existing.avg_speed_mps = row.avg_speed_mps
             existing.avg_bpm = row.avg_bpm
             existing.max_bpm = row.max_bpm
-            existing.total_energy_kj = row.total_energy_kj
             existing.avg_cadence = row.avg_cadence
             existing.avg_power_watts = row.avg_power_watts
             existing.total_ascent_m = row.total_ascent_m

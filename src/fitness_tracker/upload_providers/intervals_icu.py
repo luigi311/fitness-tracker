@@ -4,123 +4,70 @@ from dataclasses import dataclass
 from hashlib import sha256
 from typing import TYPE_CHECKING
 
-import requests
-from loguru import logger
-from requests.auth import HTTPBasicAuth
-
-from fitness_tracker.database import (
-    ActivitySport,
-    CyclingMetrics,
-    HeartRate,
-    RunningMetrics,
-    SportTypesEnum,
-)
+from fitness_tracker.core.sports import SportTypesEnum
 from fitness_tracker.exporters import activity_to_tcx, infer_sport
+from fitness_tracker.integrations.errors import IntegrationError
 
 if TYPE_CHECKING:
-    from fitness_tracker.ui import FitnessAppUI
+    from fitness_tracker.data.repositories import ActivityRepository
+    from fitness_tracker.integrations.intervals_icu import IntervalsICUClient
 
-API_BASE = "https://intervals.icu/api/v1"
 PROVIDER_NAME = "intervals_icu"
 
 
 @dataclass
 class IntervalsICUUploader:
-    athlete_id: str
-    api_key: str
+    """Upload finalized activities to Intervals.icu."""
 
-    def _auth(self):
-        # Intervals.icu supports Basic auth with username "API_KEY" and your key as password,
-        # or "Bearer" token. We use Basic for maximum compatibility.
-        # https://forum.intervals.icu/t/api-access-to-intervals-icu/609  :contentReference[oaicite:0]{index=0}
-        return HTTPBasicAuth("API_KEY", self.api_key)
+    client: IntervalsICUClient
 
-    def _upload_tcx_bytes(self, name: str, data: bytes) -> requests.Response:
-        url = f"{API_BASE}/athlete/{self.athlete_id or '0'}/activities"
-        files = {"file": (f"{name}.tcx", data, "application/vnd.garmin.tcx+xml")}
-        # Intervals does dedupe on upload (content hash). If already uploaded, you might get 200/409.
-        # (Behavior described across forum/API threads.)
-        resp = requests.post(url, auth=self._auth(), files=files, timeout=60)
-        resp.raise_for_status()
-        return resp
-
-    def upload_not_uploaded(self, app: FitnessAppUI) -> list[tuple[int, bool, str | None]]:
+    def upload_not_uploaded(
+        self,
+        repository: ActivityRepository,
+    ) -> list[tuple[int, bool, str | None]]:
         """Upload all activities that don't have an OK upload row for Intervals.icu."""
         out: list[tuple[int, bool, str | None]] = []
-        if not self.api_key:
-            return [(0, False, "Missing Intervals.icu API key")]
-
-        if not app.recorder:
-            return [(0, False, "No database available")]
-
-        db = app.recorder.db
-        acts = db.list_not_uploaded(PROVIDER_NAME)
+        acts = repository.list_not_uploaded(PROVIDER_NAME)
         if not acts:
             return out
 
-        with db.Session() as session:
-            for a in acts:
-                hrs = (
-                    session.query(HeartRate)
-                    .filter_by(activity_id=a.id)
-                    .order_by(HeartRate.timestamp_ms)
-                    .all()
+        for a in acts:
+            hrs = repository.list_heart_rates(a.id)
+            runs = repository.list_running_metrics(a.id)
+            cycles = repository.list_cycling_metrics(a.id)
+            sport_row = repository.get_activity_sport(a.id)
+            sport_type = (
+                SportTypesEnum(sport_row.sport_type_id)
+                if sport_row
+                else infer_sport(hrs, runs, cycles, a.id)
+            )
+            if sport_type == SportTypesEnum.unknown:
+                continue
+            try:
+                tcx = activity_to_tcx(
+                    act=a,
+                    heart_rates=hrs,
+                    running=runs,
+                    cycling=cycles,
+                    sport_type=sport_type,
                 )
-                runs = (
-                    session.query(RunningMetrics)
-                    .filter_by(activity_id=a.id)
-                    .order_by(RunningMetrics.timestamp_ms)
-                    .all()
+                # Simple content hash (helps our own dedupe/debug)
+                phash = sha256(tcx).hexdigest()
+                prefix = "Run" if sport_type == SportTypesEnum.running else "Ride"
+                name = a.start_time.astimezone().strftime(f"{prefix}_%Y-%m-%d_%H-%M")
+                provider_id = self.client.upload_tcx(name, tcx).provider_id
+
+                repository.mark_upload_ok(
+                    activity_id=a.id,
+                    provider=PROVIDER_NAME,
+                    provider_activity_id=provider_id,
+                    payload_hash=phash,
                 )
-                cycles = (
-                    session.query(CyclingMetrics)
-                    .filter_by(activity_id=a.id)
-                    .order_by(CyclingMetrics.timestamp_ms)
-                    .all()
-                )
-                sport_type = session.query(ActivitySport).filter_by(activity_id=a.id).first()
-                try:
-                    sport_type = (
-                        SportTypesEnum(sport_type.sport_type_id)
-                        if sport_type
-                        else infer_sport(hrs, runs, cycles, a.id)
-                    )
-                    if sport_type == SportTypesEnum.unknown:
-                        continue
-
-                    tcx = activity_to_tcx(
-                        act=a,
-                        heart_rates=hrs,
-                        running=runs,
-                        cycling=cycles,
-                        sport_type=sport_type,
-                    )
-                    # Simple content hash (helps our own dedupe/debug)
-                    phash = sha256(tcx).hexdigest()
-                    prefix = "Run" if sport_type == SportTypesEnum.running else "Ride"
-                    name = a.start_time.astimezone().strftime(f"{prefix}_%Y-%m-%d_%H-%M")
-                    resp = self._upload_tcx_bytes(name, tcx)
-
-                    # If the API returns an id in JSON, store it
-                    provider_id = None
-                    try:
-                        j = resp.json()
-                        provider_id = str(j.get("id") or j.get("activityId") or "")
-                    except Exception:
-                        provider_id = None
-
-                    db.mark_upload_ok(
-                        activity_id=int(a.id),
-                        provider=PROVIDER_NAME,
-                        provider_activity_id=provider_id,
-                        payload_hash=phash,
-                    )
-                    out.append((int(a.id), True, None))
-                except requests.HTTPError as e:
-                    msg = f"{e.response.status_code} {e.response.reason}"
-                    db.mark_upload_failed(int(a.id), PROVIDER_NAME, msg)
-                    out.append((int(a.id), False, msg))
-                except Exception as e:
-                    db.mark_upload_failed(int(a.id), PROVIDER_NAME, str(e))
-                    out.append((int(a.id), False, str(e)))
+                out.append((a.id, True, None))
+            except IntegrationError as e:
+                repository.mark_upload_failed(a.id, PROVIDER_NAME, str(e))
+                out.append((a.id, False, str(e)))
+            except Exception as e:
+                repository.mark_upload_failed(a.id, PROVIDER_NAME, str(e))
+                out.append((a.id, False, str(e)))
         return out
