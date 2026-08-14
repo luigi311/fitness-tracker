@@ -585,7 +585,7 @@ class SettingsPageUI:
         self.app.refresh_hr_zones()
         self._update_actions_state()
 
-        # Apply Pebble settings right away (start/stop bridge without restart)
+        # Apply Pebble settings right away without restarting the application.
         _idle_once(self.app.apply_pebble_settings)
 
         # Keep the active session's recorder profile stable. The saved sensor

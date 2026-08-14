@@ -11,6 +11,7 @@ from libpebble2.communication import PebbleConnection
 from libpebble2.communication.transports.qemu import QemuTransport
 from libpebble2.communication.transports.serial import SerialTransport
 from libpebble2.communication.transports.websocket import WebsocketTransport
+from libpebble2.protocol.apps import AppRunState, AppRunStateStart, AppRunStateStop
 from libpebble2.services.appmessage import AppMessageService, Uint8, Uint16, Uint32
 from loguru import logger
 
@@ -141,13 +142,30 @@ class _CobbleBackend:
         await client.connect(require_daemon=True)
         self._client = client
         client.on_app_message(self._handle_app_message)
-        # Bring the watchapp to the foreground; an app that isn't running just
-        # NACKs every AppMessage. Best-effort: it may already be open.
-        try:
-            await self._client.launch_app(self._app_uuid)
-            await asyncio.sleep(1.0)
-        except Exception as e:
-            logger.debug(f"daemon launch_app failed (app may already be open): {e!r}")
+
+    async def _async_launch_app(self) -> None:
+        client = self._client
+        if client is None:
+            msg = "daemon backend not connected"
+            raise RuntimeError(msg)
+        await client.launch_app(self._app_uuid)
+        # Give the watchapp time to finish opening before the first AppMessage.
+        await asyncio.sleep(1.0)
+
+    def launch_app(self) -> None:
+        """Bring the configured watchapp to the foreground."""
+        self._call(self._async_launch_app(), timeout=self._connect_timeout + 10.0)
+
+    async def _async_stop_app(self) -> None:
+        client = self._client
+        if client is None:
+            msg = "daemon backend not connected"
+            raise RuntimeError(msg)
+        await client.stop_app(self._app_uuid)
+
+    def stop_app(self) -> None:
+        """Ask the daemon to close the configured watchapp."""
+        self._call(self._async_stop_app(), timeout=self._connect_timeout)
 
     def _handle_app_message(self, app_uuid: str, data: dict[int, object]) -> None:
         value = data.get(KEY_SYNC_REQUEST)
@@ -294,6 +312,30 @@ class _Libpebble2Backend:
     def _handle_nack(self, transaction_id: int, _app_uuid: UUID | None) -> None:
         self._record_delivery(transaction_id, acknowledged=False)
 
+    def launch_app(self) -> None:
+        """Bring the configured watchapp to the foreground."""
+        conn = self._conn
+        if conn is None:
+            msg = f"{self.name} backend not connected"
+            raise RuntimeError(msg)
+        conn.send_packet(
+            AppRunState(
+                data=AppRunStateStart(uuid=UUID(self._app_uuid)),
+            ),
+        )
+
+    def stop_app(self) -> None:
+        """Ask the watch to close the configured watchapp."""
+        conn = self._conn
+        if conn is None:
+            msg = f"{self.name} backend not connected"
+            raise RuntimeError(msg)
+        conn.send_packet(
+            AppRunState(
+                data=AppRunStateStop(uuid=UUID(self._app_uuid)),
+            ),
+        )
+
     def send(self, data: dict) -> None:
         appmsg = self._appmsg
         if appmsg is None:
@@ -367,7 +409,7 @@ class PebbleBridge:
         self._backend: _CobbleBackend | _Libpebble2Backend | None = None
 
     def start(self) -> None:
-        """Start the background thread to send updates."""
+        """Start the session bridge and bring the watchapp to the foreground."""
         mode = "Emulator" if self.use_emulator else "Watch"
         logger.debug(f"Starting pebble bridge ({mode})")
         self._running = True
@@ -375,10 +417,10 @@ class PebbleBridge:
         self._t.start()
 
     def stop(self) -> None:
-        """Stop the background thread and disconnect."""
+        """Close the watchapp, stop the background thread, and disconnect."""
         self._running = False
         self._wake.set()
-        self._close_backend()
+        self._close_backend(stop_app=True)
         thread = self._t
         if thread:
             thread.join(timeout=1.0)
@@ -536,9 +578,26 @@ class PebbleBridge:
         self._backend = backend
         logger.success("Connected to Pebble over Bluetooth serial")
 
-    def _close_backend(self) -> None:
+    def _launch_app(self) -> None:
+        backend = self._backend
+        if backend is None:
+            return
+        backend.launch_app()
+
+    def _connect_and_launch(self) -> None:
+        """Connect and launch unless stop was requested during connection."""
+        self._connect()
+        if self._running:
+            self._launch_app()
+
+    def _close_backend(self, *, stop_app: bool = False) -> None:
         backend, self._backend = self._backend, None
         if backend:
+            if stop_app:
+                try:
+                    backend.stop_app()
+                except Exception as e:
+                    logger.debug(f"Pebble app close error: {e!r}")
             try:
                 backend.close()
             except Exception as e:
@@ -579,7 +638,9 @@ class PebbleBridge:
             while self._running:
                 try:
                     if not self._backend:
-                        self._connect()
+                        # AppMessages sent to a stopped watchapp are rejected;
+                        # launch it only after the session bridge is started.
+                        self._connect_and_launch()
                         full_after_reconnect = True
                         backoff = 1.0
                     # Re-check after a (possibly slow) connect: if stop() fired
@@ -606,4 +667,4 @@ class PebbleBridge:
                         self._wake.clear()
                     backoff = min(10.0, backoff * 2)
         finally:
-            self._close_backend()
+            self._close_backend(stop_app=not self._running)

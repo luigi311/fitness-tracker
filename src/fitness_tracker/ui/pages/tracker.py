@@ -471,6 +471,12 @@ class TrackerPageUI:
             self.app.show_toast(f"Unable to start recording: {error}")
             return
 
+        # Keep the watchapp closed while this page is only previewing. The
+        # bridge is configured at app startup, but its worker (and app launch)
+        # begin only after recording has actually started.
+        if self.app.pebble_bridge:
+            self.app.pebble_bridge.start()
+
         if self._workout_session:
             self._workout_session.distance_accumulator.reset()
         self._session_state = SessionState.RUNNING
@@ -503,6 +509,9 @@ class TrackerPageUI:
             # Always tear down UI session state, even if the trainer rejects zero load.
             self._session_state = None
             self._start_requested = False
+
+            if self.app.pebble_bridge:
+                self.app.pebble_bridge.stop()
 
             if self._timer_source_id is not None:
                 GLib.source_remove(self._timer_source_id)

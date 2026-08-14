@@ -383,7 +383,7 @@ class FitnessAppUI(Adw.Application):
         self.send_notification("workout-complete", notification)
 
     def apply_pebble_settings(self) -> None:
-        """Start, update, or stop the Pebble bridge for current settings."""
+        """Configure, update, or stop the Pebble bridge for current settings."""
         if self.pebble_bridge:
             # Skip teardown and recreation if no settings change
             if (
@@ -423,7 +423,6 @@ class FitnessAppUI(Adw.Application):
                 port=self.app_settings.pebble.port,
             )
 
-            self.pebble_bridge.start()
             self.pebble_bridge.update(
                 units=int(self.unit_system == UnitSystem.IMPERIAL),
             )
