@@ -197,7 +197,7 @@ class FitnessAppUI(Adw.Application):
                     self._reconcile_shutdown_finalization(recorder)
         if self.pebble_bridge:
             with contextlib.suppress(Exception):
-                self.pebble_bridge.stop()
+                self.pebble_bridge.stop(wait=False)
 
     def _on_close_request(self, *_a: object) -> bool:
         """Request application termination when the main window closes."""
@@ -383,7 +383,10 @@ class FitnessAppUI(Adw.Application):
         self.send_notification("workout-complete", notification)
 
     def apply_pebble_settings(self) -> None:
-        """Start, update, or stop the Pebble bridge for current settings."""
+        """Configure, update, or stop the Pebble bridge for current settings."""
+        tracker = self.__dict__.get("tracker")
+        recording_active = tracker is not None and tracker.recording_active
+
         if self.pebble_bridge:
             # Skip teardown and recreation if no settings change
             if (
@@ -397,7 +400,7 @@ class FitnessAppUI(Adw.Application):
                 return
 
             with contextlib.suppress(Exception):
-                self.pebble_bridge.stop()
+                self.pebble_bridge.stop(wait=False)
         self.pebble_bridge = None
 
         if not self.app_settings.pebble.enable:
@@ -423,10 +426,11 @@ class FitnessAppUI(Adw.Application):
                 port=self.app_settings.pebble.port,
             )
 
-            self.pebble_bridge.start()
             self.pebble_bridge.update(
                 units=int(self.unit_system == UnitSystem.IMPERIAL),
             )
+            if recording_active:
+                self.pebble_bridge.start()
         except Exception as e:
             self.pebble_bridge = None
             logger.error(e)

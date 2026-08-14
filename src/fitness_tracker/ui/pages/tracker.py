@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import time
 from collections import deque
 from typing import TYPE_CHECKING
@@ -148,6 +149,11 @@ class TrackerPageUI:
     def session_open(self) -> bool:
         """Return whether a session page currently owns the recorder profile."""
         return self.session_view is not None and self._session_state is not None
+
+    @property
+    def recording_active(self) -> bool:
+        """Return whether a session is currently recording or paused."""
+        return self._session_state in (SessionState.RUNNING, SessionState.PAUSED)
 
     def _start_workout(
         self,
@@ -471,6 +477,13 @@ class TrackerPageUI:
             self.app.show_toast(f"Unable to start recording: {error}")
             return
 
+        # Keep the watchapp closed while this page is only previewing. The
+        # bridge is configured at app startup, but its worker (and app launch)
+        # begin only after recording has actually started.
+        if self.app.pebble_bridge:
+            with contextlib.suppress(Exception):
+                self.app.pebble_bridge.start()
+
         if self._workout_session:
             self._workout_session.distance_accumulator.reset()
         self._session_state = SessionState.RUNNING
@@ -503,6 +516,10 @@ class TrackerPageUI:
             # Always tear down UI session state, even if the trainer rejects zero load.
             self._session_state = None
             self._start_requested = False
+
+            if self.app.pebble_bridge:
+                with contextlib.suppress(Exception):
+                    self.app.pebble_bridge.stop(wait=False)
 
             if self._timer_source_id is not None:
                 GLib.source_remove(self._timer_source_id)

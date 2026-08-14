@@ -49,6 +49,9 @@ class _Backend:
         self.messages: list[dict[int, tuple[int, int]]] = []
         self.fail_next = False
         self.closed = threading.Event()
+        self.launched = threading.Event()
+        self.stopped = threading.Event()
+        self.calls: list[str] = []
         self.int_types = {
             width: (lambda value, width=width: (width, value)) for width in (8, 16, 32)
         }
@@ -61,7 +64,15 @@ class _Backend:
         self.messages.append(message)
 
     def close(self) -> None:
+        self.calls.append("close")
         self.closed.set()
+
+    def launch_app(self) -> None:
+        self.launched.set()
+
+    def stop_app(self) -> None:
+        self.calls.append("stop_app")
+        self.stopped.set()
 
 
 class _LibpebbleAppMessage:
@@ -252,6 +263,30 @@ def _libpebble_backend() -> tuple[pebble_module._Libpebble2Backend, _LibpebbleAp
     backend._appmsg = appmessage
     backend._send_timeout = 0.1
     return backend, appmessage
+
+
+def test_libpebble2_launch_and_stop_use_app_run_state_packets() -> None:
+    class _Connection:
+        def __init__(self) -> None:
+            self.packets: list[object] = []
+
+        def send_packet(self, packet: object) -> None:
+            self.packets.append(packet)
+
+    backend = pebble_module._Libpebble2Backend(
+        "f4fcdac7-f58e-4d22-96bd-48cf98e25d09",
+        lambda _app_uuid, _data: None,
+    )
+    connection = _Connection()
+    backend._conn = connection
+
+    backend.launch_app()
+    backend.stop_app()
+
+    assert [packet.serialise_packet().hex() for packet in connection.packets] == [
+        "0011003401f4fcdac7f58e4d2296bd48cf98e25d09",
+        "0011003402f4fcdac7f58e4d2296bd48cf98e25d09",
+    ]
 
 
 def test_libpebble2_send_waits_for_ack() -> None:
@@ -500,7 +535,52 @@ def test_stop_during_connect_closes_late_backend() -> None:
     allow_connect.set()
     worker.join(timeout=2.0)
     assert not worker.is_alive()
+    assert not backend.launched.is_set()
     assert backend.closed.is_set()
+
+
+def test_restart_during_blocked_connect_isolated_from_late_old_worker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bridge = PebbleBridge(
+        "00000000-0000-0000-0000-000000000000",
+        mac="AA:BB:CC:DD:EE:FF",
+    )
+    bridge.update(hr=140)
+    old_backend = _Backend()
+    new_backend = _Backend()
+    first_connect_started = threading.Event()
+    release_first_connect = threading.Event()
+    second_connect_started = threading.Event()
+    connect_count = 0
+
+    def connect() -> None:
+        nonlocal connect_count
+        connect_count += 1
+        if connect_count == 1:
+            first_connect_started.set()
+            release_first_connect.wait(timeout=5.0)
+            bridge._install_backend(old_backend, "old backend")
+            return
+        second_connect_started.set()
+        bridge._install_backend(new_backend, "new backend")
+
+    monkeypatch.setattr(bridge, "_connect", connect)
+    bridge.start()
+
+    assert first_connect_started.wait(timeout=1.0)
+    bridge.stop()
+    bridge.start()
+
+    assert second_connect_started.wait(timeout=1.0)
+    assert new_backend.launched.wait(timeout=1.0)
+    assert not old_backend.launched.is_set()
+
+    release_first_connect.set()
+    assert old_backend.closed.wait(timeout=1.0)
+    assert bridge._backend is new_backend
+
+    bridge.stop()
 
 
 def test_reconnect_requests_a_full_state_resend(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -527,11 +607,51 @@ def test_reconnect_requests_a_full_state_resend(monkeypatch: pytest.MonkeyPatch)
     bridge._loop()
 
     assert calls == [True]
+    assert backend.launched.is_set()
     assert set(_sent_values(backend)) == {
         pebble_module.KEY_HR,
         pebble_module.KEY_PACE,
         pebble_module.KEY_CADENCE,
     }
+
+
+def test_stop_requests_app_close_before_backend_disconnect() -> None:
+    bridge, backend = _bridge_with_backend()
+    bridge._running = True
+
+    bridge.stop()
+
+    assert backend.stopped.is_set()
+    assert backend.closed.is_set()
+    assert backend.calls.index("stop_app") < backend.calls.index("close")
+
+
+def test_nonblocking_stop_runs_backend_teardown_off_caller_thread(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bridge, backend = _bridge_with_backend()
+    teardown_started = threading.Event()
+    release_teardown = threading.Event()
+    teardown_thread_ids: list[int] = []
+
+    def stop_app() -> None:
+        teardown_thread_ids.append(threading.get_ident())
+        teardown_started.set()
+        release_teardown.wait(timeout=2.0)
+        backend.stopped.set()
+
+    monkeypatch.setattr(backend, "stop_app", stop_app)
+    bridge._running = True
+    caller_thread_id = threading.get_ident()
+
+    bridge.stop(wait=False)
+    try:
+        assert teardown_started.wait(timeout=1.0)
+        assert teardown_thread_ids[0] != caller_thread_id
+        assert not backend.closed.is_set()
+    finally:
+        release_teardown.set()
+        assert backend.closed.wait(timeout=1.0)
 
 
 def test_watch_launch_requests_a_full_state_resend(

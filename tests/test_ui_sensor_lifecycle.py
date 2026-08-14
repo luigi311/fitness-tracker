@@ -233,6 +233,56 @@ class SensorSettingsLifecycleTests(unittest.TestCase):
 
         self.assertEqual(pebble_steps, [0])
 
+    def test_changed_pebble_settings_restart_bridge_for_active_recording(self):
+        app = FitnessAppUI.__new__(FitnessAppUI)
+        old_bridge = Mock(mac="old", use_emulator=True, port=1234)
+        replacement = Mock()
+        app.pebble_bridge = old_bridge
+        app.tracker = types.SimpleNamespace(recording_active=True)
+        app.app_settings = types.SimpleNamespace(
+            display=types.SimpleNamespace(unit_system=None),
+            pebble=types.SimpleNamespace(
+                address="new",
+                enable=True,
+                port=5678,
+                use_emulator=True,
+                uuid="test-uuid",
+            ),
+        )
+
+        with patch("fitness_tracker.ui.app.PebbleBridge", return_value=replacement):
+            app.apply_pebble_settings()
+
+        old_bridge.stop.assert_called_once_with(wait=False)
+        replacement.update.assert_called_once_with(units=0)
+        replacement.start.assert_called_once_with()
+        self.assertIs(app.pebble_bridge, replacement)
+
+    def test_changed_pebble_settings_keep_bridge_stopped_when_recording_inactive(self):
+        app = FitnessAppUI.__new__(FitnessAppUI)
+        old_bridge = Mock(mac="old", use_emulator=True, port=1234)
+        replacement = Mock()
+        app.pebble_bridge = old_bridge
+        app.tracker = types.SimpleNamespace(recording_active=False)
+        app.app_settings = types.SimpleNamespace(
+            display=types.SimpleNamespace(unit_system=None),
+            pebble=types.SimpleNamespace(
+                address="new",
+                enable=True,
+                port=5678,
+                use_emulator=True,
+                uuid="test-uuid",
+            ),
+        )
+
+        with patch("fitness_tracker.ui.app.PebbleBridge", return_value=replacement):
+            app.apply_pebble_settings()
+
+        old_bridge.stop.assert_called_once_with(wait=False)
+        replacement.update.assert_called_once_with(units=0)
+        replacement.start.assert_not_called()
+        self.assertIs(app.pebble_bridge, replacement)
+
     def test_workout_complete_uses_toast_and_desktop_notification(self):
         app = FitnessAppUI.__new__(FitnessAppUI)
         toasts = []
