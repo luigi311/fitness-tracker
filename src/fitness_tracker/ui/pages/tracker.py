@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import time
 from collections import deque
 from typing import TYPE_CHECKING
@@ -480,7 +481,8 @@ class TrackerPageUI:
         # bridge is configured at app startup, but its worker (and app launch)
         # begin only after recording has actually started.
         if self.app.pebble_bridge:
-            self.app.pebble_bridge.start()
+            with contextlib.suppress(Exception):
+                self.app.pebble_bridge.start()
 
         if self._workout_session:
             self._workout_session.distance_accumulator.reset()
@@ -516,7 +518,8 @@ class TrackerPageUI:
             self._start_requested = False
 
             if self.app.pebble_bridge:
-                self.app.pebble_bridge.stop()
+                with contextlib.suppress(Exception):
+                    self.app.pebble_bridge.stop(wait=False)
 
             if self._timer_source_id is not None:
                 GLib.source_remove(self._timer_source_id)

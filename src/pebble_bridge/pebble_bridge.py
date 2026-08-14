@@ -66,6 +66,9 @@ def _target_wire_value(value: float, kind: int | None) -> int:
     return round(value * scale)
 
 
+_CURRENT_WORKER = object()
+
+
 class _CobbleBackend:
     """cobble_client transport: send via the shared cobbled daemon.
 
@@ -436,21 +439,33 @@ class PebbleBridge:
             )
             self._t.start()
 
-    def stop(self) -> None:
+    def stop(self, *, wait: bool = True) -> None:
         """Close the watchapp, stop the background thread, and disconnect."""
         with self._lifecycle_lock:
             self._running = False
-            if self._worker_stop_event is not None:
-                self._worker_stop_event.set()
+            stop_owner = self._worker_stop_event
+            if stop_owner is not None:
+                stop_owner.set()
             thread = self._t
         self._wake.set()
-        self._close_backend(stop_app=True)
-        if thread:
-            thread.join(timeout=1.0)
-            if not thread.is_alive():
-                with self._lifecycle_lock:
-                    if self._t is thread:
-                        self._t = None
+
+        def teardown() -> None:
+            self._close_backend(stop_app=True, expected_owner=stop_owner)
+            if thread:
+                thread.join(timeout=1.0)
+                if not thread.is_alive():
+                    with self._lifecycle_lock:
+                        if self._t is thread:
+                            self._t = None
+
+        if wait:
+            teardown()
+        else:
+            threading.Thread(
+                target=teardown,
+                name="pebble-bridge-stop",
+                daemon=True,
+            ).start()
 
     def _update_metrics(
         self,
@@ -571,25 +586,44 @@ class PebbleBridge:
                 return None
             return self._backend
 
+    def _close_backend_instance(
+        self,
+        backend: _CobbleBackend | _Libpebble2Backend,
+        *,
+        stop_app: bool = False,
+    ) -> None:
+        if stop_app:
+            try:
+                backend.stop_app()
+            except Exception as e:
+                logger.debug(f"Pebble app close error: {e!r}")
+        try:
+            backend.close()
+        except Exception as e:
+            logger.error(f"PebbleBridge close error: {e!r}")
+
     def _install_backend(
         self,
         backend: _CobbleBackend | _Libpebble2Backend,
         connection_message: str,
     ) -> None:
         owner = self._worker_owner()
+        previous: _CobbleBackend | _Libpebble2Backend | None = None
         with self._lifecycle_lock:
             active = owner is None or not owner.is_set()
             if active:
+                previous = self._backend
                 self._backend = backend
                 self._backend_owner = owner
         if active:
             logger.success(connection_message)
+            if previous is not None and previous is not backend:
+                self._close_backend_instance(previous, stop_app=True)
             return
-        with contextlib.suppress(Exception):
-            backend.close()
+        self._close_backend_instance(backend)
 
     def _connect(self) -> None:
-        if self._backend:
+        if self._backend_for_worker() is not None:
             logger.debug("Already connected")
             return
 
@@ -649,23 +683,23 @@ class PebbleBridge:
         if self._worker_is_active():
             self._launch_app()
 
-    def _close_backend(self, *, stop_app: bool = False) -> None:
+    def _close_backend(
+        self,
+        *,
+        stop_app: bool = False,
+        expected_owner: object = _CURRENT_WORKER,
+    ) -> None:
         owner = self._worker_owner()
         with self._lifecycle_lock:
-            if owner is not None and self._backend_owner is not owner:
+            if expected_owner is _CURRENT_WORKER:
+                if owner is not None and self._backend_owner is not owner:
+                    return
+            elif self._backend_owner is not expected_owner:
                 return
             backend, self._backend = self._backend, None
             self._backend_owner = None
         if backend:
-            if stop_app:
-                try:
-                    backend.stop_app()
-                except Exception as e:
-                    logger.debug(f"Pebble app close error: {e!r}")
-            try:
-                backend.close()
-            except Exception as e:
-                logger.error(f"PebbleBridge close error: {e!r}")
+            self._close_backend_instance(backend, stop_app=stop_app)
 
     def _send_once(self, *, full: bool = False) -> None:
         with self._lock:
@@ -702,7 +736,7 @@ class PebbleBridge:
         try:
             while self._worker_is_active():
                 try:
-                    if not self._backend:
+                    if self._backend_for_worker() is None:
                         # AppMessages sent to a stopped watchapp are rejected;
                         # launch it only after the session bridge is started.
                         self._connect_and_launch()

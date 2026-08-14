@@ -197,7 +197,7 @@ class FitnessAppUI(Adw.Application):
                     self._reconcile_shutdown_finalization(recorder)
         if self.pebble_bridge:
             with contextlib.suppress(Exception):
-                self.pebble_bridge.stop()
+                self.pebble_bridge.stop(wait=False)
 
     def _on_close_request(self, *_a: object) -> bool:
         """Request application termination when the main window closes."""
@@ -400,7 +400,7 @@ class FitnessAppUI(Adw.Application):
                 return
 
             with contextlib.suppress(Exception):
-                self.pebble_bridge.stop()
+                self.pebble_bridge.stop(wait=False)
         self.pebble_bridge = None
 
         if not self.app_settings.pebble.enable:

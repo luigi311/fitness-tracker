@@ -559,7 +559,7 @@ def test_restart_during_blocked_connect_isolated_from_late_old_worker(
         connect_count += 1
         if connect_count == 1:
             first_connect_started.set()
-            release_first_connect.wait(timeout=2.0)
+            release_first_connect.wait(timeout=5.0)
             bridge._install_backend(old_backend, "old backend")
             return
         second_connect_started.set()
@@ -624,6 +624,34 @@ def test_stop_requests_app_close_before_backend_disconnect() -> None:
     assert backend.stopped.is_set()
     assert backend.closed.is_set()
     assert backend.calls.index("stop_app") < backend.calls.index("close")
+
+
+def test_nonblocking_stop_runs_backend_teardown_off_caller_thread(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bridge, backend = _bridge_with_backend()
+    teardown_started = threading.Event()
+    release_teardown = threading.Event()
+    teardown_thread_ids: list[int] = []
+
+    def stop_app() -> None:
+        teardown_thread_ids.append(threading.get_ident())
+        teardown_started.set()
+        release_teardown.wait(timeout=2.0)
+        backend.stopped.set()
+
+    monkeypatch.setattr(backend, "stop_app", stop_app)
+    bridge._running = True
+    caller_thread_id = threading.get_ident()
+
+    bridge.stop(wait=False)
+    try:
+        assert teardown_started.wait(timeout=1.0)
+        assert teardown_thread_ids[0] != caller_thread_id
+        assert not backend.closed.is_set()
+    finally:
+        release_teardown.set()
+        assert backend.closed.wait(timeout=1.0)
 
 
 def test_watch_launch_requests_a_full_state_resend(
