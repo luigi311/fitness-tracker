@@ -384,6 +384,9 @@ class FitnessAppUI(Adw.Application):
 
     def apply_pebble_settings(self) -> None:
         """Configure, update, or stop the Pebble bridge for current settings."""
+        tracker = self.__dict__.get("tracker")
+        recording_active = tracker is not None and tracker.recording_active
+
         if self.pebble_bridge:
             # Skip teardown and recreation if no settings change
             if (
@@ -426,6 +429,8 @@ class FitnessAppUI(Adw.Application):
             self.pebble_bridge.update(
                 units=int(self.unit_system == UnitSystem.IMPERIAL),
             )
+            if recording_active:
+                self.pebble_bridge.start()
         except Exception as e:
             self.pebble_bridge = None
             logger.error(e)

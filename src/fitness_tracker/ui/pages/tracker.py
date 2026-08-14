@@ -149,6 +149,11 @@ class TrackerPageUI:
         """Return whether a session page currently owns the recorder profile."""
         return self.session_view is not None and self._session_state is not None
 
+    @property
+    def recording_active(self) -> bool:
+        """Return whether a session is currently recording or paused."""
+        return self._session_state in (SessionState.RUNNING, SessionState.PAUSED)
+
     def _start_workout(
         self,
         workout: Workout,

@@ -51,6 +51,7 @@ class _Backend:
         self.closed = threading.Event()
         self.launched = threading.Event()
         self.stopped = threading.Event()
+        self.calls: list[str] = []
         self.int_types = {
             width: (lambda value, width=width: (width, value)) for width in (8, 16, 32)
         }
@@ -63,12 +64,14 @@ class _Backend:
         self.messages.append(message)
 
     def close(self) -> None:
+        self.calls.append("close")
         self.closed.set()
 
     def launch_app(self) -> None:
         self.launched.set()
 
     def stop_app(self) -> None:
+        self.calls.append("stop_app")
         self.stopped.set()
 
 
@@ -536,6 +539,50 @@ def test_stop_during_connect_closes_late_backend() -> None:
     assert backend.closed.is_set()
 
 
+def test_restart_during_blocked_connect_isolated_from_late_old_worker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bridge = PebbleBridge(
+        "00000000-0000-0000-0000-000000000000",
+        mac="AA:BB:CC:DD:EE:FF",
+    )
+    bridge.update(hr=140)
+    old_backend = _Backend()
+    new_backend = _Backend()
+    first_connect_started = threading.Event()
+    release_first_connect = threading.Event()
+    second_connect_started = threading.Event()
+    connect_count = 0
+
+    def connect() -> None:
+        nonlocal connect_count
+        connect_count += 1
+        if connect_count == 1:
+            first_connect_started.set()
+            release_first_connect.wait(timeout=2.0)
+            bridge._install_backend(old_backend, "old backend")
+            return
+        second_connect_started.set()
+        bridge._install_backend(new_backend, "new backend")
+
+    monkeypatch.setattr(bridge, "_connect", connect)
+    bridge.start()
+
+    assert first_connect_started.wait(timeout=1.0)
+    bridge.stop()
+    bridge.start()
+
+    assert second_connect_started.wait(timeout=1.0)
+    assert new_backend.launched.wait(timeout=1.0)
+    assert not old_backend.launched.is_set()
+
+    release_first_connect.set()
+    assert old_backend.closed.wait(timeout=1.0)
+    assert bridge._backend is new_backend
+
+    bridge.stop()
+
+
 def test_reconnect_requests_a_full_state_resend(monkeypatch: pytest.MonkeyPatch) -> None:
     bridge = PebbleBridge(
         "00000000-0000-0000-0000-000000000000",
@@ -576,6 +623,7 @@ def test_stop_requests_app_close_before_backend_disconnect() -> None:
 
     assert backend.stopped.is_set()
     assert backend.closed.is_set()
+    assert backend.calls.index("stop_app") < backend.calls.index("close")
 
 
 def test_watch_launch_requests_a_full_state_resend(

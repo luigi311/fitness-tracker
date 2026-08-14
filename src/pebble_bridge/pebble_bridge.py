@@ -400,6 +400,8 @@ class PebbleBridge:
         self.use_emulator = use_emulator
         self.port = port
         self._lock = threading.Lock()
+        self._lifecycle_lock = threading.Lock()
+        self._worker_context = threading.local()
         self._wake = threading.Event()
         self._state: dict[int, int] = {}  # latest metrics, key -> plain int
         self._dirty_keys: set[int] = set()
@@ -407,25 +409,48 @@ class PebbleBridge:
         self._running = False
         self._t: threading.Thread | None = None
         self._backend: _CobbleBackend | _Libpebble2Backend | None = None
+        self._backend_owner: threading.Event | None = None
+        self._worker_stop_event: threading.Event | None = None
 
     def start(self) -> None:
         """Start the session bridge and bring the watchapp to the foreground."""
         mode = "Emulator" if self.use_emulator else "Watch"
         logger.debug(f"Starting pebble bridge ({mode})")
-        self._running = True
-        self._t = threading.Thread(target=self._loop, daemon=True)
-        self._t.start()
+        with self._lifecycle_lock:
+            previous = self._t
+            if (
+                previous is not None
+                and previous.is_alive()
+                and self._worker_stop_event is not None
+                and not self._worker_stop_event.is_set()
+            ):
+                logger.debug("Pebble bridge is already running")
+                return
+            stop_event = threading.Event()
+            self._worker_stop_event = stop_event
+            self._running = True
+            self._t = threading.Thread(
+                target=self._loop,
+                args=(stop_event,),
+                daemon=True,
+            )
+            self._t.start()
 
     def stop(self) -> None:
         """Close the watchapp, stop the background thread, and disconnect."""
-        self._running = False
+        with self._lifecycle_lock:
+            self._running = False
+            if self._worker_stop_event is not None:
+                self._worker_stop_event.set()
+            thread = self._t
         self._wake.set()
         self._close_backend(stop_app=True)
-        thread = self._t
         if thread:
             thread.join(timeout=1.0)
             if not thread.is_alive():
-                self._t = None
+                with self._lifecycle_lock:
+                    if self._t is thread:
+                        self._t = None
 
     def _update_metrics(
         self,
@@ -526,6 +551,43 @@ class PebbleBridge:
             self._dirty_keys.add(key)
         self._state[key] = value
 
+    def _worker_owner(self) -> threading.Event | None:
+        return getattr(self._worker_context, "stop_event", None)
+
+    def _worker_is_active(self) -> bool:
+        stop_event = self._worker_owner()
+        if stop_event is not None:
+            return not stop_event.is_set()
+        return self._running
+
+    def _backend_for_worker(
+        self,
+    ) -> _CobbleBackend | _Libpebble2Backend | None:
+        owner = self._worker_owner()
+        with self._lifecycle_lock:
+            if self._backend is None:
+                return None
+            if owner is not None and self._backend_owner is not owner:
+                return None
+            return self._backend
+
+    def _install_backend(
+        self,
+        backend: _CobbleBackend | _Libpebble2Backend,
+        connection_message: str,
+    ) -> None:
+        owner = self._worker_owner()
+        with self._lifecycle_lock:
+            active = owner is None or not owner.is_set()
+            if active:
+                self._backend = backend
+                self._backend_owner = owner
+        if active:
+            logger.success(connection_message)
+            return
+        with contextlib.suppress(Exception):
+            backend.close()
+
     def _connect(self) -> None:
         if self._backend:
             logger.debug("Already connected")
@@ -540,8 +602,7 @@ class PebbleBridge:
                 port=self.port,
             )
             backend.connect()
-            self._backend = backend
-            logger.success("Connected to Pebble (emulator)")
+            self._install_backend(backend, "Connected to Pebble (emulator)")
             return
 
         if not self.mac:
@@ -564,8 +625,7 @@ class PebbleBridge:
                 backend.close()
 
             else:
-                self._backend = backend
-                logger.success("Connected to Pebble via cobbled daemon")
+                self._install_backend(backend, "Connected to Pebble via cobbled daemon")
                 return
         else:
             logger.debug(
@@ -575,11 +635,10 @@ class PebbleBridge:
         # 2. Serial fallback (libpebble2).
         backend = _Libpebble2Backend(self.app_uuid, self._on_app_message, mac=self.mac)
         backend.connect()
-        self._backend = backend
-        logger.success("Connected to Pebble over Bluetooth serial")
+        self._install_backend(backend, "Connected to Pebble over Bluetooth serial")
 
     def _launch_app(self) -> None:
-        backend = self._backend
+        backend = self._backend_for_worker()
         if backend is None:
             return
         backend.launch_app()
@@ -587,11 +646,16 @@ class PebbleBridge:
     def _connect_and_launch(self) -> None:
         """Connect and launch unless stop was requested during connection."""
         self._connect()
-        if self._running:
+        if self._worker_is_active():
             self._launch_app()
 
     def _close_backend(self, *, stop_app: bool = False) -> None:
-        backend, self._backend = self._backend, None
+        owner = self._worker_owner()
+        with self._lifecycle_lock:
+            if owner is not None and self._backend_owner is not owner:
+                return
+            backend, self._backend = self._backend, None
+            self._backend_owner = None
         if backend:
             if stop_app:
                 try:
@@ -613,7 +677,7 @@ class PebbleBridge:
             if not payload:
                 return
 
-        backend = self._backend
+        backend = self._backend_for_worker()
         if not backend:
             return
 
@@ -631,11 +695,12 @@ class PebbleBridge:
                 if self._state.get(key) == value:
                     self._dirty_keys.discard(key)
 
-    def _loop(self) -> None:
+    def _loop(self, stop_event: threading.Event | None = None) -> None:
+        self._worker_context.stop_event = stop_event
         backoff = 1.0
         full_after_reconnect = False
         try:
-            while self._running:
+            while self._worker_is_active():
                 try:
                     if not self._backend:
                         # AppMessages sent to a stopped watchapp are rejected;
@@ -645,7 +710,7 @@ class PebbleBridge:
                         backoff = 1.0
                     # Re-check after a (possibly slow) connect: if stop() fired
                     # while we were connecting, don't push a final stale frame.
-                    if not self._running:
+                    if not self._worker_is_active():
                         break
                     with self._lock:
                         request_id = self._full_request_id
@@ -655,11 +720,11 @@ class PebbleBridge:
                             if self._full_request_id == request_id:
                                 self._full_request_id = 0
                     full_after_reconnect = False
-                    if self._running:
+                    if self._worker_is_active():
                         self._wake.wait(0.5)
                         self._wake.clear()
                 except Exception as e:
-                    if not self._running:
+                    if not self._worker_is_active():
                         break
                     logger.error(f"PebbleBridge error: {e!r}")
                     self._close_backend()
@@ -667,4 +732,4 @@ class PebbleBridge:
                         self._wake.clear()
                     backoff = min(10.0, backoff * 2)
         finally:
-            self._close_backend(stop_app=not self._running)
+            self._close_backend(stop_app=not self._worker_is_active())
