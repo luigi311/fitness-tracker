@@ -57,6 +57,15 @@ def _tz_aware_localize(dt: datetime.datetime) -> datetime.datetime:
     return dt.astimezone()
 
 
+def _configure_activity_title(title: Gtk.Label) -> None:
+    """Configure an activity title to yield horizontal space on narrow screens."""
+    title.add_css_class("title-3")
+    title.set_single_line_mode(True)
+    title.set_ellipsize(Pango.EllipsizeMode.END)
+    title.set_hexpand(True)
+    title.set_xalign(0)
+
+
 @dataclass(frozen=True)
 class _HistoryReloadResult:
     filter_id: str
@@ -260,7 +269,6 @@ class HistoryPageUI:
         ctrl_cmp.append(metric_combo)
         compare_box.append(ctrl_cmp)
 
-        compare_box.append(Gtk.Label(label="Compare selected activities (toggle on each card)."))
         cmp_frame = Gtk.Frame()
         self._cmp_chart = CompareChart()
         self._cmp_ax = self._cmp_chart.axes
@@ -331,8 +339,11 @@ class HistoryPageUI:
     def _build_summary_header(self) -> Gtk.Widget:
         frame = Gtk.Frame()
         grid = Gtk.Grid(column_spacing=6, row_spacing=6)
-        for m in ("top", "bottom", "start", "end"):
-            getattr(grid, f"set_margin_{m}")(6)
+        for margin in ("top", "bottom"):
+            getattr(grid, f"set_margin_{margin}")(6)
+
+        for margin in ("start", "end"):
+            getattr(grid, f"set_margin_{margin}")(4)
 
         self.lbl_scope = Gtk.Label(label="In view:")
         self.lbl_scope.set_xalign(0)
@@ -547,9 +558,7 @@ class HistoryPageUI:
         head = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         local_start = _tz_aware_localize(stats.start_time)
         title = Gtk.Label(label=local_start.strftime("%a, %b %d • %I:%M %p"))
-        title.add_css_class("title-3")
-        title.set_hexpand(True)
-        title.set_xalign(0)
+        _configure_activity_title(title)
         head.append(title)
 
         # Export button
@@ -657,8 +666,10 @@ class HistoryPageUI:
         row = Gtk.ListBoxRow()
         frame = Gtk.Frame()
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
-        for margin in ("top", "bottom", "start", "end"):
+        for margin in ("top", "bottom"):
             getattr(box, f"set_margin_{margin}")(8)
+        for margin in ("start", "end"):
+            getattr(box, f"set_margin_{margin}")(4)
 
         self._append_activity_header(box, stats)
         self._append_activity_metrics(box, stats, sport)

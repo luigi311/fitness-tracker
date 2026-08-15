@@ -110,6 +110,15 @@ def test_history_ascent_uses_selected_unit_system() -> None:
     assert "↑ 0.62 mi" in parts
 
 
+def test_history_activity_title_can_shrink_in_narrow_layout() -> None:
+    title = Mock()
+
+    history_module._configure_activity_title(title)
+
+    assert title.set_single_line_mode.call_args.args == (True,)
+    title.set_ellipsize.assert_called_once_with(history_module.Pango.EllipsizeMode.END)
+
+
 def test_history_backfill_discard_and_duplicate_release_reload_guard() -> None:
     page = HistoryPageUI.__new__(HistoryPageUI)
     jobs = Mock()
