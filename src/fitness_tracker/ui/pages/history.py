@@ -550,6 +550,8 @@ class HistoryPageUI:
         local_start = _tz_aware_localize(stats.start_time)
         title = Gtk.Label(label=local_start.strftime("%a, %b %d • %I:%M %p"))
         title.add_css_class("title-3")
+        title.set_single_line_mode(True)
+        title.set_ellipsize(Pango.EllipsizeMode.END)
         title.set_hexpand(True)
         title.set_xalign(0)
         head.append(title)

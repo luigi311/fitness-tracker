@@ -110,6 +110,25 @@ def test_history_ascent_uses_selected_unit_system() -> None:
     assert "↑ 0.62 mi" in parts
 
 
+def test_history_activity_title_can_shrink_in_narrow_layout() -> None:
+    page = HistoryPageUI.__new__(HistoryPageUI)
+    page.selected_ids = set()
+    page._on_export_clicked = Mock()
+    page._on_select_toggle = Mock()
+    stats = SimpleNamespace(
+        activity_id=7,
+        start_time=datetime.datetime(2026, 8, 15, 11, 36, tzinfo=datetime.UTC),
+    )
+    box = history_module.Gtk.Box()
+
+    page._append_activity_header(box, stats)
+
+    header = box.get_first_child()
+    title = header.get_first_child()
+    assert title.get_single_line_mode()
+    assert title.get_ellipsize() == history_module.Pango.EllipsizeMode.END
+
+
 def test_history_backfill_discard_and_duplicate_release_reload_guard() -> None:
     page = HistoryPageUI.__new__(HistoryPageUI)
     jobs = Mock()
