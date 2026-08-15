@@ -31,8 +31,8 @@ class MetricTile(Gtk.Frame):
         inner = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         inner.set_margin_top(4)
         inner.set_margin_bottom(4)
-        inner.set_margin_start(8)
-        inner.set_margin_end(8)
+        inner.set_margin_start(4)
+        inner.set_margin_end(4)
 
         content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         self.value = Gtk.Label(label="0")

@@ -41,8 +41,8 @@ class InclineControl(Gtk.Frame):
         outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
         outer.set_margin_top(8)
         outer.set_margin_bottom(8)
-        outer.set_margin_start(8)
-        outer.set_margin_end(8)
+        outer.set_margin_start(4)
+        outer.set_margin_end(4)
 
         lbl_title = Gtk.Label(label="⛰  Incline")
         lbl_title.add_css_class("caption")

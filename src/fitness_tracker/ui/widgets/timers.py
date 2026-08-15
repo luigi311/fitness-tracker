@@ -19,8 +19,8 @@ class SessionTimer(Gtk.Frame):
             box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
             box.set_margin_top(16)
             box.set_margin_bottom(16)
-            box.set_margin_start(16)
-            box.set_margin_end(16)
+            box.set_margin_start(4)
+            box.set_margin_end(4)
             box.set_halign(Gtk.Align.CENTER)
 
             self.value = Gtk.Label(label="00:00:00")

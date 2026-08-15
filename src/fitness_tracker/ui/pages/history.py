@@ -260,7 +260,6 @@ class HistoryPageUI:
         ctrl_cmp.append(metric_combo)
         compare_box.append(ctrl_cmp)
 
-        compare_box.append(Gtk.Label(label="Compare selected activities (toggle on each card)."))
         cmp_frame = Gtk.Frame()
         self._cmp_chart = CompareChart()
         self._cmp_ax = self._cmp_chart.axes
@@ -331,8 +330,11 @@ class HistoryPageUI:
     def _build_summary_header(self) -> Gtk.Widget:
         frame = Gtk.Frame()
         grid = Gtk.Grid(column_spacing=6, row_spacing=6)
-        for m in ("top", "bottom", "start", "end"):
-            getattr(grid, f"set_margin_{m}")(6)
+        for margin in ("top", "bottom"):
+            getattr(grid, f"set_margin_{margin}")(6)
+
+        for margin in ("start", "end"):
+            getattr(grid, f"set_margin_{margin}")(4)
 
         self.lbl_scope = Gtk.Label(label="In view:")
         self.lbl_scope.set_xalign(0)
@@ -657,8 +659,10 @@ class HistoryPageUI:
         row = Gtk.ListBoxRow()
         frame = Gtk.Frame()
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
-        for margin in ("top", "bottom", "start", "end"):
+        for margin in ("top", "bottom"):
             getattr(box, f"set_margin_{margin}")(8)
+        for margin in ("start", "end"):
+            getattr(box, f"set_margin_{margin}")(4)
 
         self._append_activity_header(box, stats)
         self._append_activity_metrics(box, stats, sport)

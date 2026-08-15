@@ -76,8 +76,11 @@ class TrainerTargetControl(Gtk.Frame):
         self._mode_buttons = {}
 
         outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
-        for margin in ("top", "bottom", "start", "end"):
+        for margin in ("top", "bottom"):
             getattr(outer, f"set_margin_{margin}")(8)
+
+        for margin in ("start", "end"):
+            getattr(outer, f"set_margin_{margin}")(4)
 
         if len(available_modes) > 1:
             mode_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
