@@ -370,17 +370,35 @@ class FitnessAppUI(Adw.Application):
 
         title = f"Workout step {step_number} of {step_count}"
         self.show_toast(f"{title}: {target_text}")
-        notification = Gio.Notification.new(title)
-        notification.set_body(target_text)
-        self.send_notification("workout-step-change", notification)
+        self._send_background_notification(
+            "workout-step-change",
+            title,
+            target_text,
+        )
 
     def show_workout_complete_notification(self) -> None:
-        """Show in-app and desktop notifications when a workout completes."""
+        """Announce completion in-app and, when unfocused, on the desktop."""
         message = "✅ Workout complete. Continuing in Free Run…"
         self.show_toast(message)
-        notification = Gio.Notification.new("Workout complete")
-        notification.set_body("Continuing in Free Run")
-        self.send_notification("workout-complete", notification)
+        self._send_background_notification(
+            "workout-complete",
+            "Workout complete",
+            "Continuing in Free Run",
+        )
+
+    def _send_background_notification(
+        self,
+        notification_id: str,
+        title: str,
+        body: str,
+    ) -> None:
+        """Send a desktop notification only when the main window is not active."""
+        if self.window is not None and self.window.is_active():
+            return
+
+        notification = Gio.Notification.new(title)
+        notification.set_body(body)
+        self.send_notification(notification_id, notification)
 
     def apply_pebble_settings(self) -> None:
         """Configure, update, or stop the Pebble bridge for current settings."""
