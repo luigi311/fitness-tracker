@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gzip
 from datetime import date, datetime  # noqa: TC003 - Pydantic resolves these at runtime
 from typing import TYPE_CHECKING, Protocol
 
@@ -148,12 +149,13 @@ class IntervalsICUClient:
             ) from exc
 
     def upload_tcx(self, name: str, data: bytes) -> IcuUploadResponse:
-        """Upload TCX bytes and validate the returned activity identifier."""
+        """Gzip TCX bytes, upload them, and validate the activity identifier."""
+        compressed = gzip.compress(data, compresslevel=6, mtime=0)
         response = self._request(
             self._transport.post,
             f"{_API_BASE}/athlete/{self.credentials.athlete_id}/activities",
             auth=self._auth(),
-            files={"file": (f"{name}.tcx", data, "application/vnd.garmin.tcx+xml")},
+            files={"file": (f"{name}.tcx.gz", compressed, "application/gzip")},
             timeout=60,
         )
         return IcuUploadResponse.from_response(response)
