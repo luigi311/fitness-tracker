@@ -57,6 +57,15 @@ def _tz_aware_localize(dt: datetime.datetime) -> datetime.datetime:
     return dt.astimezone()
 
 
+def _configure_activity_title(title: Gtk.Label) -> None:
+    """Configure an activity title to yield horizontal space on narrow screens."""
+    title.add_css_class("title-3")
+    title.set_single_line_mode(True)
+    title.set_ellipsize(Pango.EllipsizeMode.END)
+    title.set_hexpand(True)
+    title.set_xalign(0)
+
+
 @dataclass(frozen=True)
 class _HistoryReloadResult:
     filter_id: str
@@ -549,11 +558,7 @@ class HistoryPageUI:
         head = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         local_start = _tz_aware_localize(stats.start_time)
         title = Gtk.Label(label=local_start.strftime("%a, %b %d • %I:%M %p"))
-        title.add_css_class("title-3")
-        title.set_single_line_mode(True)
-        title.set_ellipsize(Pango.EllipsizeMode.END)
-        title.set_hexpand(True)
-        title.set_xalign(0)
+        _configure_activity_title(title)
         head.append(title)
 
         # Export button
