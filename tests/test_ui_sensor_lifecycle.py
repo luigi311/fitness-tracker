@@ -206,6 +206,7 @@ class SensorSettingsLifecycleTests(unittest.TestCase):
         app.send_notification = lambda notification_id, notification: notifications.append(
             (notification_id, notification),
         )
+        app.window = types.SimpleNamespace(is_active=lambda: False)
         app.pebble_bridge = types.SimpleNamespace(
             update=lambda **values: pebble_steps.append(values["workout_step"]),
         )
@@ -232,6 +233,24 @@ class SensorSettingsLifecycleTests(unittest.TestCase):
         app.show_workout_step_notification(1, 5, "Target: 100 W", announce=False)
 
         self.assertEqual(pebble_steps, [0])
+
+    def test_workout_step_desktop_notification_is_suppressed_in_foreground(self):
+        app = FitnessAppUI.__new__(FitnessAppUI)
+        toasts = []
+        pebble_steps = []
+        app.window = types.SimpleNamespace(is_active=lambda: True)
+        app.show_toast = toasts.append
+        app.send_notification = lambda *_args: self.fail(
+            "Foreground step change should not send a desktop notification",
+        )
+        app.pebble_bridge = types.SimpleNamespace(
+            update=lambda **values: pebble_steps.append(values["workout_step"]),
+        )
+
+        app.show_workout_step_notification(2, 5, "Target: 150 - 175 W")
+
+        self.assertEqual(pebble_steps, [1])
+        self.assertEqual(toasts, ["Workout step 2 of 5: Target: 150 - 175 W"])
 
     def test_changed_pebble_settings_restart_bridge_for_active_recording(self):
         app = FitnessAppUI.__new__(FitnessAppUI)
@@ -291,6 +310,7 @@ class SensorSettingsLifecycleTests(unittest.TestCase):
         app.send_notification = lambda notification_id, notification: notifications.append(
             (notification_id, notification),
         )
+        app.window = types.SimpleNamespace(is_active=lambda: False)
 
         app.show_workout_complete_notification()
 
@@ -298,6 +318,19 @@ class SensorSettingsLifecycleTests(unittest.TestCase):
         self.assertEqual(notifications[0][0], "workout-complete")
         self.assertEqual(notifications[0][1].title, "Workout complete")
         self.assertEqual(notifications[0][1].body, "Continuing in Free Run")
+
+    def test_workout_complete_desktop_notification_is_suppressed_in_foreground(self):
+        app = FitnessAppUI.__new__(FitnessAppUI)
+        toasts = []
+        app.window = types.SimpleNamespace(is_active=lambda: True)
+        app.show_toast = toasts.append
+        app.send_notification = lambda *_args: self.fail(
+            "Foreground completion should not send a desktop notification",
+        )
+
+        app.show_workout_complete_notification()
+
+        self.assertEqual(toasts, ["✅ Workout complete. Continuing in Free Run…"])
 
     def test_pending_finalization_toast_retries_and_refreshes_history(self):
         app = FitnessAppUI.__new__(FitnessAppUI)
