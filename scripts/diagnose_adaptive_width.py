@@ -11,6 +11,15 @@ from fitness_tracker.ui.app import FitnessAppUI  # noqa: E402
 from gi.repository import Gio, GLib, Gtk  # noqa: E402  # ty:ignore[unresolved-import]
 
 
+def _non_negative_int(value: str) -> int:
+    """Parse an integer duration that is safe to pass to GLib timeouts."""
+    duration = int(value)
+    if duration < 0:
+        message = "duration must be non-negative"
+        raise argparse.ArgumentTypeError(message)
+    return duration
+
+
 class AdaptiveWidthDiagnosticApp(FitnessAppUI):
     """Run the real adaptive preview with all but one application page removed."""
 
@@ -99,7 +108,7 @@ def main() -> None:
     """Parse the page selection and run the diagnostic application."""
     parser = argparse.ArgumentParser()
     parser.add_argument("page", choices=("all", "tracker", "history", "settings"))
-    parser.add_argument("--seconds", type=int, default=2)
+    parser.add_argument("--seconds", type=_non_negative_int, default=2)
     args = parser.parse_args()
 
     app = AdaptiveWidthDiagnosticApp(args.page, args.seconds)
