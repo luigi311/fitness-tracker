@@ -423,7 +423,7 @@ class SessionView(Gtk.Box):
         pw: np.ndarray,
         hr_rgb: tuple[float, float, float] = (1, 1, 1),
     ) -> None:
-        """Update the continuous session chart."""
+        """Update chart data; the tracker controls the redraw cadence."""
         self.live_chart.line_hr.set_data(x_secs, hr)
         self.live_chart.line_pw.set_data(x_secs, pw)
         self.live_chart.line_hr.set_color(hr_rgb)
@@ -434,7 +434,6 @@ class SessionView(Gtk.Box):
             self.live_chart.power_axes.set_ylim(max(0.0, pmin - pad), pmax + pad)
         else:
             self.live_chart.power_axes.set_ylim(0, 500)
-        self.live_chart.canvas.draw_idle()
 
     def refresh_theme(self) -> None:
         """Restyle the continuous chart without discarding its data."""
