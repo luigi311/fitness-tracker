@@ -64,6 +64,8 @@ if TYPE_CHECKING:
 
 # Pebble bridge workout constants
 TGT_NONE = 0
+_UI_UPDATE_INTERVAL_MS = 500  # 2 Hz
+_UI_UPDATE_INTERVAL_S = _UI_UPDATE_INTERVAL_MS / 1000.0
 
 
 class TrackerPageUI:
@@ -139,7 +141,8 @@ class TrackerPageUI:
         nav.add(self.mode_page)
 
         if self._status_timer_id is None:
-            self._status_timer_id = GLib.timeout_add_seconds(1, self._tick_status)
+            # Preview uses this timer to consume dirty sensor values and render them.
+            self._status_timer_id = GLib.timeout_add(_UI_UPDATE_INTERVAL_MS, self._tick_status)
 
         self.nav = nav
         return self.nav
@@ -227,7 +230,7 @@ class TrackerPageUI:
 
     def _tick_timer(self) -> bool:
         """
-        1 Hz UI timer:
+        UI timer:
         - updates the free-run timer label
         - updates workout timers / guidance / completion
         Independent of sensor sample timing.
@@ -347,7 +350,7 @@ class TrackerPageUI:
         # If test mode, we still feed preview samples, but we gate timers/progress
         if self.app.test_mode and self._test_source is None:
             self._test_simulator = self._new_test_simulator()
-            self._test_source = GLib.timeout_add(1000, self._tick_test)
+            self._test_source = GLib.timeout_add(_UI_UPDATE_INTERVAL_MS, self._tick_test)
 
     def _show_workout_page(
         self,
@@ -398,7 +401,7 @@ class TrackerPageUI:
 
         if self.app.test_mode and self._test_source is None:
             self._test_simulator = self._new_test_simulator()
-            self._test_source = GLib.timeout_add(1000, self._tick_test)
+            self._test_source = GLib.timeout_add(_UI_UPDATE_INTERVAL_MS, self._tick_test)
 
     def _on_sensor_profile_ready(self, view: SessionView) -> None:
         """Release the session start gate when its exact recorder is installed."""
@@ -494,9 +497,9 @@ class TrackerPageUI:
 
         self._maybe_notify_distance_waiting()
 
-        # start 1 Hz UI timer (decoupled from sensors)
+        # Start the UI timer (decoupled from sensors).
         if self._timer_source_id is None:
-            self._timer_source_id = GLib.timeout_add_seconds(1, self._tick_timer)
+            self._timer_source_id = GLib.timeout_add(_UI_UPDATE_INTERVAL_MS, self._tick_timer)
 
         if self.session_view:
             self.session_view.set_state(SessionState.RUNNING)
@@ -975,7 +978,7 @@ class TrackerPageUI:
             )
 
         reading = self._test_simulator.tick(
-            1.0,
+            _UI_UPDATE_INTERVAL_S,
             target,
             active=self._session_state in (SessionState.RUNNING, SessionState.PAUSED),
         )
