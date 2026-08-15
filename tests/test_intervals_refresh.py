@@ -1,5 +1,6 @@
 # ruff: noqa: EM101, PLR2004, TRY003
 
+import gzip
 import json
 import os
 from datetime import date
@@ -276,6 +277,23 @@ def test_upload_response_uses_first_list_item() -> None:
     )
 
     assert result.provider_id == "42"
+
+
+def test_upload_tcx_uses_deterministic_gzip_payload() -> None:
+    calls: list[dict[str, Any]] = []
+    client = IntervalsICUClient(
+        IntervalsICUCredentials(athlete_id="athlete", api_key="key"),
+        transport=_Transport([{"id": 42}], calls),
+    )
+    payload = b"<TrainingCenterDatabase>activity</TrainingCenterDatabase>"
+
+    result = client.upload_tcx("Run_2026-01-02_08-00", payload)
+
+    assert result.provider_id == "42"
+    filename, compressed, content_type = calls[0]["files"]["file"]
+    assert filename == "Run_2026-01-02_08-00.tcx.gz"
+    assert content_type == "application/gzip"
+    assert gzip.decompress(compressed) == payload
 
 
 def test_transport_error_does_not_expose_request_url() -> None:
