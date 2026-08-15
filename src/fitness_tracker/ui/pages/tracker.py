@@ -66,6 +66,7 @@ if TYPE_CHECKING:
 TGT_NONE = 0
 _UI_UPDATE_INTERVAL_MS = 500  # 2 Hz
 _UI_UPDATE_INTERVAL_S = _UI_UPDATE_INTERVAL_MS / 1000.0
+_CHART_UPDATE_INTERVAL_MS = 1000  # 1 Hz; Matplotlib redraws are intentionally slower
 
 
 class TrackerPageUI:
@@ -101,6 +102,7 @@ class TrackerPageUI:
 
         # status updater
         self._status_timer_id: int | None = None
+        self._chart_timer_id: int | None = None
 
         # workout state
         self._workout_session: (
@@ -265,6 +267,22 @@ class TrackerPageUI:
 
         return True
 
+    def _start_chart_timer(self) -> None:
+        """Start the lower-frequency chart redraw timer for an open session."""
+        if self._chart_timer_id is None:
+            self._chart_timer_id = GLib.timeout_add(
+                _CHART_UPDATE_INTERVAL_MS,
+                self._tick_chart,
+            )
+
+    def _tick_chart(self) -> bool:
+        """Redraw the chart independently of the 2 Hz metric updates."""
+        if self._session_state is None or self.session_view is None:
+            self._chart_timer_id = None
+            return False
+        self.session_view.redraw()
+        return True
+
     # -------------------------
     #  Page show / run control
     # -------------------------
@@ -332,6 +350,7 @@ class TrackerPageUI:
             workout=False,
         )
         self.session_view = view
+        self._start_chart_timer()
         self._push(self.session_view, title)
 
         self.app.apply_sensor_settings(
@@ -378,6 +397,7 @@ class TrackerPageUI:
             workout=True,
         )
         self.session_view = view
+        self._start_chart_timer()
         if self.app.pebble_bridge:
             self.app.pebble_bridge.update(
                 workout_outdoor=environment is Environment.OUTDOOR,
@@ -527,6 +547,9 @@ class TrackerPageUI:
             if self._timer_source_id is not None:
                 GLib.source_remove(self._timer_source_id)
                 self._timer_source_id = None
+            if self._chart_timer_id is not None:
+                GLib.source_remove(self._chart_timer_id)
+                self._chart_timer_id = None
 
         # Always stop recording after attempting trainer neutralization.
         if recorder:
