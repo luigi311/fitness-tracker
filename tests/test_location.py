@@ -240,7 +240,7 @@ def test_spike_filter_accepts_normal_running_and_cycling_motion(
     ("previous_accuracy_m", "current_accuracy_m"),
     [(None, 5.0), (5.0, None), (None, None)],
 )
-def test_spike_filter_rejects_fast_segment_when_accuracy_is_missing(
+def test_spike_filter_keeps_fast_segment_when_accuracy_is_missing(
     previous_accuracy_m: float | None,
     current_accuracy_m: float | None,
 ) -> None:
@@ -249,14 +249,14 @@ def test_spike_filter_rejects_fast_segment_when_accuracy_is_missing(
     max_speed_mps = max_speed_mps_for_sport(SportTypesEnum.running)
     location_filter = LocationFilter(LocationPolicy.outdoor(), max_speed_mps=max_speed_mps)
 
-    assert not is_plausible_motion(
+    assert is_plausible_motion(
         previous,
         current,
         1_000,
         max_speed_mps=max_speed_mps,
     )
     assert location_filter.accept(previous, 0) == previous
-    assert location_filter.accept(current, 1_000) is None
+    assert location_filter.accept(current, 1_000) == current
 
 
 def test_spike_filter_keeps_high_speed_fix_when_accuracy_circles_overlap() -> None:
@@ -352,10 +352,10 @@ def test_fake_location_source_filters_outdoor_spikes(fake_location_source) -> No
             received.append,
             lambda _state, _detail: None,
         )
-        source.emit_fix(_fix(0.0, 0.0), timestamp_ms=0)
-        source.emit_fix(_fix(0.1, 0.0), timestamp_ms=1_000)
+        source.emit_fix(_fix(0.0, 0.0, accuracy_m=5.0), timestamp_ms=0)
+        source.emit_fix(_fix(0.1, 0.0, accuracy_m=5.0), timestamp_ms=1_000)
         await source.stop()
 
     asyncio.run(exercise())
 
-    assert received == [_fix(0.0, 0.0)]
+    assert received == [_fix(0.0, 0.0, accuracy_m=5.0)]

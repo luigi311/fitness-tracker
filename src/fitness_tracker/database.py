@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from functools import cache, partial
 from pathlib import Path
 from threading import Lock
-from typing import Any
+from typing import Any, TypedDict
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
@@ -42,6 +42,7 @@ from fitness_tracker.data.models import (
     ActivityUpload,
     CyclingMetrics,
     HeartRate,
+    LocationPoint,
     RunningMetrics,
 )
 from fitness_tracker.data.repositories import ActivityRepository, SqlAlchemyActivityRepository
@@ -51,15 +52,79 @@ from fitness_tracker.data.sqlite_files import (
     sqlite_database_path,
 )
 from fitness_tracker.data.sync import DatabaseSynchronizer
+from fitness_tracker.hardware.location import LocationFix
 
 MIGRATION_ATTEMPT_RETENTION = 3
 _REQUIRED_COLUMNS = (
+    ("activities", "environment"),
     ("running_metrics", "incline_percent"),
     ("cycling_metrics", "incline_percent"),
     ("running_metrics", "altitude_m"),
     ("cycling_metrics", "altitude_m"),
     ("activity_uploads", "updated_at"),
 )
+_REQUIRED_LOCATION_COLUMNS = (
+    "id",
+    "activity_id",
+    "timestamp_ms",
+    "latitude_deg",
+    "longitude_deg",
+    "accuracy_m",
+    "altitude_m",
+    "speed_mps",
+    "heading_deg",
+    "source_time_utc",
+)
+
+
+class _LocationPointValues(TypedDict):
+    """Plain values retained while a location batch awaits persistence."""
+
+    activity_id: int
+    timestamp_ms: int
+    latitude_deg: float
+    longitude_deg: float
+    accuracy_m: float | None
+    altitude_m: float | None
+    speed_mps: float | None
+    heading_deg: float | None
+    source_time_utc: datetime | None
+
+
+class _HeartRateValues(TypedDict):
+    """Plain values retained while a heart-rate batch awaits persistence."""
+
+    activity_id: int
+    timestamp_ms: int
+    bpm: int
+    rr_interval: float | None
+
+
+class _RunningMetricsValues(TypedDict):
+    """Plain values retained while a running batch awaits persistence."""
+
+    activity_id: int
+    timestamp_ms: int
+    speed_mps: float | None
+    cadence_spm: int | None
+    stride_length_m: float | None
+    total_distance_m: float | None
+    power_watts: float | None
+    incline_percent: float | None
+    altitude_m: float | None
+
+
+class _CyclingMetricsValues(TypedDict):
+    """Plain values retained while a cycling batch awaits persistence."""
+
+    activity_id: int
+    timestamp_ms: int
+    speed_mps: float | None
+    cadence_rpm: float | None
+    total_distance_m: float | None
+    power_watts: float | None
+    incline_percent: float | None
+    altitude_m: float | None
 
 
 def _build_alembic_config() -> Config:
@@ -117,9 +182,10 @@ class DatabaseManager:
 
         # staging area for batching
         self._pending_lock = Lock()
-        self._pending_hr: list[HeartRate] = []
-        self._pending_run: list[RunningMetrics] = []
-        self._pending_cyc: list[CyclingMetrics] = []
+        self._pending_hr: list[_HeartRateValues] = []
+        self._pending_run: list[_RunningMetricsValues] = []
+        self._pending_cyc: list[_CyclingMetricsValues] = []
+        self._pending_location: list[_LocationPointValues] = []
 
     def _initialize_schema(self, sqlite_database: Path | None) -> None:
         """Prepare the database file, migrate its schema, and secure artifacts."""
@@ -180,12 +246,12 @@ class DatabaseManager:
     def start_activity(self, sport_type: SportTypesEnum, environment: Environment) -> int:
         """Create an activity for ``sport_type`` and return its database ID."""
         environment = Environment(environment)
-        # The activities column is added in Phase 1; validate the boundary now
-        # so callers cannot omit the selected session environment.
-        _ = environment
         with self.Session() as session:
             # store UTC with tzinfo
-            act = Activity(start_time=datetime.now(tz=ZoneInfo("UTC")))
+            act = Activity(
+                start_time=datetime.now(tz=ZoneInfo("UTC")),
+                environment=environment.value,
+            )
             session.add(act)
             session.flush()  # get act.id populated
 
@@ -224,13 +290,12 @@ class DatabaseManager:
         rr: float | None,
     ) -> None:
         """Queue a heart-rate sample for batched persistence."""
-        # collect into pending list
-        hr = HeartRate(
-            activity_id=activity_id,
-            timestamp_ms=timestamp_ms,
-            bpm=bpm,
-            rr_interval=rr,
-        )
+        hr: _HeartRateValues = {
+            "activity_id": activity_id,
+            "timestamp_ms": timestamp_ms,
+            "bpm": bpm,
+            "rr_interval": rr,
+        }
         with self._pending_lock:
             self._pending_hr.append(hr)
 
@@ -245,17 +310,19 @@ class DatabaseManager:
         incline_percent: float | None,
     ) -> None:
         """Queue a running or trainer sample for batched persistence."""
-        rm = RunningMetrics(
-            activity_id=activity_id,
-            timestamp_ms=sample.timestamp_ms,
-            speed_mps=sample.speed_mps,
-            cadence_spm=sample.cadence_spm,
-            stride_length_m=sample.stride_length_m if isinstance(sample, RunningSample) else None,
-            total_distance_m=sample.distance_m,
-            power_watts=sample.power_watts,
-            incline_percent=incline_percent,
-            altitude_m=sample.altitude_m,
-        )
+        rm: _RunningMetricsValues = {
+            "activity_id": activity_id,
+            "timestamp_ms": sample.timestamp_ms,
+            "speed_mps": sample.speed_mps,
+            "cadence_spm": sample.cadence_spm,
+            "stride_length_m": sample.stride_length_m
+            if isinstance(sample, RunningSample)
+            else None,
+            "total_distance_m": sample.distance_m,
+            "power_watts": sample.power_watts,
+            "incline_percent": incline_percent,
+            "altitude_m": sample.altitude_m,
+        }
         with self._pending_lock:
             self._pending_run.append(rm)
             if len(self._pending_run) >= self.BATCH_SIZE:
@@ -268,19 +335,42 @@ class DatabaseManager:
         incline_percent: float | None,
     ) -> None:
         """Queue a cycling or trainer sample for batched persistence."""
-        cm = CyclingMetrics(
-            activity_id=activity_id,
-            timestamp_ms=sample.timestamp_ms,
-            speed_mps=sample.speed_mps,
-            cadence_rpm=sample.cadence_rpm,
-            total_distance_m=sample.distance_m,
-            power_watts=sample.power_watts,
-            incline_percent=incline_percent,
-            altitude_m=sample.altitude_m,
-        )
+        cm: _CyclingMetricsValues = {
+            "activity_id": activity_id,
+            "timestamp_ms": sample.timestamp_ms,
+            "speed_mps": sample.speed_mps,
+            "cadence_rpm": sample.cadence_rpm,
+            "total_distance_m": sample.distance_m,
+            "power_watts": sample.power_watts,
+            "incline_percent": incline_percent,
+            "altitude_m": sample.altitude_m,
+        }
         with self._pending_lock:
             self._pending_cyc.append(cm)
             if len(self._pending_cyc) >= self.BATCH_SIZE:
+                self._flush_pending_locked()
+
+    def insert_location_point(
+        self,
+        activity_id: int,
+        timestamp_ms: int,
+        fix: LocationFix,
+    ) -> None:
+        """Queue an accepted location fix for batched persistence."""
+        location: _LocationPointValues = {
+            "activity_id": activity_id,
+            "timestamp_ms": timestamp_ms,
+            "latitude_deg": fix.latitude_deg,
+            "longitude_deg": fix.longitude_deg,
+            "accuracy_m": fix.accuracy_m,
+            "altitude_m": fix.altitude_m,
+            "speed_mps": fix.speed_mps,
+            "heading_deg": fix.heading_deg,
+            "source_time_utc": fix.source_time_utc,
+        }
+        with self._pending_lock:
+            self._pending_location.append(location)
+            if len(self._pending_location) >= self.BATCH_SIZE:
                 self._flush_pending_locked()
 
     def _flush_pending(self) -> None:
@@ -289,23 +379,33 @@ class DatabaseManager:
 
     def _flush_pending_locked(self) -> None:
         activity_ids = {
-            item.activity_id
-            for pending_items in (self._pending_hr, self._pending_run, self._pending_cyc)
+            item["activity_id"]
+            for pending_items in (
+                self._pending_hr,
+                self._pending_run,
+                self._pending_cyc,
+                self._pending_location,
+            )
             for item in pending_items
         }
         with self.Session() as session:
             if self._pending_hr:
-                session.add_all(self._pending_hr)
+                session.add_all([HeartRate(**values) for values in self._pending_hr])
             if self._pending_run:
-                session.add_all(self._pending_run)
+                session.add_all([RunningMetrics(**values) for values in self._pending_run])
             if self._pending_cyc:
-                session.add_all(self._pending_cyc)
+                session.add_all([CyclingMetrics(**values) for values in self._pending_cyc])
+            if self._pending_location:
+                session.add_all(
+                    [LocationPoint(**location) for location in self._pending_location],
+                )
             self._invalidate_successful_uploads(session, activity_ids)
             session.commit()
 
         self._pending_hr.clear()
         self._pending_run.clear()
         self._pending_cyc.clear()
+        self._pending_location.clear()
 
     @staticmethod
     def _invalidate_successful_uploads(session: Session, activity_ids: set[int]) -> None:
@@ -375,6 +475,15 @@ class DatabaseManager:
             if table not in tables
             or column not in {item["name"] for item in inspector.get_columns(table)}
         ]
+        if "location_points" not in tables:
+            missing.append("location_points table")
+        else:
+            location_columns = {item["name"] for item in inspector.get_columns("location_points")}
+            missing.extend(
+                f"location_points.{column}"
+                for column in _REQUIRED_LOCATION_COLUMNS
+                if column not in location_columns
+            )
         if DatabaseManager._identity_schema_needs_migration(inspector):
             missing.append("activities.public_id/unique identity")
         if "activity_uploads" in tables:

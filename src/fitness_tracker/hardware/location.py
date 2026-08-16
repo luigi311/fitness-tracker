@@ -20,9 +20,6 @@ _MIN_LATITUDE_DEG: Final = -90.0
 _MAX_LATITUDE_DEG: Final = 90.0
 _MIN_LONGITUDE_DEG: Final = -180.0
 _MAX_LONGITUDE_DEG: Final = 180.0
-# Missing accuracy contributes no overlap radius, keeping unknown-accuracy spikes
-# subject to the speed filter while allowing a reported accuracy to rescue a jump.
-_MISSING_ACCURACY_M: Final = 0.0
 # Conservative upper bounds in metres per second for the pure spike filter helper.
 _MAX_SPEED_MPS_BY_SPORT: Final[dict[SportTypesEnum, float]] = {
     SportTypesEnum.running: 12.0,
@@ -269,8 +266,8 @@ def is_plausible_motion(
 ) -> bool:
     """Return whether a position change is plausible for the selected sport.
 
-    A fast segment is rescued only when the two reported accuracy circles can
-    overlap. A missing accuracy is treated as a zero-metre radius.
+    Circle overlap is considered only when both fixes report accuracy. A fast
+    segment with incomplete accuracy data is preserved.
     """
     if isinstance(elapsed_ms, bool) or not isinstance(elapsed_ms, int) or elapsed_ms < 0:
         message = "elapsed_ms must be a nonnegative integer"
@@ -289,13 +286,9 @@ def is_plausible_motion(
     implied_speed_mps = distance_m / (elapsed_ms / 1_000.0)
     if implied_speed_mps <= max_speed:
         return True
-    previous_accuracy_m = (
-        previous.accuracy_m if previous.accuracy_m is not None else _MISSING_ACCURACY_M
-    )
-    current_accuracy_m = (
-        current.accuracy_m if current.accuracy_m is not None else _MISSING_ACCURACY_M
-    )
-    return distance_m <= previous_accuracy_m + current_accuracy_m
+    if previous.accuracy_m is None or current.accuracy_m is None:
+        return True
+    return distance_m <= previous.accuracy_m + current.accuracy_m
 
 
 @dataclass(slots=True)

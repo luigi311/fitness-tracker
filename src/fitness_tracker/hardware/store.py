@@ -6,6 +6,7 @@ from bleaksport.models import CyclingSample, RunningSample, TrainerSample
 
 from fitness_tracker.core.environment import Environment
 from fitness_tracker.core.sports import SportTypesEnum
+from fitness_tracker.hardware.location import LocationFix
 
 
 class RecordingStore(Protocol):
@@ -41,3 +42,11 @@ class RecordingStore(Protocol):
         incline_percent: float | None,
     ) -> None:
         """Persist one normalized cycling measurement."""
+
+    def insert_location_point(
+        self,
+        activity_id: int,
+        timestamp_ms: int,
+        fix: LocationFix,
+    ) -> None:
+        """Persist one accepted location fix."""

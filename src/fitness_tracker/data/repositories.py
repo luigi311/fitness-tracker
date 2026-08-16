@@ -18,6 +18,7 @@ from fitness_tracker.data.models import (
     ActivityUpload,
     CyclingMetrics,
     HeartRate,
+    LocationPoint,
     RunningMetrics,
 )
 
@@ -99,6 +100,10 @@ class ActivityRepository(Protocol):
 
     def list_cycling_metrics(self, activity_id: int) -> list[CyclingMetrics]:
         """List cycling sensor samples ordered by sample time."""
+        ...
+
+    def list_location_points(self, activity_id: int) -> list[LocationPoint]:
+        """List accepted location points ordered by time and row identity."""
         ...
 
     def list_not_uploaded(self, provider: str) -> list[Activity]:
@@ -261,6 +266,16 @@ class SqlAlchemyActivityRepository:
             select(CyclingMetrics)
             .where(CyclingMetrics.activity_id == activity_id)
             .order_by(CyclingMetrics.timestamp_ms)
+        )
+        with self._session_factory() as session:
+            return list(session.scalars(statement).all())
+
+    def list_location_points(self, activity_id: int) -> list[LocationPoint]:
+        """List accepted location points ordered by time and row identity."""
+        statement = (
+            select(LocationPoint)
+            .where(LocationPoint.activity_id == activity_id)
+            .order_by(LocationPoint.timestamp_ms, LocationPoint.id)
         )
         with self._session_factory() as session:
             return list(session.scalars(statement).all())

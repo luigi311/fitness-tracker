@@ -17,6 +17,7 @@ from fitness_tracker.data.models import (
     ActivityUpload,
     CyclingMetrics,
     HeartRate,
+    LocationPoint,
     RunningMetrics,
 )
 from fitness_tracker.data.sqlite_files import (
@@ -26,9 +27,9 @@ from fitness_tracker.data.sqlite_files import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Hashable
 
-DATABASE_MODEL = type[HeartRate] | type[RunningMetrics] | type[CyclingMetrics]
+DATABASE_MODEL = type[HeartRate] | type[RunningMetrics] | type[CyclingMetrics] | type[LocationPoint]
 _UPLOAD_STATUS_PRIORITY = {
     "failed": 0,
     "pending": 1,
@@ -40,6 +41,11 @@ _MIN_UPLOAD_TIME = datetime.min.replace(tzinfo=UTC)
 def _as_utc(value: datetime) -> datetime:
     """Return a datetime with an explicit UTC timezone without changing its instant."""
     return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+
+
+def _normalize_measurement_value(value: Hashable) -> Hashable:
+    """Normalize datetime measurement values for backend-independent comparison/copying."""
+    return _as_utc(value) if isinstance(value, datetime) else value
 
 
 class DatabaseSynchronizer:
@@ -135,6 +141,7 @@ class DatabaseSynchronizer:
                     public_id=source_activity.public_id,
                     start_time=source_activity.start_time,
                     end_time=source_activity.end_time,
+                    environment=source_activity.environment,
                 )
                 destination.add(destination_activity)
                 destination.flush()
@@ -145,15 +152,17 @@ class DatabaseSynchronizer:
                     destination_activity,
                 )
 
-            copied_metrics = False
-            for model in (HeartRate, RunningMetrics, CyclingMetrics):
-                copied_metrics |= DatabaseSynchronizer._copy_metric_rows(
+            copied_stats_inputs = False
+            for model in (HeartRate, RunningMetrics, CyclingMetrics, LocationPoint):
+                copied_rows = DatabaseSynchronizer._copy_metric_rows(
                     source,
                     destination,
                     source_activity,
                     destination_activity,
                     model,
                 )
+                if model is not LocationPoint:
+                    copied_stats_inputs |= copied_rows
             DatabaseSynchronizer._reconcile_uploads(
                 source,
                 destination,
@@ -166,7 +175,7 @@ class DatabaseSynchronizer:
                 source_activity,
                 destination_activity,
             )
-            if copied_metrics:
+            if copied_stats_inputs:
                 destination.flush()
                 rebuild_stats(destination, destination_activity.id)
 
@@ -217,7 +226,7 @@ class DatabaseSynchronizer:
         source_rows = source_session.scalars(
             select(model)
             .where(model.activity_id == source_activity.id)
-            .order_by(model.timestamp_ms),
+            .order_by(model.timestamp_ms, model.id),
         ).all()
         if not source_rows:
             return False
@@ -226,20 +235,29 @@ class DatabaseSynchronizer:
             select(model).where(model.activity_id == destination_activity.id),
         ).all()
         destination_counts = Counter(
-            tuple(getattr(row, attribute) for attribute in mapped_attributes)
+            tuple(
+                _normalize_measurement_value(getattr(row, attribute))
+                for attribute in mapped_attributes
+            )
             for row in destination_rows
         )
         source_counts: Counter[tuple[Any, ...]] = Counter()
         rows = []
         for row in source_rows:
-            key = tuple(getattr(row, attribute) for attribute in mapped_attributes)
+            key = tuple(
+                _normalize_measurement_value(getattr(row, attribute))
+                for attribute in mapped_attributes
+            )
             source_counts[key] += 1
             if source_counts[key] <= destination_counts[key]:
                 continue
             rows.append(
                 {
                     "activity_id": destination_activity.id,
-                    **{attribute: getattr(row, attribute) for attribute in mapped_attributes},
+                    **{
+                        attribute: _normalize_measurement_value(getattr(row, attribute))
+                        for attribute in mapped_attributes
+                    },
                 },
             )
         if rows:

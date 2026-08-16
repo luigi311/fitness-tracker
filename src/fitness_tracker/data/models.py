@@ -19,6 +19,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
+from fitness_tracker.core.environment import Environment
 from fitness_tracker.core.sports import SportTypesEnum
 
 
@@ -36,6 +37,11 @@ class Activity(Base):
     # timezone-aware UTC
     start_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     end_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    environment: Mapped[str] = mapped_column(
+        String(16),
+        nullable=False,
+        default=Environment.INDOOR.value,
+    )
 
     # Wall-clock timestamps are not identity: two activities may start together.
     __table_args__ = (UniqueConstraint("public_id", name="uq_activities_public_id"),)
@@ -51,6 +57,11 @@ class Activity(Base):
         passive_deletes=True,
     )
     cycling_metrics: Mapped[list[CyclingMetrics]] = relationship(
+        back_populates="activity",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+    location_points: Mapped[list[LocationPoint]] = relationship(
         back_populates="activity",
         cascade="all, delete-orphan",
         passive_deletes=True,
@@ -156,6 +167,33 @@ class CyclingMetrics(Base):
     __table_args__ = (
         Index("ix_cyc_activity_id", "activity_id"),
         Index("ix_cyc_activity_time", "activity_id", "timestamp_ms"),
+    )
+
+
+class LocationPoint(Base):
+    """An accepted location fix stored on an activity timeline."""
+
+    __tablename__ = "location_points"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    activity_id: Mapped[int] = mapped_column(
+        ForeignKey("activities.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    timestamp_ms: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    latitude_deg: Mapped[float] = mapped_column(Float, nullable=False)
+    longitude_deg: Mapped[float] = mapped_column(Float, nullable=False)
+    accuracy_m: Mapped[float | None] = mapped_column(Float)
+    altitude_m: Mapped[float | None] = mapped_column(Float)
+    speed_mps: Mapped[float | None] = mapped_column(Float)
+    heading_deg: Mapped[float | None] = mapped_column(Float)
+    source_time_utc: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    activity: Mapped[Activity] = relationship(back_populates="location_points")
+
+    __table_args__ = (
+        Index("ix_location_activity_id", "activity_id"),
+        Index("ix_location_activity_time", "activity_id", "timestamp_ms"),
     )
 
 
