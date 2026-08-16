@@ -227,6 +227,7 @@ def test_history_export_reads_and_conversion_run_in_submitted_job(monkeypatch) -
     repository.list_heart_rates.return_value = []
     repository.list_running_metrics.return_value = []
     repository.list_cycling_metrics.return_value = []
+    repository.list_location_points.return_value = []
     repository.get_activity_stats.return_value = SimpleNamespace(
         sport_type_id=SportTypesEnum.running.value,
     )
@@ -244,6 +245,7 @@ def test_history_export_reads_and_conversion_run_in_submitted_job(monkeypatch) -
     repository.list_heart_rates.assert_called_once_with(7)
     repository.list_running_metrics.assert_called_once_with(7)
     repository.list_cycling_metrics.assert_called_once_with(7)
+    repository.list_location_points.assert_called_once_with(7)
     repository.get_activity_stats.assert_called_once_with(7)
     assert result.tcx_bytes == b"tcx"
 

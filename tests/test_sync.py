@@ -37,6 +37,7 @@ EXPECTED_HEART_RATE_BPM = 140
 EXPECTED_HARDEN_CALL_COUNT = 2
 EXPECTED_POINTS_AFTER_LOCAL_SYNC = 3
 EXPECTED_POINTS_AFTER_BIDIRECTIONAL_SYNC = 4
+EXPECTED_MERGED_ROUTE_POINTS = 2
 
 
 def _manager(path: Path) -> DatabaseManager:
@@ -223,6 +224,289 @@ def test_sync_preserves_location_duplicates_and_converges_both_directions(
         (1_000, 39.7393),
         (2_000, 39.7394),
     ]
+
+
+def test_syncing_new_measurements_invalidates_destination_upload(
+    tmp_path: Path,
+) -> None:
+    local = _manager(tmp_path / "local.db")
+    remote = _manager(tmp_path / "remote.db")
+    public_id = uuid4()
+    local_id = _insert_activity(
+        local,
+        public_id,
+        end_time=START_TIME + timedelta(minutes=30),
+        environment=Environment.OUTDOOR,
+    )
+    remote_id = _insert_activity(
+        remote,
+        public_id,
+        end_time=START_TIME + timedelta(minutes=30),
+        environment=Environment.OUTDOOR,
+    )
+    remote.repository.mark_upload_ok(
+        remote_id,
+        PROVIDER,
+        provider_activity_id="remote-activity",
+        payload_hash="old-route-hash",
+    )
+    with local.Session() as session:
+        session.add(
+            LocationPoint(
+                activity_id=local_id,
+                timestamp_ms=1_000,
+                latitude_deg=39.7392,
+                longitude_deg=-104.9903,
+            ),
+        )
+        session.commit()
+
+    local.sync_to_database(f"sqlite:///{tmp_path / 'remote.db'}")
+
+    with remote.Session() as session:
+        upload = session.query(ActivityUpload).filter_by(activity_id=remote_id).one()
+        assert upload.status == "pending"
+        assert upload.payload_hash is None
+        assert upload.provider_activity_id == "remote-activity"
+
+
+def test_sync_preserves_source_successful_upload_on_fresh_peer(tmp_path: Path) -> None:
+    local = _manager(tmp_path / "local.db")
+    remote = _manager(tmp_path / "remote.db")
+    public_id = uuid4()
+    local_id = _insert_activity(
+        local,
+        public_id,
+        end_time=START_TIME + timedelta(minutes=30),
+        environment=Environment.OUTDOOR,
+    )
+    _insert_activity(
+        remote,
+        public_id,
+        end_time=START_TIME + timedelta(minutes=30),
+        environment=Environment.OUTDOOR,
+    )
+    with local.Session() as session:
+        session.add(
+            LocationPoint(
+                activity_id=local_id,
+                timestamp_ms=1_000,
+                latitude_deg=39.7392,
+                longitude_deg=-104.9903,
+            ),
+        )
+        session.commit()
+    local.repository.mark_upload_ok(
+        local_id,
+        PROVIDER,
+        provider_activity_id="already-uploaded",
+        payload_hash="route-hash",
+    )
+
+    local.sync_to_database(f"sqlite:///{tmp_path / 'remote.db'}")
+
+    with remote.Session() as session:
+        upload = session.query(ActivityUpload).one()
+        assert upload.status == "ok"
+        assert upload.payload_hash == "route-hash"
+        assert upload.provider_activity_id == "already-uploaded"
+    with local.Session() as session:
+        upload = session.query(ActivityUpload).one()
+        assert upload.status == "ok"
+        assert upload.payload_hash == "route-hash"
+
+
+def test_sync_invalidates_uploads_for_divergent_routes(tmp_path: Path) -> None:
+    local = _manager(tmp_path / "local.db")
+    remote = _manager(tmp_path / "remote.db")
+    public_id = uuid4()
+    local_id = _insert_activity(
+        local,
+        public_id,
+        end_time=START_TIME + timedelta(minutes=30),
+        environment=Environment.OUTDOOR,
+    )
+    remote_id = _insert_activity(
+        remote,
+        public_id,
+        end_time=START_TIME + timedelta(minutes=30),
+        environment=Environment.OUTDOOR,
+    )
+    with local.Session() as session:
+        session.add(
+            LocationPoint(
+                activity_id=local_id,
+                timestamp_ms=1_000,
+                latitude_deg=39.7392,
+                longitude_deg=-104.9903,
+            ),
+        )
+        session.commit()
+    with remote.Session() as session:
+        session.add(
+            LocationPoint(
+                activity_id=remote_id,
+                timestamp_ms=1_000,
+                latitude_deg=39.7402,
+                longitude_deg=-104.9903,
+            ),
+        )
+        session.commit()
+    local.repository.mark_upload_ok(
+        local_id,
+        PROVIDER,
+        provider_activity_id="local-upload",
+        payload_hash="hash-a",
+    )
+    remote.repository.mark_upload_ok(
+        remote_id,
+        PROVIDER,
+        provider_activity_id="remote-upload",
+        payload_hash="hash-b",
+    )
+
+    local.sync_to_database(f"sqlite:///{tmp_path / 'remote.db'}")
+
+    with local.Session() as session:
+        upload = session.query(ActivityUpload).one()
+        assert upload.status == "pending"
+        assert upload.payload_hash is None
+        assert session.query(LocationPoint).count() == EXPECTED_MERGED_ROUTE_POINTS
+    with remote.Session() as session:
+        upload = session.query(ActivityUpload).one()
+        assert upload.status == "pending"
+        assert upload.payload_hash is None
+        assert session.query(LocationPoint).count() == EXPECTED_MERGED_ROUTE_POINTS
+
+
+def test_sync_invalidates_when_newer_destination_upload_wins(tmp_path: Path) -> None:
+    local = _manager(tmp_path / "local.db")
+    remote = _manager(tmp_path / "remote.db")
+    public_id = uuid4()
+    local_id = _insert_activity(
+        local,
+        public_id,
+        end_time=START_TIME + timedelta(minutes=30),
+        environment=Environment.OUTDOOR,
+    )
+    remote_id = _insert_activity(
+        remote,
+        public_id,
+        end_time=START_TIME + timedelta(minutes=30),
+        environment=Environment.OUTDOOR,
+    )
+    with local.Session() as session:
+        session.add(
+            LocationPoint(
+                activity_id=local_id,
+                timestamp_ms=1_000,
+                latitude_deg=39.7392,
+                longitude_deg=-104.9903,
+            ),
+        )
+        session.add(
+            ActivityUpload(
+                activity_id=local_id,
+                provider=PROVIDER,
+                status="ok",
+                uploaded_at=START_TIME + timedelta(seconds=1),
+                updated_at=START_TIME + timedelta(seconds=1),
+                provider_activity_id="full-upload",
+                payload_hash="full-hash",
+            ),
+        )
+        session.commit()
+    with remote.Session() as session:
+        session.add(
+            ActivityUpload(
+                activity_id=remote_id,
+                provider=PROVIDER,
+                status="ok",
+                uploaded_at=START_TIME + timedelta(seconds=2),
+                updated_at=START_TIME + timedelta(seconds=2),
+                provider_activity_id="empty-upload",
+                payload_hash="empty-hash",
+            ),
+        )
+        session.commit()
+
+    local.sync_to_database(f"sqlite:///{tmp_path / 'remote.db'}")
+
+    for manager in (local, remote):
+        with manager.Session() as session:
+            upload = session.query(ActivityUpload).one()
+            assert upload.status == "pending"
+            assert upload.payload_hash is None
+
+
+def test_sync_invalidates_uploads_when_tcx_metadata_changes(tmp_path: Path) -> None:
+    local = _manager(tmp_path / "local.db")
+    remote = _manager(tmp_path / "remote.db")
+    public_id = uuid4()
+    local_id = _insert_activity(
+        local,
+        public_id,
+        end_time=START_TIME + timedelta(minutes=30),
+        environment=Environment.OUTDOOR,
+    )
+    remote_id = _insert_activity(
+        remote,
+        public_id,
+        end_time=START_TIME + timedelta(minutes=20),
+        environment=Environment.OUTDOOR,
+    )
+    with local.Session() as session:
+        session.add_all(
+            [
+                ActivitySport(activity_id=local_id, sport_type_id=SportTypesEnum.running.value),
+                ActivityUpload(
+                    activity_id=local_id,
+                    provider=PROVIDER,
+                    status="ok",
+                    uploaded_at=START_TIME + timedelta(seconds=1),
+                    updated_at=START_TIME + timedelta(seconds=1),
+                    provider_activity_id="running-upload",
+                    payload_hash="running-hash",
+                ),
+            ],
+        )
+        session.commit()
+    with remote.Session() as session:
+        session.add_all(
+            [
+                ActivitySport(activity_id=remote_id, sport_type_id=SportTypesEnum.biking.value),
+                ActivityUpload(
+                    activity_id=remote_id,
+                    provider=PROVIDER,
+                    status="ok",
+                    uploaded_at=START_TIME + timedelta(seconds=2),
+                    updated_at=START_TIME + timedelta(seconds=2),
+                    provider_activity_id="biking-upload",
+                    payload_hash="biking-hash",
+                ),
+            ],
+        )
+        session.commit()
+    StatsCalculator(local).compute_for_activity(local_id)
+    StatsCalculator(remote).compute_for_activity(remote_id)
+
+    local.sync_to_database(f"sqlite:///{tmp_path / 'remote.db'}")
+
+    for manager in (local, remote):
+        with manager.Session() as session:
+            activity = session.query(Activity).one()
+            sport = session.query(ActivitySport).one()
+            stats = session.query(ActivityStats).one()
+            upload = session.query(ActivityUpload).one()
+            assert activity.end_time is not None
+            assert activity.end_time.replace(tzinfo=UTC) == START_TIME + timedelta(minutes=30)
+            assert sport.sport_type_id == SportTypesEnum.running.value
+            assert stats.sport_type_id == SportTypesEnum.running.value
+            assert stats.duration_s == 30 * 60
+            assert stats.end_time is not None
+            assert stats.end_time.replace(tzinfo=UTC) == START_TIME + timedelta(minutes=30)
+            assert upload.status == "pending"
+            assert upload.payload_hash is None
 
 
 def test_sync_leaves_existing_environment_unchanged_on_conflict(tmp_path: Path) -> None:
