@@ -15,6 +15,7 @@ gi.require_versions = lambda _versions: None
 gi.repository.Adw = types.SimpleNamespace()
 
 from bleaksport import HeartRateSample, TrainerSample
+from fitness_tracker.core.environment import Environment
 from fitness_tracker.core.sensor_profile import SensorProfile
 from fitness_tracker.core.sports import SportTypesEnum
 from fitness_tracker.core.trainer_mode import TrainerMode
@@ -111,9 +112,23 @@ class RecorderLifecycleTests(unittest.TestCase):
         self.assertTrue(recorder.shutdown())
         self.assertTrue(recorder.loop.is_closed())
 
+    def test_start_recording_forwards_environment_to_store(self):
+        recorder = _make_recorder()
+        recorder.store.start_activity = Mock(return_value=1)
+        recorder.store.finalize_activity = Mock()
+
+        recorder.start_recording(Environment.OUTDOOR)
+
+        recorder.store.start_activity.assert_called_once_with(
+            sport_type=SportTypesEnum.running,
+            environment=Environment.OUTDOOR,
+        )
+        recorder.stop_recording()
+        recorder.shutdown()
+
     def test_shutdown_surfaces_finalized_activity_id_once(self):
         recorder = _make_recorder()
-        recorder.start_recording()
+        recorder.start_recording(Environment.INDOOR)
         activity_id = recorder.activity_id
         self.assertIsNotNone(activity_id)
 
@@ -123,7 +138,7 @@ class RecorderLifecycleTests(unittest.TestCase):
 
     def test_shutdown_surfaces_activity_finalized_by_an_existing_worker(self):
         recorder = _make_recorder()
-        recorder.start_recording()
+        recorder.start_recording(Environment.INDOOR)
         activity_id = recorder.activity_id
         self.assertIsNotNone(activity_id)
         claim = recorder.begin_finalization()
@@ -447,7 +462,7 @@ class RecorderLifecycleTests(unittest.TestCase):
         failure = RuntimeError("temporary finalization failure")
         recorder.store.finalize_activity = Mock(side_effect=[failure, None])
 
-        recorder.start_recording()
+        recorder.start_recording(Environment.INDOOR)
 
         self.assertIsNone(recorder.stop_recording())
         self.assertFalse(recorder._recording)
@@ -490,7 +505,7 @@ class RecorderLifecycleTests(unittest.TestCase):
 
         recorder._sample_processor.clean_heart_rate = blocked_clean
         recorder.on_sample = blocked_dispatch
-        recorder.start_recording()
+        recorder.start_recording(Environment.INDOOR)
         sample_thread = threading.Thread(
             target=recorder._handle_hr_sample,
             args=(HeartRateSample(timestamp_ms=1_000, heart_rate_bpm=140),),
@@ -504,7 +519,7 @@ class RecorderLifecycleTests(unittest.TestCase):
         stop_thread.start()
         stop_thread.join(timeout=1.0)
         self.assertFalse(stop_thread.is_alive())
-        recorder.start_recording()
+        recorder.start_recording(Environment.INDOOR)
         self.assertEqual(recorder.activity_id, 2)
 
         release_dispatch.set()

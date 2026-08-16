@@ -87,6 +87,7 @@ class TrackerPageUI:
         # lifecycle state
         self._session_state: SessionState | None = None
         self._start_requested = False
+        self._active_environment: Environment | None = None
 
         # stats
         self._bpm_max = 0
@@ -334,6 +335,7 @@ class TrackerPageUI:
     ) -> None:
         self._workout_session = None
         self._start_requested = False
+        self._active_environment = environment
 
         if self.app.pebble_bridge:
             self.app.pebble_bridge.update(tgt_kind=TGT_NONE)
@@ -381,6 +383,7 @@ class TrackerPageUI:
             return
         self._session_state = SessionState.PREVIEW
         self._start_requested = False
+        self._active_environment = environment
         self._reset_buffers()
 
         raw = session.workout.name if session.workout else "Workout"
@@ -489,13 +492,13 @@ class TrackerPageUI:
             if view is not None:
                 view.set_profile_ready(ready=False)
             return
-
         if self._defer_start_for_finalization(view, recorder):
             return
 
         self._start_requested = False
         try:
-            recorder.start_recording()
+            environment = self._require_active_environment()
+            recorder.start_recording(environment=environment)
         except Exception as error:
             self.app.show_toast(f"Unable to start recording: {error}")
             return
@@ -523,6 +526,13 @@ class TrackerPageUI:
 
         if self.session_view:
             self.session_view.set_state(SessionState.RUNNING)
+
+    def _require_active_environment(self) -> Environment:
+        """Return the session environment or fail the Start action explicitly."""
+        if self._active_environment is None:
+            message = "session environment is unavailable"
+            raise RuntimeError(message)
+        return self._active_environment
 
     def _stop_run_and_back(self) -> None:
         recorder = self.app.recorder
@@ -564,6 +574,7 @@ class TrackerPageUI:
         # release page refs and go home
         self.session_view = None
         self._workout_session = None
+        self._active_environment = None
 
         self._trainer_target_throttle.reset()
 

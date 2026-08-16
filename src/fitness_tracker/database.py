@@ -29,6 +29,7 @@ from sqlalchemy.engine.reflection import Inspector
 from sqlalchemy.orm import Session, sessionmaker
 
 from fitness_tracker.activity_stats import StatsCalculator
+from fitness_tracker.core.environment import Environment
 from fitness_tracker.core.errors import (
     DatabaseConnectionError as DatabaseConnectionError,  # noqa: PLC0414
 )
@@ -176,8 +177,12 @@ class DatabaseManager:
             message = "Database migration failed; no pre-migration backup is available"
         return DatabaseMigrationError(message)
 
-    def start_activity(self, sport_type: SportTypesEnum) -> int:
+    def start_activity(self, sport_type: SportTypesEnum, environment: Environment) -> int:
         """Create an activity for ``sport_type`` and return its database ID."""
+        environment = Environment(environment)
+        # The activities column is added in Phase 1; validate the boundary now
+        # so callers cannot omit the selected session environment.
+        _ = environment
         with self.Session() as session:
             # store UTC with tzinfo
             act = Activity(start_time=datetime.now(tz=ZoneInfo("UTC")))

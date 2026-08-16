@@ -8,6 +8,7 @@ from uuid import UUID, uuid4
 import pytest
 from fitness_tracker import database as database_module
 from fitness_tracker.activity_stats import StatsCalculator
+from fitness_tracker.core.environment import Environment
 from fitness_tracker.core.errors import UserActionableError
 from fitness_tracker.core.file_permissions import PRIVATE_FILE_MODE
 from fitness_tracker.core.sports import SportTypesEnum
@@ -164,7 +165,7 @@ def test_missing_sqlite_parent_errors_are_user_actionable(tmp_path: Path) -> Non
 
 def test_upload_candidates_require_finalized_activities(tmp_path: Path) -> None:
     db = _manager(tmp_path / "database.db")
-    activity_id = db.start_activity(SportTypesEnum.running)
+    activity_id = db.start_activity(SportTypesEnum.running, Environment.INDOOR)
     db.repository.mark_upload_ok(activity_id, PROVIDER, provider_activity_id="partial-upload")
 
     assert db.repository.list_not_uploaded(PROVIDER) == []
@@ -179,7 +180,7 @@ def test_upload_candidates_require_finalized_activities(tmp_path: Path) -> None:
 
 def test_stop_activity_preserves_end_time_when_retrying(tmp_path: Path) -> None:
     db = _manager(tmp_path / "database.db")
-    activity_id = db.start_activity(SportTypesEnum.running)
+    activity_id = db.start_activity(SportTypesEnum.running, Environment.INDOOR)
     stopped_at = START_TIME + timedelta(minutes=30)
 
     with db.Session() as session:
@@ -199,7 +200,7 @@ def test_stop_activity_preserves_end_time_when_retrying(tmp_path: Path) -> None:
 
 def test_stop_activity_retry_preserves_successful_upload(tmp_path: Path) -> None:
     db = _manager(tmp_path / "database.db")
-    activity_id = db.start_activity(SportTypesEnum.running)
+    activity_id = db.start_activity(SportTypesEnum.running, Environment.INDOOR)
     db.stop_activity(activity_id)
     db.repository.mark_upload_ok(activity_id, PROVIDER, provider_activity_id="remote-1")
 
@@ -212,7 +213,7 @@ def test_stop_activity_retry_preserves_successful_upload(tmp_path: Path) -> None
 
 def test_new_samples_invalidate_successful_uploads(tmp_path: Path) -> None:
     db = _manager(tmp_path / "database.db")
-    activity_id = db.start_activity(SportTypesEnum.running)
+    activity_id = db.start_activity(SportTypesEnum.running, Environment.INDOOR)
     db.stop_activity(activity_id)
     db.repository.mark_upload_ok(
         activity_id,
@@ -234,7 +235,7 @@ def test_new_samples_invalidate_successful_uploads(tmp_path: Path) -> None:
 
 def test_concurrent_upload_updates_share_one_provider_row(tmp_path: Path) -> None:
     db = _manager(tmp_path / "database.db")
-    activity_id = db.start_activity(SportTypesEnum.running)
+    activity_id = db.start_activity(SportTypesEnum.running, Environment.INDOOR)
     workers = 6
     barrier = Barrier(workers, timeout=5.0)
 
@@ -267,7 +268,7 @@ def test_concurrent_upload_updates_share_one_provider_row(tmp_path: Path) -> Non
 
 def test_older_failure_does_not_overwrite_newer_success(tmp_path: Path) -> None:
     db = _manager(tmp_path / "database.db")
-    activity_id = db.start_activity(SportTypesEnum.running)
+    activity_id = db.start_activity(SportTypesEnum.running, Environment.INDOOR)
     future = datetime.now(UTC) + timedelta(days=1)
     with db.Session() as session:
         session.add(
@@ -452,7 +453,7 @@ def test_sync_transfers_new_upload_state(tmp_path: Path) -> None:
 def test_sync_transfers_sport_and_rebuilds_derived_stats(tmp_path: Path) -> None:
     local = _manager(tmp_path / "local.db")
     remote = _manager(tmp_path / "remote.db")
-    activity_id = local.start_activity(SportTypesEnum.biking)
+    activity_id = local.start_activity(SportTypesEnum.biking, Environment.INDOOR)
     with local.Session() as session:
         session.add(
             HeartRate(

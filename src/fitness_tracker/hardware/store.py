@@ -4,13 +4,14 @@ from typing import Protocol
 
 from bleaksport.models import CyclingSample, RunningSample, TrainerSample
 
+from fitness_tracker.core.environment import Environment
 from fitness_tracker.core.sports import SportTypesEnum
 
 
 class RecordingStore(Protocol):
     """Operations a recorder needs without knowing the database implementation."""
 
-    def start_activity(self, sport_type: SportTypesEnum) -> int:
+    def start_activity(self, sport_type: SportTypesEnum, environment: Environment) -> int:
         """Create and return the identifier for a new activity."""
 
     def finalize_activity(self, activity_id: int) -> None:

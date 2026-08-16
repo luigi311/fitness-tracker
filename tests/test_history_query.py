@@ -3,6 +3,7 @@
 from datetime import UTC, datetime
 
 import pytest
+from fitness_tracker.core.environment import Environment
 from fitness_tracker.core.sports import SportTypesEnum
 from fitness_tracker.core.units import UnitSystem
 from fitness_tracker.data.models import RunningMetrics
@@ -49,7 +50,7 @@ def test_running_cadence_chart_uses_display_steps_per_minute() -> None:
 
 def test_compare_query_is_batched_and_caps_two_hour_series() -> None:
     db = DatabaseManager("sqlite:///:memory:")
-    activity_id = db.start_activity(SportTypesEnum.running)
+    activity_id = db.start_activity(SportTypesEnum.running, Environment.INDOOR)
     sample_count = 7_200
     with db.Session() as session:
         session.add_all(

@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 from bleaksport import HeartRateSample, TrainerSample
 from fitness_tracker import database as database_module
+from fitness_tracker.core.environment import Environment
 from fitness_tracker.core.measurements import NormalizedHeartRate
 from fitness_tracker.core.sports import SportTypesEnum
 from fitness_tracker.data.models import (
@@ -55,7 +56,7 @@ def test_zero_altitude_is_preserved(
     expected_table: type[RunningMetrics] | type[CyclingMetrics],
 ) -> None:
     db = _database()
-    activity_id = db.start_activity(sport_type)
+    activity_id = db.start_activity(sport_type, Environment.INDOOR)
     sample = _trainer_sample(altitude_m=0.0)
 
     if sport_type == SportTypesEnum.running:
@@ -85,7 +86,7 @@ def test_fresh_migration_matches_upload_metadata() -> None:
 
 def test_activity_deletion_cascades_to_measurements_and_uploads() -> None:
     db = _database()
-    activity_id = db.start_activity(SportTypesEnum.running)
+    activity_id = db.start_activity(SportTypesEnum.running, Environment.INDOOR)
     with db.Session() as session:
         session.add_all(
             [
@@ -228,7 +229,7 @@ def test_trainer_grade_is_not_persisted_as_altitude(
     expected_table: type[RunningMetrics] | type[CyclingMetrics],
 ) -> None:
     db = _database()
-    activity_id = db.start_activity(sport_type)
+    activity_id = db.start_activity(sport_type, Environment.INDOOR)
     sample = _trainer_sample(altitude_m=None)
 
     if sport_type == SportTypesEnum.running:

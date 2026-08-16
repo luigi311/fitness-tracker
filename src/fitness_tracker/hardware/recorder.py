@@ -24,6 +24,7 @@ from bleaksport import (
 from bleaksport.models import CyclingSample
 from loguru import logger
 
+from fitness_tracker.core.environment import Environment
 from fitness_tracker.core.sports import SportTypesEnum
 from fitness_tracker.hardware.processor import SampleProcessor
 from fitness_tracker.hardware.trainer import TrainerController
@@ -261,8 +262,9 @@ class Recorder:
             self._shutdown_finalized_activity_id = None
             return activity_id
 
-    def start_recording(self) -> None:
+    def start_recording(self, environment: Environment) -> None:
         """Begin a new recording generation and reset processor state."""
+        environment = Environment(environment)
         with self._recording_lock:
             if self._recording:
                 return
@@ -272,7 +274,10 @@ class Recorder:
             self.activity_id = None
             # Only create an activity when not in test mode
             if not self.test_mode:
-                self.activity_id = self.store.start_activity(sport_type=self.sport_type)
+                self.activity_id = self.store.start_activity(
+                    sport_type=self.sport_type,
+                    environment=environment,
+                )
             else:
                 self.activity_id = None
             self._recording = True

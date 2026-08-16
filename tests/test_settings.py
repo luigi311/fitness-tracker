@@ -41,6 +41,27 @@ def test_legacy_values_are_migrated_and_optional_strings_normalized() -> None:
     assert settings.model_dump()["display"]["unit_system"] == "metric"
 
 
+def test_location_settings_defaults_and_round_trip(tmp_path: Path) -> None:
+    defaults = AppSettings.model_validate({})
+
+    assert defaults.location.record_outdoor_routes is True
+    assert defaults.location.record_indoor_anchor is False
+    assert defaults.location.indoor_accuracy == "neighborhood"
+
+    settings = AppSettings.load(tmp_path, create_if_missing=True)
+    settings.location.record_outdoor_routes = False
+    settings.location.record_indoor_anchor = True
+    settings.location.indoor_accuracy = "street"
+    settings.save()
+
+    loaded = AppSettings.load(tmp_path)
+
+    assert loaded.location.record_outdoor_routes is False
+    assert loaded.location.record_indoor_anchor is True
+    assert loaded.location.indoor_accuracy == "street"
+    assert loaded.schema_version == AppSettings.CURRENT_SCHEMA_VERSION
+
+
 def test_invalid_domain_values_identify_the_rejected_field() -> None:
     invalid_values = [
         ({"personal": {"weight_kg": 1}}, "weight_kg"),
