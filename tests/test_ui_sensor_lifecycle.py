@@ -120,6 +120,7 @@ finally:
             sys.modules[name] = original
 from fitness_tracker.core.sensor_profile import SensorProfile
 from fitness_tracker.core.sports import SportTypesEnum
+from fitness_tracker.hardware.location import PortalAccuracy
 from fitness_tracker.hardware.recorder import FinalizationClaim, FinalizationStatus
 from fitness_tracker.services.jobs import BackgroundJobRunner
 from fitness_tracker.ui.app import (
@@ -142,6 +143,9 @@ class _CurrentRecorder:
         self.power_address = ""
         self.trainer_address = ""
         self.trainer_machine_type = None
+        self.record_outdoor_routes = True
+        self.record_indoor_anchor = False
+        self.indoor_accuracy = PortalAccuracy.NEIGHBORHOOD
         self.finalized_activity_id = None
 
     def shutdown(self):
@@ -178,6 +182,11 @@ class SensorSettingsLifecycleTests(unittest.TestCase):
         app.jobs = BackgroundJobRunner(_GLib.idle_add)
         app.app_settings = types.SimpleNamespace(
             personal=types.SimpleNamespace(weight_kg=75.0),
+            location=types.SimpleNamespace(
+                record_outdoor_routes=True,
+                record_indoor_anchor=False,
+                indoor_accuracy="neighborhood",
+            ),
         )
         app.database = Path(self.temp_dir.name) / "fitness-tracker-test.db"
         app.test_mode = True
@@ -186,6 +195,7 @@ class SensorSettingsLifecycleTests(unittest.TestCase):
         app.profile_installed = threading.Event()
         app.tracker = types.SimpleNamespace(
             on_sample=lambda _sample: None,
+            on_location_state=lambda _state, _detail: None,
             update_metric_statuses=app.profile_installed.set,
             session_open=False,
         )
@@ -578,6 +588,57 @@ class SensorSettingsLifecycleTests(unittest.TestCase):
         self.assertEqual(len(replacements), 1)
         self.assertEqual(replacements[0].sport_type, SportTypesEnum.running)
         self.assertIs(app.recorder, replacements[0])
+
+    def test_location_only_settings_change_replaces_recorder(self):
+        app = self._make_app()
+        current = _CurrentRecorder()
+        current.shutdown_release.set()
+        app.recorder = current
+        app._profile_from_sport_type = lambda _sport_type, trainer=False: current.profile  # noqa: ARG005
+        app.app_settings.location.record_outdoor_routes = False
+        app.app_settings.location.record_indoor_anchor = True
+        app.app_settings.location.indoor_accuracy = "street"
+        replacement = types.SimpleNamespace()
+
+        with patch("fitness_tracker.ui.app.Recorder", return_value=replacement) as factory:
+            app.apply_sensor_settings()
+            self.assertTrue(current.shutdown_started.wait(timeout=1))
+            self._run_idle()
+
+        self.assertIs(app.recorder, replacement)
+        factory.assert_called_once()
+        constructor = factory.call_args.kwargs
+        self.assertFalse(constructor["record_outdoor_routes"])
+        self.assertTrue(constructor["record_indoor_anchor"])
+        self.assertIs(constructor["indoor_accuracy"], PortalAccuracy.STREET)
+
+    def test_location_only_settings_change_is_deferred_until_next_session(self):
+        app = self._make_app()
+        current = _CurrentRecorder()
+        current.shutdown_release.set()
+        app.recorder = current
+        app._profile_from_sport_type = lambda _sport_type, trainer=False: current.profile  # noqa: ARG005
+        app.tracker.session_open = True
+        app.app_settings.location.record_outdoor_routes = False
+        app.app_settings.location.record_indoor_anchor = True
+        app.app_settings.location.indoor_accuracy = "street"
+
+        self.assertIsNone(app.apply_sensor_settings())
+        self.assertIs(app.recorder, current)
+        self.assertFalse(current.shutdown_started.is_set())
+
+        app.tracker.session_open = False
+        replacement = types.SimpleNamespace()
+        with patch("fitness_tracker.ui.app.Recorder", return_value=replacement) as factory:
+            app.apply_sensor_settings()
+            self.assertTrue(current.shutdown_started.wait(timeout=1))
+            self._run_idle()
+
+        self.assertIs(app.recorder, replacement)
+        constructor = factory.call_args.kwargs
+        self.assertFalse(constructor["record_outdoor_routes"])
+        self.assertTrue(constructor["record_indoor_anchor"])
+        self.assertIs(constructor["indoor_accuracy"], PortalAccuracy.STREET)
 
     def test_sensor_profile_changes_are_deferred_during_a_session(self):
         app = self._make_app()

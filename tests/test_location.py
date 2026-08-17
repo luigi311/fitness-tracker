@@ -17,6 +17,7 @@ from fitness_tracker.hardware.location import (
     is_plausible_motion,
     location_policy_for_environment,
     max_speed_mps_for_sport,
+    portal_accuracy_for_setting,
     relative_timestamp_ms,
 )
 
@@ -118,6 +119,24 @@ def test_location_policies_match_recording_decisions() -> None:
         )
         is None
     )
+
+
+@pytest.mark.parametrize(
+    ("setting", "expected"),
+    [
+        ("city", PortalAccuracy.CITY),
+        ("neighborhood", PortalAccuracy.NEIGHBORHOOD),
+        ("street", PortalAccuracy.STREET),
+        ("exact", PortalAccuracy.EXACT),
+    ],
+)
+def test_portal_accuracy_setting_conversion(setting: str, expected: PortalAccuracy) -> None:
+    assert portal_accuracy_for_setting(setting) is expected
+
+
+def test_portal_accuracy_setting_conversion_rejects_unknown_value() -> None:
+    with pytest.raises(ValueError, match="Unknown indoor location accuracy"):
+        portal_accuracy_for_setting("country")
 
 
 @pytest.mark.parametrize(

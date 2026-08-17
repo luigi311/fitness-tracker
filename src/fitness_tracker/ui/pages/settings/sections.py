@@ -13,6 +13,7 @@ from fitness_tracker.core.settings import (
     DatabaseSettings,
     DisplaySettings,
     IntervalsIcuAPI,
+    LocationSettings,
     PebbleSettings,
     PersonalSettings,
     SensorSettings,
@@ -461,6 +462,100 @@ class DisplaySection:
         selected = self.unit_system_combo.get_active_text()
         return {
             "unit_system": (UnitSystem.METRIC if selected == "Metric" else UnitSystem.IMPERIAL),
+        }
+
+
+class LocationSection:
+    """Build and read location privacy and accuracy preferences."""
+
+    _ACCURACY_OPTIONS = (
+        ("Neighborhood", "neighborhood"),
+        ("City", "city"),
+        ("Street", "street"),
+        ("Exact", "exact"),
+    )
+
+    def __init__(self, settings: LocationSettings) -> None:
+        self.settings = settings
+        self.record_outdoor_row: Adw.SwitchRow | None = None
+        self.record_indoor_row: Adw.SwitchRow | None = None
+        self.accuracy_row: Adw.ActionRow | None = None
+        self.accuracy_combo: Gtk.ComboBoxText | None = None
+
+    def build(self) -> Adw.PreferencesGroup:
+        """Build the location privacy controls."""
+        group = Adw.PreferencesGroup()
+        group.set_title("Location")
+
+        outdoor_row = Adw.SwitchRow()
+        outdoor_row.set_title("Record outdoor routes")
+        outdoor_row.set_subtitle(
+            "Saves the route from Start to Stop and includes it in activity uploads.",
+        )
+        outdoor_row.set_active(self.settings.record_outdoor_routes)
+        group.add(outdoor_row)
+
+        indoor_row = Adw.SwitchRow()
+        indoor_row.set_title("Store an indoor/trainer location")
+        indoor_row.set_subtitle("Saves one location point. This may reveal your home location.")
+        indoor_row.set_active(self.settings.record_indoor_anchor)
+        group.add(indoor_row)
+
+        accuracy_row = Adw.ActionRow()
+        accuracy_row.set_title("Indoor location accuracy")
+        accuracy_row.set_subtitle(
+            "Controls how precisely the indoor/trainer location is stored.",
+        )
+        accuracy_combo = Gtk.ComboBoxText()
+        for label, _value in self._ACCURACY_OPTIONS:
+            accuracy_combo.append_text(label)
+        accuracy_combo.set_active(self._accuracy_index(self.settings.indoor_accuracy))
+        accuracy_row.add_suffix(accuracy_combo)
+        group.add(accuracy_row)
+
+        indoor_row.connect("notify::active", self._on_indoor_anchor_toggled)
+        self.record_outdoor_row = outdoor_row
+        self.record_indoor_row = indoor_row
+        self.accuracy_row = accuracy_row
+        self.accuracy_combo = accuracy_combo
+        self._update_accuracy_sensitivity()
+        return group
+
+    @classmethod
+    def _accuracy_index(cls, value: str) -> int:
+        for index, (_label, setting_value) in enumerate(cls._ACCURACY_OPTIONS):
+            if value == setting_value:
+                return index
+        return 0
+
+    def _on_indoor_anchor_toggled(
+        self,
+        _switch: Adw.SwitchRow,
+        _pspec: object | None = None,
+    ) -> None:
+        self._update_accuracy_sensitivity()
+
+    def _update_accuracy_sensitivity(self) -> None:
+        if self.record_indoor_row is None or self.accuracy_row is None:
+            return
+        self.accuracy_row.set_sensitive(self.record_indoor_row.get_active())
+
+    def settings_data(self) -> dict[str, object]:
+        """Return the selected location preferences."""
+        if (
+            self.record_outdoor_row is None
+            or self.record_indoor_row is None
+            or self.accuracy_combo is None
+        ):
+            message = "Location settings controls have not been built"
+            raise RuntimeError(message)
+        selected_index = self.accuracy_combo.get_active()
+        if not 0 <= selected_index < len(self._ACCURACY_OPTIONS):
+            selected_index = 0
+        return {
+            "record_outdoor_routes": self.record_outdoor_row.get_active(),
+            "record_indoor_anchor": self.record_indoor_row.get_active(),
+            "indoor_accuracy": self._ACCURACY_OPTIONS[selected_index][1],
         }
 
 

@@ -60,6 +60,7 @@ class SessionView(Gtk.Box):
         on_trainer_target: Callable[[TrainerMode, int | float], None],
         capabilities: SessionCapabilities,
         workout: bool,
+        location_enabled: bool,
     ) -> None:
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=4)
         self.app = app
@@ -75,7 +76,7 @@ class SessionView(Gtk.Box):
         self.set_margin_end(4)
 
         self._build_workout_panel(title, on_prev, on_next)
-        self._build_metric_strip()
+        self._build_metric_strip(location_enabled=location_enabled)
         self._build_optional_controls(on_incline, on_trainer_target)
         self._build_recording_controls(on_stop, on_start_record)
         self._build_live_chart()
@@ -168,7 +169,7 @@ class SessionView(Gtk.Box):
         self.workout_panel.append(self.step_progress)
         self._build_workout_navigation(on_prev, on_next)
 
-    def _build_metric_strip(self) -> None:
+    def _build_metric_strip(self, *, location_enabled: bool) -> None:
         """Build the shared live metric tiles."""
         metrics = Gtk.FlowBox()
         metrics.set_selection_mode(Gtk.SelectionMode.NONE)
@@ -196,6 +197,14 @@ class SessionView(Gtk.Box):
         for tile in self._status_tiles:
             metrics.insert(tile, -1)
         self.append(metrics)
+
+        self.location_status = Gtk.Label(label="Location off", xalign=0.0)
+        self.location_status.add_css_class("dim-label")
+        self.location_status.set_wrap(True)
+        self.location_status.set_margin_start(4)
+        self.location_status.set_margin_end(4)
+        self.location_status.set_visible(location_enabled)
+        self.append(self.location_status)
 
     def _build_optional_controls(
         self,
@@ -345,6 +354,10 @@ class SessionView(Gtk.Box):
         """Update all sensor connection indicators."""
         for tile in self._status_tiles:
             tile.apply_status(status)
+
+    def set_location_status(self, status: str) -> None:
+        """Update the user-visible location lifecycle status."""
+        self.location_status.set_text(status)
 
     def set_state(self, state: SessionState) -> None:
         """Update common session controls and workout timer emphasis."""

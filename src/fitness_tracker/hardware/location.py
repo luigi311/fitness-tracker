@@ -39,6 +39,23 @@ class PortalAccuracy(IntEnum):
     EXACT = 5
 
 
+_PORTAL_ACCURACY_BY_SETTING: Final[dict[str, PortalAccuracy]] = {
+    "city": PortalAccuracy.CITY,
+    "neighborhood": PortalAccuracy.NEIGHBORHOOD,
+    "street": PortalAccuracy.STREET,
+    "exact": PortalAccuracy.EXACT,
+}
+
+
+def portal_accuracy_for_setting(value: str) -> PortalAccuracy:
+    """Convert a persisted location accuracy setting to its portal value."""
+    try:
+        return _PORTAL_ACCURACY_BY_SETTING[value]
+    except KeyError as exc:
+        message = f"Unknown indoor location accuracy setting: {value}"
+        raise ValueError(message) from exc
+
+
 class LocationState(StrEnum):
     """Nonfatal lifecycle states reported by a location source."""
 

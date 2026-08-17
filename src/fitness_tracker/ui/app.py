@@ -22,6 +22,7 @@ from fitness_tracker.core.sports import SportTypesEnum
 from fitness_tracker.core.units import UnitSystem
 from fitness_tracker.core.zones import ChartTheme, HeartRateZones, ZoneThresholds
 from fitness_tracker.database import DatabaseManager
+from fitness_tracker.hardware.location import PortalAccuracy, portal_accuracy_for_setting
 from fitness_tracker.hardware.recorder import FinalizationStatus, Recorder
 from fitness_tracker.services.jobs import (
     BackgroundJobRunner,
@@ -44,6 +45,9 @@ class _SensorProfileRequest:
     sport_type: SportTypesEnum
     trainer: bool
     profile: SensorProfile
+    record_outdoor_routes: bool = True
+    record_indoor_anchor: bool = False
+    indoor_accuracy: PortalAccuracy = PortalAccuracy.NEIGHBORHOOD
     on_ready: Callable[[], None] | None = None
 
 
@@ -494,11 +498,17 @@ class FitnessAppUI(Adw.Application):
 
         with self._sensor_state_lock:
             self._sensor_generation += 1
+            location_settings = self.app_settings.location
             request = _SensorProfileRequest(
                 generation=self._sensor_generation,
                 sport_type=sport_type,
                 trainer=trainer,
                 profile=desired,
+                record_outdoor_routes=location_settings.record_outdoor_routes,
+                record_indoor_anchor=location_settings.record_indoor_anchor,
+                indoor_accuracy=portal_accuracy_for_setting(
+                    location_settings.indoor_accuracy,
+                ),
                 on_ready=on_ready,
             )
             self._sensor_request = request
@@ -525,7 +535,13 @@ class FitnessAppUI(Adw.Application):
 
     @staticmethod
     def _recorder_matches(recorder: Recorder, request: _SensorProfileRequest) -> bool:
-        return recorder.sport_type == request.sport_type and recorder.profile == request.profile
+        return (
+            recorder.sport_type == request.sport_type
+            and recorder.profile == request.profile
+            and recorder.record_outdoor_routes == request.record_outdoor_routes
+            and recorder.record_indoor_anchor == request.record_indoor_anchor
+            and recorder.indoor_accuracy == request.indoor_accuracy
+        )
 
     def _schedule_profile_ready(self, request: _SensorProfileRequest) -> None:
         def deliver() -> bool:
@@ -609,6 +625,10 @@ class FitnessAppUI(Adw.Application):
                     on_error=self.show_toast,
                     test_mode=self.test_mode,
                     dispatch=GLib.idle_add,
+                    on_location_state=self.tracker.on_location_state,
+                    record_outdoor_routes=request.record_outdoor_routes,
+                    record_indoor_anchor=request.record_indoor_anchor,
+                    indoor_accuracy=request.indoor_accuracy,
                 )
             except Exception as error:
                 message = f"Unable to build the sensor worker: {error}"

@@ -661,7 +661,7 @@ class Recorder:
                 await self.location_source.start(
                     policy,
                     lambda fix: self._handle_location_fix(generation, operation, fix),
-                    lambda state, detail: self._handle_location_state(
+                    lambda state, detail: self._handle_location_source_state(
                         generation,
                         operation,
                         state,
@@ -678,6 +678,18 @@ class Recorder:
                     LocationState.UNAVAILABLE,
                     str(error),
                 )
+
+    def _handle_location_source_state(
+        self,
+        generation: int,
+        operation: int,
+        state: LocationState,
+        detail: str | None,
+    ) -> None:
+        """Apply source states, reserving tracking for accepted fixes."""
+        if state is LocationState.TRACKING:
+            return
+        self._handle_location_state(generation, operation, state, detail)
 
     def _schedule_location_stop(self) -> None:
         """Stop the current source asynchronously and coalesce duplicate requests."""
