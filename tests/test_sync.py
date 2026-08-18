@@ -778,6 +778,23 @@ def test_concurrent_upload_updates_share_one_provider_row(tmp_path: Path) -> Non
     assert uploads[0].payload_hash is not None
 
 
+def test_failed_activity_stats_excludes_pending_and_successful_uploads(tmp_path: Path) -> None:
+    db = _manager(tmp_path / "database.db")
+    failed_id = db.start_activity(SportTypesEnum.running, Environment.INDOOR)
+    successful_id = db.start_activity(SportTypesEnum.running, Environment.INDOOR)
+    pending_id = db.start_activity(SportTypesEnum.running, Environment.INDOOR)
+    for activity_id in (failed_id, successful_id, pending_id):
+        db.finalize_activity(activity_id)
+
+    db.repository.mark_upload_failed(failed_id, PROVIDER, "network unavailable")
+    db.repository.mark_upload_failed(failed_id, "another_provider", "service unavailable")
+    db.repository.mark_upload_ok(successful_id, PROVIDER)
+
+    rows = db.repository.list_failed_activity_stats()
+
+    assert [row.activity_id for row in rows] == [failed_id]
+
+
 def test_older_failure_does_not_overwrite_newer_success(tmp_path: Path) -> None:
     db = _manager(tmp_path / "database.db")
     activity_id = db.start_activity(SportTypesEnum.running, Environment.INDOOR)
