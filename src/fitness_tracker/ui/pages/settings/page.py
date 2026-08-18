@@ -27,6 +27,7 @@ from fitness_tracker.ui.pages.settings.sections import (
     ActionSection,
     DevicesSection,
     DisplaySection,
+    LocationSection,
     PebbleSection,
     PersonalSection,
     ProviderSection,
@@ -67,6 +68,7 @@ class SettingsPageUI:
 
         self.personal_section: PersonalSection | None = None
         self.display_section: DisplaySection | None = None
+        self.location_section: LocationSection | None = None
         self.devices_section: DevicesSection | None = None
         self.pebble_section: PebbleSection | None = None
         self.provider_section: ProviderSection | None = None
@@ -178,6 +180,7 @@ class SettingsPageUI:
 
         self.personal_section = PersonalSection(self.app.app_settings.personal)
         self.display_section = DisplaySection(self.app.app_settings.display)
+        self.location_section = LocationSection(self.app.app_settings.location)
         self.sensor_sections = self._make_sensor_sections()
         self.devices_section = DevicesSection(self.sensor_sections)
         self.pebble_section = PebbleSection(
@@ -204,6 +207,7 @@ class SettingsPageUI:
         container.set_margin_end(4)
         container.append(self.personal_section.build())
         container.append(self.display_section.build())
+        container.append(self.location_section.build())
         container.append(self.devices_section.build())
         container.append(self.pebble_section.build())
         container.append(self.provider_section.build())
@@ -527,6 +531,7 @@ class SettingsPageUI:
         if (
             self.personal_section is None
             or self.display_section is None
+            or self.location_section is None
             or self.pebble_section is None
             or self.provider_section is None
         ):
@@ -535,6 +540,7 @@ class SettingsPageUI:
         values = current.model_dump(mode="python")
         values["personal"] = self.personal_section.settings_data()
         values["display"].update(self.display_section.settings_data())
+        values["location"].update(self.location_section.settings_data())
         values["pebble"].update(self.pebble_section.settings_data())
         values.update(self.provider_section.settings_data())
 
@@ -550,6 +556,19 @@ class SettingsPageUI:
         candidate = AppSettings.model_validate(values)
         candidate._settings_dir = current._settings_dir  # noqa: SLF001
         return candidate
+
+    def _install_candidate_settings(self, candidate: AppSettings) -> None:
+        """Install saved values into the already-built settings sections."""
+        if self.personal_section is not None:
+            self.personal_section.settings = candidate.personal
+        if self.display_section is not None:
+            self.display_section.settings = candidate.display
+        if self.location_section is not None:
+            self.location_section.settings = candidate.location
+        if self.pebble_section is not None:
+            self.pebble_section.set_settings(candidate.pebble)
+        if self.provider_section is not None:
+            self.provider_section.set_settings(candidate.icu, candidate.database)
 
     def _on_save_settings(self, _button: Gtk.Button) -> None:
         try:
@@ -573,14 +592,7 @@ class SettingsPageUI:
         }
         for section_name, settings_field in section_fields.items():
             self.sensor_sections[section_name].settings = getattr(candidate, settings_field)
-        if self.personal_section is not None:
-            self.personal_section.settings = candidate.personal
-        if self.display_section is not None:
-            self.display_section.settings = candidate.display
-        if self.pebble_section is not None:
-            self.pebble_section.set_settings(candidate.pebble)
-        if self.provider_section is not None:
-            self.provider_section.set_settings(candidate.icu, candidate.database)
+        self._install_candidate_settings(candidate)
 
         self.app.refresh_hr_zones()
         self._update_actions_state()

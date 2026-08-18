@@ -37,6 +37,7 @@ class IntervalsICUUploader:
             hrs = repository.list_heart_rates(a.id)
             runs = repository.list_running_metrics(a.id)
             cycles = repository.list_cycling_metrics(a.id)
+            locations = repository.list_location_points(a.id)
             sport_row = repository.get_activity_sport(a.id)
             sport_type = (
                 SportTypesEnum(sport_row.sport_type_id)
@@ -51,6 +52,7 @@ class IntervalsICUUploader:
                     heart_rates=hrs,
                     running=runs,
                     cycling=cycles,
+                    locations=locations,
                     sport_type=sport_type,
                 )
                 # Simple content hash (helps our own dedupe/debug)

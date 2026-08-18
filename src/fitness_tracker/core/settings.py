@@ -6,7 +6,7 @@ import os
 import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, ClassVar, Self, cast
+from typing import Any, ClassVar, Literal, Self, cast
 from urllib.parse import urlparse
 from uuid import UUID
 
@@ -173,6 +173,14 @@ class DisplaySettings(SettingsModel):
     unit_system: UnitSystem = UnitSystem.IMPERIAL
 
 
+class LocationSettings(SettingsModel):
+    """Privacy and accuracy preferences for recorded locations."""
+
+    record_outdoor_routes: bool = True
+    record_indoor_anchor: bool = False
+    indoor_accuracy: Literal["city", "neighborhood", "street", "exact"] = "neighborhood"
+
+
 class AppSettings(FileSettings):
     """Application settings persisted as a versioned JSON document."""
 
@@ -192,6 +200,7 @@ class AppSettings(FileSettings):
     trainer_cycling: TrainerSettings = Field(default_factory=TrainerSettings)
     pebble: PebbleSettings = Field(default_factory=PebbleSettings)
     display: DisplaySettings = Field(default_factory=DisplaySettings)
+    location: LocationSettings = Field(default_factory=LocationSettings)
     icu: IntervalsIcuAPI = Field(default_factory=IntervalsIcuAPI)
     database: DatabaseSettings = Field(default_factory=DatabaseSettings)
 

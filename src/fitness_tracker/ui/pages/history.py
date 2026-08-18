@@ -852,6 +852,7 @@ class HistoryPageUI:
         hrs = repository.list_heart_rates(act_id)
         runs = repository.list_running_metrics(act_id)
         cycles = repository.list_cycling_metrics(act_id)
+        locations = repository.list_location_points(act_id)
         stats_row = repository.get_activity_stats(act_id)
         token.raise_if_cancelled()
         sport_type = (
@@ -868,6 +869,7 @@ class HistoryPageUI:
             heart_rates=hrs,
             running=runs,
             cycling=cycles,
+            locations=locations,
             sport_type=sport_type,
         )
         local_start = _tz_aware_localize(act.start_time)

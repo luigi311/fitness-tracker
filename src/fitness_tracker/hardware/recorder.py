@@ -24,12 +24,27 @@ from bleaksport import (
 from bleaksport.models import CyclingSample
 from loguru import logger
 
+from fitness_tracker.core.environment import Environment
 from fitness_tracker.core.sports import SportTypesEnum
+from fitness_tracker.hardware.location import (
+    LocationFilter,
+    LocationFix,
+    LocationPolicy,
+    LocationSource,
+    LocationState,
+    LocationStateCallback,
+    PortalAccuracy,
+    location_policy_for_environment,
+    max_speed_mps_for_sport,
+    relative_timestamp_ms,
+)
+from fitness_tracker.hardware.location_portal import PortalLocationSource
 from fitness_tracker.hardware.processor import SampleProcessor
 from fitness_tracker.hardware.trainer import TrainerController
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+    from concurrent.futures import Future
 
     from bleak.backends.device import BLEDevice
 
@@ -81,11 +96,28 @@ class _ConfiguredSensor:
         )
 
 
+_LOCATION_STOP_WAIT_TIMEOUT_S = 2.0
 _RECORDER_SENSOR_KINDS = tuple(RecorderSensorKind)
 
 
 def _dispatch_direct(callback: Callable[..., object], *args: object) -> object:
     return callback(*args)
+
+
+class _DisabledLocationSource:
+    """No-op source used by test-mode recorders without an injected fake."""
+
+    async def start(
+        self,
+        policy: LocationPolicy,
+        on_fix: Callable[[LocationFix], None],
+        on_state: LocationStateCallback,
+    ) -> None:
+        del policy, on_fix
+        on_state(LocationState.DISABLED, "location source disabled in test mode")
+
+    async def stop(self) -> None:
+        """Release no resources."""
 
 
 class Recorder:
@@ -106,6 +138,11 @@ class Recorder:
         | None = None,
         test_mode: bool = False,
         dispatch: Callable[..., object] | None = None,
+        location_source: LocationSource | None = None,
+        on_location_state: LocationStateCallback | None = None,
+        record_outdoor_routes: bool = True,
+        record_indoor_anchor: bool = False,
+        indoor_accuracy: PortalAccuracy = PortalAccuracy.NEIGHBORHOOD,
     ) -> None:
         logger.debug(f"Initializing Recorder with sport_type {sport_type}")
         logger.debug(f"HR sensor: name={profile.hr_name}, address={profile.hr_address}")
@@ -137,6 +174,7 @@ class Recorder:
         self._stop_event = asyncio.Event()
         self._recording = False
         self._recording_lock = threading.Lock()
+        self._persistence_lock = threading.Lock()
         self._recording_generation = 0
         self._finalizing_activity_id: int | None = None
         self._finalization_in_progress = False
@@ -146,6 +184,14 @@ class Recorder:
         self._last_finalized_activity_id: int | None = None
         self._finalization_reconciled = False
         self.activity_id: int | None = None
+
+        self._configure_location_source(
+            location_source=location_source,
+            on_location_state=on_location_state,
+            record_outdoor_routes=record_outdoor_routes,
+            record_indoor_anchor=record_indoor_anchor,
+            indoor_accuracy=indoor_accuracy,
+        )
 
         self._configured_sensors = {
             RecorderSensorKind.HEART_RATE: _ConfiguredSensor(
@@ -200,6 +246,40 @@ class Recorder:
         # BLE Discover devices
         self.devices: list[BLEDevice] = []
 
+    def _configure_location_source(
+        self,
+        *,
+        location_source: LocationSource | None,
+        on_location_state: LocationStateCallback | None,
+        record_outdoor_routes: bool,
+        record_indoor_anchor: bool,
+        indoor_accuracy: PortalAccuracy,
+    ) -> None:
+        """Initialize location policy, source, and lifecycle state."""
+        self.on_location_state = on_location_state
+        self.record_outdoor_routes = bool(record_outdoor_routes)
+        self.record_indoor_anchor = bool(record_indoor_anchor)
+        self.indoor_accuracy = PortalAccuracy(indoor_accuracy)
+        self._location_source_disabled = location_source is None and self.test_mode
+        self.location_source: LocationSource = (
+            _DisabledLocationSource()
+            if self._location_source_disabled
+            else location_source or PortalLocationSource()
+        )
+        self.location_state = LocationState.DISABLED
+        self.location_state_detail: str | None = None
+        self.location_policy: LocationPolicy | None = None
+        self._recording_origin_ns: int | None = None
+        self._location_filter: LocationFilter | None = None
+        self._location_points_accepted = 0
+        self._location_operation = 0
+        self._location_lifecycle_id = 0
+        self._location_async_lock: asyncio.Lock | None = None
+        self._location_start_task: asyncio.Task[None] | None = None
+        self._location_source_pending = False
+        self._location_stop_scheduled_for: int | None = None
+        self._location_stop_future: Future[None] | None = None
+
     def start(self) -> None:
         """Start the background BLE worker when it is not already running."""
         if self._thread and self._thread.is_alive():
@@ -234,6 +314,7 @@ class Recorder:
                 finalized_activity_id = self._last_finalized_activity_id
         with self._recording_lock:
             self._shutdown_finalized_activity_id = finalized_activity_id
+        location_shutdown_ok = self._wait_for_location_stop(deadline)
         self._stop_requested.set()
         self.trainer.shutdown()
 
@@ -244,7 +325,7 @@ class Recorder:
             # otherwise-unused loop belongs to this thread and can close here.
             if not self.loop.is_closed():
                 self.loop.close()
-            return True
+            return location_shutdown_ok
 
         if self._thread:
             self._thread.join(timeout=max(0.0, deadline - time.monotonic()))
@@ -252,7 +333,7 @@ class Recorder:
                 logger.error(f"Recorder worker did not stop within {timeout:.1f}s")
                 return False
 
-        return True
+        return location_shutdown_ok
 
     def take_shutdown_finalized_activity_id(self) -> int | None:
         """Consume the activity finalized by the most recent shutdown call."""
@@ -261,8 +342,15 @@ class Recorder:
             self._shutdown_finalized_activity_id = None
             return activity_id
 
-    def start_recording(self) -> None:
+    def start_recording(self, environment: Environment) -> None:
         """Begin a new recording generation and reset processor state."""
+        environment = Environment(environment)
+        policy = location_policy_for_environment(
+            environment,
+            record_outdoor_routes=self.record_outdoor_routes,
+            record_indoor_anchor=self.record_indoor_anchor,
+            indoor_accuracy=self.indoor_accuracy,
+        )
         with self._recording_lock:
             if self._recording:
                 return
@@ -272,16 +360,51 @@ class Recorder:
             self.activity_id = None
             # Only create an activity when not in test mode
             if not self.test_mode:
-                self.activity_id = self.store.start_activity(sport_type=self.sport_type)
+                self.activity_id = self.store.start_activity(
+                    sport_type=self.sport_type,
+                    environment=environment,
+                )
             else:
                 self.activity_id = None
             self._recording = True
             self._recording_generation += 1
             self._sample_processor.reset()
+            self._recording_origin_ns = time.monotonic_ns()
+            self._location_points_accepted = 0
+            self._location_operation += 1
+            self._location_lifecycle_id += 1
+            self.location_policy = policy
+            self._location_filter = (
+                LocationFilter(
+                    policy,
+                    max_speed_mps=max_speed_mps_for_sport(self.sport_type),
+                )
+                if policy is not None
+                else None
+            )
+            location_operation = self._location_operation
+            location_lifecycle_id = self._location_lifecycle_id
+            if policy is not None and not self._location_source_disabled:
+                self._location_source_pending = True
+                self._location_stop_scheduled_for = None
+                self._set_location_state_locked(LocationState.STARTING, None)
+            else:
+                self._location_source_pending = False
+                self._set_location_state_locked(LocationState.DISABLED, None)
+            generation = self._recording_generation
         self._schedule_reset_distance()
+        self._dispatch_location_state_if_changed()
+        if policy is not None and not self._location_source_disabled:
+            self._schedule_location_start(
+                policy,
+                generation,
+                location_operation,
+                location_lifecycle_id,
+            )
 
     def begin_finalization(self) -> FinalizationClaim:
         """Claim the active activity for finalization without doing storage work."""
+        stop_location = False
         with self._recording_lock:
             if not self._recording and self._finalizing_activity_id is None:
                 self.activity_id = None
@@ -289,23 +412,33 @@ class Recorder:
             if self._finalizing_activity_id is None:
                 self._recording = False
                 self._recording_generation += 1
+                self._location_operation += 1
+                self._recording_origin_ns = None
+                self._location_filter = None
+                self.location_policy = None
+                stop_location = True
                 self._finalizing_activity_id = self.activity_id
 
             activity_id = self._finalizing_activity_id
             if activity_id is None:
                 self.activity_id = None
-                return FinalizationClaim(FinalizationStatus.NO_ACTIVITY)
-            if self._finalization_in_progress:
-                return FinalizationClaim(FinalizationStatus.ALREADY_RUNNING, activity_id)
-            self._finalization_in_progress = True
-            self._finalization_done.clear()
-            return FinalizationClaim(FinalizationStatus.STARTED, activity_id)
+                claim = FinalizationClaim(FinalizationStatus.NO_ACTIVITY)
+            elif self._finalization_in_progress:
+                claim = FinalizationClaim(FinalizationStatus.ALREADY_RUNNING, activity_id)
+            else:
+                self._finalization_in_progress = True
+                self._finalization_done.clear()
+                claim = FinalizationClaim(FinalizationStatus.STARTED, activity_id)
+        if stop_location:
+            self._schedule_location_stop()
+        return claim
 
     def finish_finalization(self, activity_id: int) -> int | None:
         """Run storage finalization and clear state when it succeeds."""
         succeeded = False
         try:
-            self.store.finalize_activity(activity_id)
+            with self._persistence_lock:
+                self.store.finalize_activity(activity_id)
             succeeded = True
         except Exception:
             logger.exception("Failed to finalize activity {}", activity_id)
@@ -359,15 +492,344 @@ class Recorder:
         self,
         generation: int,
         persist: Callable[[int], None],
-    ) -> None:
+    ) -> bool:
         """Persist only if the sample belongs to the current recording."""
         with self._recording_lock:
-            if (
+            if not (
                 self._recording
                 and generation == self._recording_generation
                 and self.activity_id is not None
             ):
-                persist(self.activity_id)
+                return False
+
+        with self._persistence_lock:
+            with self._recording_lock:
+                if not (
+                    self._recording
+                    and generation == self._recording_generation
+                    and self.activity_id is not None
+                ):
+                    return False
+                activity_id = self.activity_id
+            persist(activity_id)
+            return True
+
+    def _set_location_state_locked(
+        self,
+        state: LocationState,
+        detail: str | None,
+    ) -> bool:
+        """Set location state while the recorder lock is held."""
+        if self.location_state is state and self.location_state_detail == detail:
+            return False
+        self.location_state = state
+        self.location_state_detail = detail
+        return True
+
+    def _dispatch_location_state_if_changed(self) -> None:
+        """Dispatch the already-updated location state to the UI callback."""
+        callback = self.on_location_state
+        if callback is None:
+            return
+        with self._recording_lock:
+            state = self.location_state
+            detail = self.location_state_detail
+        try:
+            self._dispatch(callback, state, detail)
+        except Exception:
+            logger.exception("Location state dispatch failed")
+
+    def _handle_location_state(
+        self,
+        generation: int,
+        operation: int,
+        state: LocationState,
+        detail: str | None,
+    ) -> None:
+        """Apply a source state only while its recording generation is active."""
+        with self._recording_lock:
+            if (
+                not self._recording
+                or generation != self._recording_generation
+                or operation != self._location_operation
+            ):
+                return
+            changed = self._set_location_state_locked(state, detail)
+        if changed:
+            self._dispatch_location_state_if_changed()
+
+    def _schedule_location_start(
+        self,
+        policy: LocationPolicy,
+        generation: int,
+        operation: int,
+        lifecycle_id: int,
+    ) -> None:
+        """Start the location source on the recorder's event-loop thread."""
+        if self.loop.is_closed():
+            self._mark_location_start_unavailable(
+                generation,
+                operation,
+                "recorder event loop is closed",
+            )
+            return
+
+        try:
+            self.loop.call_soon_threadsafe(
+                self._create_location_start_task,
+                policy,
+                generation,
+                operation,
+                lifecycle_id,
+            )
+        except RuntimeError as error:
+            self._mark_location_start_unavailable(generation, operation, str(error))
+
+    def _mark_location_start_unavailable(
+        self,
+        generation: int,
+        operation: int,
+        detail: str,
+    ) -> None:
+        """Report a startup scheduling failure without stopping the recording."""
+        with self._recording_lock:
+            if (
+                self._recording
+                and generation == self._recording_generation
+                and operation == self._location_operation
+            ):
+                self._location_source_pending = False
+                changed = self._set_location_state_locked(LocationState.UNAVAILABLE, detail)
+            else:
+                changed = False
+        if changed:
+            self._dispatch_location_state_if_changed()
+
+    def _create_location_start_task(
+        self,
+        policy: LocationPolicy,
+        generation: int,
+        operation: int,
+        lifecycle_id: int,
+    ) -> None:
+        """Create a location startup task once the worker loop begins running."""
+        with self._recording_lock:
+            current = (
+                self._recording
+                and generation == self._recording_generation
+                and operation == self._location_operation
+                and lifecycle_id == self._location_lifecycle_id
+            )
+        if not current or self.loop.is_closed():
+            return
+        start_task = self.loop.create_task(
+            self._start_location_source(
+                policy,
+                generation,
+                operation,
+                lifecycle_id,
+            ),
+        )
+        self._location_start_task = start_task
+        start_task.add_done_callback(self._clear_location_start_task)
+
+    def _clear_location_start_task(self, task: asyncio.Task[None]) -> None:
+        """Forget a completed location startup task."""
+        if self._location_start_task is task:
+            self._location_start_task = None
+
+    async def _start_location_source(
+        self,
+        policy: LocationPolicy,
+        generation: int,
+        operation: int,
+        lifecycle_id: int,
+    ) -> None:
+        """Start one generation's source while serializing source operations."""
+        location_lock = self._location_lock_for_loop()
+        async with location_lock:
+            with self._recording_lock:
+                if (
+                    not self._recording
+                    or generation != self._recording_generation
+                    or operation != self._location_operation
+                    or lifecycle_id != self._location_lifecycle_id
+                ):
+                    return
+
+            try:
+                await self.location_source.start(
+                    policy,
+                    lambda fix: self._handle_location_fix(generation, operation, fix),
+                    lambda state, detail: self._handle_location_source_state(
+                        generation,
+                        operation,
+                        state,
+                        detail,
+                    ),
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as error:
+                logger.warning("Location source startup failed: {}", error)
+                self._handle_location_state(
+                    generation,
+                    operation,
+                    LocationState.UNAVAILABLE,
+                    str(error),
+                )
+
+    def _handle_location_source_state(
+        self,
+        generation: int,
+        operation: int,
+        state: LocationState,
+        detail: str | None,
+    ) -> None:
+        """Apply source states, reserving tracking for accepted fixes."""
+        if state is LocationState.TRACKING:
+            return
+        self._handle_location_state(generation, operation, state, detail)
+
+    def _schedule_location_stop(self) -> None:
+        """Stop the current source asynchronously and coalesce duplicate requests."""
+        with self._recording_lock:
+            if not self._location_source_pending:
+                return
+            lifecycle_id = self._location_lifecycle_id
+            if self._location_stop_scheduled_for == lifecycle_id:
+                return
+            self._location_stop_scheduled_for = lifecycle_id
+
+        if not self.loop.is_running():
+            # The worker may be between its workflow and final cleanup. Keep
+            # the source pending so _shutdown_loop can stop it on its own loop.
+            return
+
+        coroutine = self._stop_location_source(lifecycle_id)
+        try:
+            future = asyncio.run_coroutine_threadsafe(coroutine, self.loop)
+        except Exception:
+            coroutine.close()
+            with self._recording_lock:
+                if lifecycle_id == self._location_lifecycle_id:
+                    self._location_source_pending = False
+            return
+        self._location_stop_future = future
+
+    async def _stop_location_source(self, lifecycle_id: int) -> None:
+        """Stop the source on the recorder loop without failing finalization."""
+        start_task = self._location_start_task
+        with self._recording_lock:
+            stale = lifecycle_id != self._location_lifecycle_id
+        if start_task is not None and not start_task.done() and not stale:
+            start_task.cancel()
+
+        location_lock = self._location_lock_for_loop()
+        async with location_lock:
+            try:
+                await self.location_source.stop()
+            except Exception:
+                logger.exception("Location source shutdown failed")
+            finally:
+                with self._recording_lock:
+                    if lifecycle_id == self._location_lifecycle_id:
+                        self._location_source_pending = False
+                        changed = self._set_location_state_locked(LocationState.STOPPED, None)
+                    else:
+                        changed = False
+                if changed:
+                    self._dispatch_location_state_if_changed()
+
+    def _location_lock_for_loop(self) -> asyncio.Lock:
+        """Return the async source-operation lock bound to the recorder loop."""
+        if self._location_async_lock is None:
+            self._location_async_lock = asyncio.Lock()
+        return self._location_async_lock
+
+    def _handle_location_fix(
+        self,
+        generation: int,
+        operation: int,
+        fix: LocationFix,
+    ) -> None:
+        """Filter and persist a fix only for the active recorder generation."""
+        try:
+            with self._recording_lock:
+                if (
+                    not self._recording
+                    or generation != self._recording_generation
+                    or operation != self._location_operation
+                    or self._location_filter is None
+                    or self._recording_origin_ns is None
+                ):
+                    return
+                timestamp_ms = relative_timestamp_ms(self._recording_origin_ns)
+                accepted = self._location_filter.accept(fix, timestamp_ms)
+                if accepted is None:
+                    return
+                max_points = self._location_filter.policy.max_points
+
+            persisted = self._persist_if_recording(
+                generation,
+                lambda activity_id: self.store.insert_location_point(
+                    activity_id,
+                    timestamp_ms,
+                    accepted,
+                ),
+            )
+            if not persisted:
+                return
+
+            with self._recording_lock:
+                if (
+                    not self._recording
+                    or generation != self._recording_generation
+                    or operation != self._location_operation
+                ):
+                    return
+                self._location_points_accepted += 1
+                one_shot = max_points == 1
+
+            self._handle_location_state(generation, operation, LocationState.TRACKING, None)
+            if one_shot:
+                with self._recording_lock:
+                    if (
+                        self._recording
+                        and generation == self._recording_generation
+                        and operation == self._location_operation
+                    ):
+                        self._location_operation += 1
+                        self._location_filter = None
+                self._schedule_location_stop()
+        except Exception as error:
+            logger.exception("Location fix handling failed")
+            self._handle_location_state(generation, operation, LocationState.ERROR, str(error))
+
+    def _wait_for_location_stop(self, deadline: float) -> bool:
+        """Wait for a scheduled source stop without blocking its own event loop."""
+        future = self._location_stop_future
+        if future is None or future.done():
+            return True
+        try:
+            running_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            running_loop = None
+        if running_loop is self.loop:
+            logger.warning("Recorder shutdown called from its event-loop thread")
+            return True
+        try:
+            timeout = min(
+                _LOCATION_STOP_WAIT_TIMEOUT_S,
+                max(0.0, deadline - time.monotonic()),
+            )
+            future.result(timeout=timeout)
+        except TimeoutError:
+            logger.error("Location source did not stop before recorder shutdown deadline")
+            return False
+        except Exception:
+            logger.exception("Location source stop task failed")
+        return True
 
     def _dispatch_sample(
         self,
@@ -406,6 +868,11 @@ class Recorder:
 
     async def _shutdown_loop(self) -> None:
         """Cancel tasks left outside the main workflow before closing the loop."""
+        with self._recording_lock:
+            lifecycle_id = self._location_lifecycle_id if self._location_source_pending else None
+        if lifecycle_id is not None:
+            await self._stop_location_source(lifecycle_id)
+
         current = asyncio.current_task()
         pending = [task for task in asyncio.all_tasks() if task is not current and not task.done()]
         for task in pending:
@@ -663,6 +1130,7 @@ class Recorder:
 
         if not device_tasks:
             logger.warning("No device loops started — check configuration and BLE availability")
+            await self._wait_for_stop()
             return
 
         # Wait for explicit stop only — let each mux's internal loop handle reconnects

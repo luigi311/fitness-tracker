@@ -7,8 +7,10 @@ from contextlib import closing
 from pathlib import Path
 
 import pytest
-from bleaksport import HeartRateSample, TrainerSample
+from alembic import command
+from bleaksport import CyclingSample, HeartRateSample, RunningSample, TrainerSample
 from fitness_tracker import database as database_module
+from fitness_tracker.core.environment import Environment
 from fitness_tracker.core.measurements import NormalizedHeartRate
 from fitness_tracker.core.sports import SportTypesEnum
 from fitness_tracker.data.models import (
@@ -18,12 +20,15 @@ from fitness_tracker.data.models import (
     ActivityUpload,
     CyclingMetrics,
     HeartRate,
+    LocationPoint,
     RunningMetrics,
 )
 from fitness_tracker.data.sqlite_files import secure_sqlite_files
 from fitness_tracker.database import DatabaseManager, DatabaseMigrationError
+from fitness_tracker.hardware.location import LocationFix
 from fitness_tracker.hardware.processor import SampleProcessor
 from sqlalchemy import create_engine, inspect, text
+from sqlalchemy.orm import Session
 
 _DATABASE_FIXTURE_DIR = Path(__file__).parent / "fixtures" / "database"
 
@@ -55,7 +60,7 @@ def test_zero_altitude_is_preserved(
     expected_table: type[RunningMetrics] | type[CyclingMetrics],
 ) -> None:
     db = _database()
-    activity_id = db.start_activity(sport_type)
+    activity_id = db.start_activity(sport_type, Environment.INDOOR)
     sample = _trainer_sample(altitude_m=0.0)
 
     if sport_type == SportTypesEnum.running:
@@ -71,6 +76,46 @@ def test_zero_altitude_is_preserved(
     assert row.incline_percent == 8.0
 
 
+def test_incomplete_required_metrics_are_not_queued() -> None:
+    db = _database()
+    activity_id = db.start_activity(SportTypesEnum.running, Environment.INDOOR)
+
+    db.insert_running_metrics(
+        activity_id,
+        RunningSample(timestamp_ms=1_000, speed_mps=None, cadence_spm=170),
+        incline_percent=None,
+    )
+    db.insert_running_metrics(
+        activity_id,
+        RunningSample(timestamp_ms=2_000, speed_mps=3.0, cadence_spm=None),
+        incline_percent=None,
+    )
+    db.insert_cycling_metrics(
+        activity_id,
+        CyclingSample(timestamp_ms=3_000, speed_mps=None, cadence_rpm=80.0),
+        incline_percent=None,
+    )
+
+    assert db._pending_run == []  # noqa: SLF001
+    assert db._pending_cyc == []  # noqa: SLF001
+
+
+def test_fractional_cycling_cadence_is_queued_as_an_integer() -> None:
+    db = _database()
+    activity_id = db.start_activity(SportTypesEnum.biking, Environment.OUTDOOR)
+
+    db.insert_cycling_metrics(
+        activity_id,
+        CyclingSample(timestamp_ms=1_000, speed_mps=8.0, cadence_rpm=80.6),
+        incline_percent=None,
+    )
+    db.stop_activity(activity_id)
+
+    with db.Session() as session:
+        row = session.query(CyclingMetrics).one()
+    assert row.cadence_rpm == 81
+
+
 def test_fresh_migration_matches_upload_metadata() -> None:
     db = _database()
 
@@ -82,10 +127,86 @@ def test_fresh_migration_matches_upload_metadata() -> None:
 
     assert database_column["nullable"] is ActivityUpload.__table__.c.updated_at.nullable is False
 
+    activity_columns = {column["name"] for column in inspect(db.engine).get_columns("activities")}
+    assert "environment" in activity_columns
+    environment_column = next(
+        column
+        for column in inspect(db.engine).get_columns("activities")
+        if column["name"] == "environment"
+    )
+    assert environment_column["nullable"] is False
+
+    location_columns = {
+        column["name"] for column in inspect(db.engine).get_columns("location_points")
+    }
+    assert location_columns == {
+        "id",
+        "activity_id",
+        "timestamp_ms",
+        "latitude_deg",
+        "longitude_deg",
+        "accuracy_m",
+        "altitude_m",
+        "speed_mps",
+        "heading_deg",
+        "source_time_utc",
+    }
+    assert {index["name"] for index in inspect(db.engine).get_indexes("location_points")} == {
+        "ix_location_activity_id",
+        "ix_location_activity_time",
+    }
+
+
+@pytest.mark.parametrize("environment", [Environment.OUTDOOR, Environment.TRAINER])
+def test_start_activity_persists_environment(environment: Environment) -> None:
+    db = _database()
+    activity_id = db.start_activity(SportTypesEnum.running, environment)
+
+    with db.Session() as session:
+        activity = session.get(Activity, activity_id)
+
+    assert activity is not None
+    assert activity.environment == environment.value
+
+
+def test_downgrade_upgrade_roundtrip_recreates_environment_and_location_schema(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "v5.db"
+    database_url = f"sqlite:///{database_path}"
+    db = DatabaseManager(database_url)
+    db.start_activity(SportTypesEnum.running, Environment.OUTDOOR)
+    db.engine.dispose()
+
+    engine = create_engine(database_url)
+    with engine.connect() as connection:
+        connection.exec_driver_sql("PRAGMA foreign_keys=OFF")
+        connection.commit()
+        transaction = connection.begin()
+        try:
+            config = database_module._build_alembic_config()  # noqa: SLF001
+            config.attributes["connection"] = connection
+            command.downgrade(config, "0005")
+            transaction.commit()
+        except Exception:
+            transaction.rollback()
+            raise
+        finally:
+            connection.exec_driver_sql("PRAGMA foreign_keys=ON")
+    engine.dispose()
+
+    migrated = DatabaseManager(database_url)
+
+    with migrated.Session() as session:
+        activity = session.query(Activity).one()
+
+    assert activity.environment == Environment.INDOOR.value
+    assert "location_points" in inspect(migrated.engine).get_table_names()
+
 
 def test_activity_deletion_cascades_to_measurements_and_uploads() -> None:
     db = _database()
-    activity_id = db.start_activity(SportTypesEnum.running)
+    activity_id = db.start_activity(SportTypesEnum.running, Environment.INDOOR)
     with db.Session() as session:
         session.add_all(
             [
@@ -101,6 +222,12 @@ def test_activity_deletion_cascades_to_measurements_and_uploads() -> None:
                     timestamp_ms=1_000,
                     speed_mps=8.0,
                 ),
+                LocationPoint(
+                    activity_id=activity_id,
+                    timestamp_ms=1_000,
+                    latitude_deg=39.7392,
+                    longitude_deg=-104.9903,
+                ),
                 ActivityUpload(
                     activity_id=activity_id,
                     provider="test",
@@ -112,7 +239,7 @@ def test_activity_deletion_cascades_to_measurements_and_uploads() -> None:
 
     foreign_keys = {
         table: inspect(db.engine).get_foreign_keys(table)[0]["options"].get("ondelete")
-        for table in ("heart_rate", "running_metrics", "cycling_metrics")
+        for table in ("heart_rate", "running_metrics", "cycling_metrics", "location_points")
     }
     assert set(foreign_keys.values()) == {"CASCADE"}
 
@@ -123,7 +250,80 @@ def test_activity_deletion_cascades_to_measurements_and_uploads() -> None:
         assert session.query(HeartRate).count() == 0
         assert session.query(RunningMetrics).count() == 0
         assert session.query(CyclingMetrics).count() == 0
+        assert session.query(LocationPoint).count() == 0
         assert session.query(ActivityUpload).count() == 0
+
+
+def test_location_points_are_batched_ordered_and_invalidate_uploads() -> None:
+    db = _database()
+    activity_id = db.start_activity(SportTypesEnum.running, Environment.OUTDOOR)
+    db.repository.mark_upload_ok(activity_id, "test", payload_hash="old-hash")
+    first = LocationFix(
+        latitude_deg=39.7392,
+        longitude_deg=-104.9903,
+        accuracy_m=5.0,
+    )
+    second = LocationFix(
+        latitude_deg=39.7393,
+        longitude_deg=-104.9902,
+        altitude_m=1_600.0,
+        source_time_utc=first.source_time_utc,
+    )
+
+    db.insert_location_point(activity_id, 1_000, first)
+    db.insert_location_point(activity_id, 1_000, second)
+    db.stop_activity(activity_id)
+
+    points = db.repository.list_location_points(activity_id)
+
+    assert len(points) == 2
+    assert [point.timestamp_ms for point in points] == [1_000, 1_000]
+    assert points[0].latitude_deg == first.latitude_deg
+    assert points[1].altitude_m == second.altitude_m
+    with db.Session() as session:
+        upload = session.query(ActivityUpload).one()
+    assert upload.status == "pending"
+    assert upload.payload_hash is None
+
+
+def test_failed_mixed_measurement_flush_keeps_rows_retryable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db = _database()
+    activity_id = db.start_activity(SportTypesEnum.running, Environment.OUTDOOR)
+    db.insert_heart_rate(activity_id, 1_000, 140, None)
+    db.insert_location_point(
+        activity_id,
+        1_000,
+        LocationFix(latitude_deg=39.7392, longitude_deg=-104.9903),
+    )
+    original_commit = Session.commit
+    fail_once = True
+
+    def commit_once(session: Session) -> None:
+        nonlocal fail_once
+        if fail_once:
+            fail_once = False
+            session.flush()
+            message = "temporary commit failure"
+            raise RuntimeError(message)
+        original_commit(session)
+
+    monkeypatch.setattr(Session, "commit", commit_once)
+
+    with pytest.raises(RuntimeError, match="temporary commit failure"):
+        db.finalize_activity(activity_id)
+    assert len(db._pending_hr) == 1  # noqa: SLF001
+    assert len(db._pending_location) == 1  # noqa: SLF001
+
+    db.finalize_activity(activity_id)
+
+    assert db._pending_hr == []  # noqa: SLF001
+    assert db._pending_location == []  # noqa: SLF001
+    with db.Session() as session:
+        assert session.query(HeartRate).filter_by(activity_id=activity_id).count() == 1
+        assert session.query(LocationPoint).filter_by(activity_id=activity_id).count() == 1
+    assert len(db.repository.list_location_points(activity_id)) == 1
 
 
 def test_migration_secures_sqlite_database_sidecars_and_backup(tmp_path: Path) -> None:
@@ -159,7 +359,7 @@ def test_migration_secures_sqlite_database_sidecars_and_backup(tmp_path: Path) -
     )
 
 
-@pytest.mark.parametrize("schema_release", [1, 2, 3, 4])
+@pytest.mark.parametrize("schema_release", [1, 2, 3, 4, 5])
 def test_migrations_upgrade_every_shipped_schema(
     tmp_path: Path,
     schema_release: int,
@@ -175,6 +375,7 @@ def test_migrations_upgrade_every_shipped_schema(
         activity = session.query(Activity).one()
         heart_rate = session.query(HeartRate).one()
         assert activity.public_id is not None
+        assert activity.environment == Environment.INDOOR.value
         assert heart_rate.energy_kj == 1.25
         assert session.query(RunningMetrics).count() == int(schema_release >= 2)
         assert session.query(ActivityUpload).count() == int(schema_release >= 2)
@@ -189,6 +390,24 @@ def test_migrations_upgrade_every_shipped_schema(
         constraint.get("column_names") == ["start_time"]
         for constraint in migrated_inspector.get_unique_constraints("activities")
     )
+    assert {
+        constraint["name"] for constraint in migrated_inspector.get_unique_constraints("activities")
+    } >= {"uq_activities_public_id"}
+    for table in (
+        "heart_rate",
+        "running_metrics",
+        "cycling_metrics",
+        "activity_uploads",
+        "location_points",
+    ):
+        activity_foreign_key = next(
+            constraint
+            for constraint in migrated_inspector.get_foreign_keys(table)
+            if constraint["constrained_columns"] == ["activity_id"]
+        )
+        assert activity_foreign_key["referred_table"] == "activities"
+        assert activity_foreign_key["referred_columns"] == ["id"]
+        assert activity_foreign_key["options"].get("ondelete") == "CASCADE"
     assert all(
         column in {item["name"] for item in migrated_inspector.get_columns(table)}
         for table, column in (
@@ -228,7 +447,7 @@ def test_trainer_grade_is_not_persisted_as_altitude(
     expected_table: type[RunningMetrics] | type[CyclingMetrics],
 ) -> None:
     db = _database()
-    activity_id = db.start_activity(sport_type)
+    activity_id = db.start_activity(sport_type, Environment.INDOOR)
     sample = _trainer_sample(altitude_m=None)
 
     if sport_type == SportTypesEnum.running:

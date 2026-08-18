@@ -4,13 +4,15 @@ from typing import Protocol
 
 from bleaksport.models import CyclingSample, RunningSample, TrainerSample
 
+from fitness_tracker.core.environment import Environment
 from fitness_tracker.core.sports import SportTypesEnum
+from fitness_tracker.hardware.location import LocationFix
 
 
 class RecordingStore(Protocol):
     """Operations a recorder needs without knowing the database implementation."""
 
-    def start_activity(self, sport_type: SportTypesEnum) -> int:
+    def start_activity(self, sport_type: SportTypesEnum, environment: Environment) -> int:
         """Create and return the identifier for a new activity."""
 
     def finalize_activity(self, activity_id: int) -> None:
@@ -40,3 +42,11 @@ class RecordingStore(Protocol):
         incline_percent: float | None,
     ) -> None:
         """Persist one normalized cycling measurement."""
+
+    def insert_location_point(
+        self,
+        activity_id: int,
+        timestamp_ms: int,
+        fix: LocationFix,
+    ) -> None:
+        """Persist one accepted location fix."""
