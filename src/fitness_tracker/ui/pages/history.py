@@ -196,6 +196,7 @@ class HistoryPageUI:
         self.filter_combo.append("week", "Last 7 Days")
         self.filter_combo.append("month", "Last 30 Days")
         self.filter_combo.append("all", "All Time")
+        self.filter_combo.append("failed", "Failed Uploads")
         self.filter_combo.set_active_id(self.filter_id)
         self.filter_combo.connect("changed", self._on_filter_changed)
 
@@ -397,6 +398,9 @@ class HistoryPageUI:
     def _fetch_stats_rows(self, filter_id: str | None = None) -> list[ActivityStatsRow]:
         """Single SELECT against activity_stats with optional cutoff filter."""
         repository = self._get_repository()
+        selected_filter = self.filter_id if filter_id is None else filter_id
+        if selected_filter == "failed":
+            return repository.list_failed_activity_stats()
         cutoff = self._filter_cutoff(filter_id)
         # The repository compares the stored UTC value with the local-aware cutoff.
         return repository.list_activity_stats(cutoff)

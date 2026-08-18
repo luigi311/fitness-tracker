@@ -119,6 +119,20 @@ def test_history_activity_title_can_shrink_in_narrow_layout() -> None:
     title.set_ellipsize.assert_called_once_with(history_module.Pango.EllipsizeMode.END)
 
 
+def test_history_failed_filter_queries_only_failed_upload_stats() -> None:
+    page = HistoryPageUI.__new__(HistoryPageUI)
+    repository = Mock()
+    repository.list_failed_activity_stats.return_value = [SimpleNamespace(activity_id=7)]
+    page.filter_id = "failed"
+    page._get_repository = Mock(return_value=repository)
+
+    rows = page._fetch_stats_rows()
+
+    assert [row.activity_id for row in rows] == [7]
+    repository.list_failed_activity_stats.assert_called_once_with()
+    repository.list_activity_stats.assert_not_called()
+
+
 def test_history_backfill_discard_and_duplicate_release_reload_guard() -> None:
     page = HistoryPageUI.__new__(HistoryPageUI)
     jobs = Mock()

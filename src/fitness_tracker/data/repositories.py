@@ -69,6 +69,10 @@ class ActivityRepository(Protocol):
         """List activity summaries, optionally restricted to a start-time cutoff."""
         ...
 
+    def list_failed_activity_stats(self) -> list[ActivityStatsRow]:
+        """List activity summaries with at least one failed upload."""
+        ...
+
     def list_heart_rates(self, activity_id: int) -> list[HeartRate]:
         """List heart-rate samples ordered by sample time."""
         ...
@@ -163,6 +167,18 @@ class SqlAlchemyActivityRepository:
         )
         if cutoff is not None:
             statement = statement.where(ActivityStats.start_time >= cutoff)
+        with self._session_factory() as session:
+            return list(session.scalars(statement).all())
+
+    def list_failed_activity_stats(self) -> list[ActivityStatsRow]:
+        """List activity summaries with at least one failed upload."""
+        failed_activity_ids = select(ActivityUpload.activity_id).where(
+            ActivityUpload.status == "failed",
+        )
+        statement = select(ActivityStats).where(
+            ActivityStats.sport_type_id != SportTypesEnum.unknown.value,
+            ActivityStats.activity_id.in_(failed_activity_ids),
+        )
         with self._session_factory() as session:
             return list(session.scalars(statement).all())
 
