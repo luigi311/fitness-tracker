@@ -230,6 +230,7 @@ def _load_headless_ui_classes(
     session_spec.loader.exec_module(session_module)
     section_spec.loader.exec_module(section_module)
     tracker_module = importlib.import_module(module_names[2])
+    monkeypatch.delitem(sys.modules, module_names[2])
 
     return tracker_module.TrackerPageUI, section_module.LocationSection, session_module.SessionView
 

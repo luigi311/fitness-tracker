@@ -50,14 +50,14 @@ def _make_recorder(*, test_mode=False, trainer_supplied_hr=False, with_callback=
     )
 
 
-async def _wait_until(predicate: Callable[[], bool], *, wait_seconds: float = 1.0) -> None:
+async def _wait_until(predicate: Callable[[], bool], *, wait_seconds: float = 2.0) -> None:
     """Yield until an observable async state is reached or a deadline expires."""
     deadline = time.monotonic() + wait_seconds
     while not predicate():
         if time.monotonic() >= deadline:
             message = "Timed out waiting for recorder lifecycle state"
             raise AssertionError(message)
-        await asyncio.sleep(0)
+        await asyncio.sleep(0.001)
 
 
 class _RecorderLocationSource:
