@@ -72,7 +72,7 @@ def _sec_str(
     act: Activity,
     primary_samples: Sequence[_PrimarySample],
     heart_rates: list[HeartRate],
-    locations: Sequence[LocationPoint],
+    locations: Sequence[_ValidatedLocation],
 ) -> str:
     """
     Total time in seconds for the <Lap>. Prefer the DB end_time if present,
@@ -88,7 +88,7 @@ def _sec_str(
     if heart_rates:
         tmax = max(tmax, int(heart_rates[-1].timestamp_ms))
     if locations:
-        tmax = max(tmax, int(locations[-1].timestamp_ms))
+        tmax = max(tmax, int(locations[-1].point.timestamp_ms))
     return f"{max(0.0, tmax / 1000.0):.1f}"
 
 
@@ -105,17 +105,25 @@ def _location_fix(point: LocationPoint) -> LocationFix:
     )
 
 
-def _gps_distance_m(locations: Sequence[LocationPoint]) -> float:
+@dataclass(frozen=True)
+class _ValidatedLocation:
+    """Persisted location paired with its single validated representation."""
+
+    point: LocationPoint
+    fix: LocationFix
+
+
+def _gps_distance_m(locations: Sequence[_ValidatedLocation]) -> float:
     """Return cumulative great-circle distance for a location-only timeline."""
     total = 0.0
     for previous, current in pairwise(locations):
-        total += haversine_distance_m(_location_fix(previous), _location_fix(current))
+        total += haversine_distance_m(previous.fix, current.fix)
     return total
 
 
 def _lap_distance_m_str(
     primary_samples: Sequence[_PrimarySample],
-    locations: Sequence[LocationPoint],
+    locations: Sequence[_ValidatedLocation],
 ) -> str:
     """
     Distance for the lap in meters (string). Prefer the final total_distance_m
@@ -152,14 +160,14 @@ class _TimelineEvent:
     timestamp_ms: int
     primary: _PrimarySample | None = None
     sensor: _PrimarySample | None = None
-    location: LocationPoint | None = None
+    location: _ValidatedLocation | None = None
 
 
 def _build_tcx_lap(
     *,
     act: Activity,
     heart_rates: list[HeartRate],
-    locations: Sequence[LocationPoint],
+    locations: Sequence[_ValidatedLocation],
     primary: Sequence[_PrimarySample],
     sport_type: SportTypesEnum,
 ) -> tuple[Element, Element]:
@@ -319,12 +327,11 @@ def _append_heart_rate_trackpoints(
         SubElement(hr, "Value").text = str(int(heart_rate.bpm))
 
 
-def _append_position(trackpoint: Element, location: LocationPoint) -> None:
+def _append_position(trackpoint: Element, location: _ValidatedLocation) -> None:
     """Append a persisted location in TCX's standard position element."""
-    validated = _location_fix(location)
     position = SubElement(trackpoint, "Position")
-    SubElement(position, "LatitudeDegrees").text = f"{validated.latitude_deg:.8f}"
-    SubElement(position, "LongitudeDegrees").text = f"{validated.longitude_deg:.8f}"
+    SubElement(position, "LatitudeDegrees").text = f"{location.point.latitude_deg:.8f}"
+    SubElement(position, "LongitudeDegrees").text = f"{location.point.longitude_deg:.8f}"
 
 
 def _location_sort_key(location: LocationPoint) -> tuple[int, int]:
@@ -334,7 +341,7 @@ def _location_sort_key(location: LocationPoint) -> tuple[int, int]:
 
 def _merge_timeline_events(
     events: Sequence[_TimelineEvent],
-    locations: Sequence[LocationPoint],
+    locations: Sequence[_ValidatedLocation],
 ) -> list[_TimelineEvent]:
     """Merge sorted base events and locations in linear time."""
     merged: list[_TimelineEvent] = []
@@ -342,7 +349,7 @@ def _merge_timeline_events(
     location_idx = 0
     while event_idx < len(events) and location_idx < len(locations):
         event_timestamp = events[event_idx].timestamp_ms
-        location_timestamp = int(locations[location_idx].timestamp_ms)
+        location_timestamp = int(locations[location_idx].point.timestamp_ms)
         if event_timestamp < location_timestamp:
             merged.append(events[event_idx])
             event_idx += 1
@@ -358,7 +365,7 @@ def _merge_timeline_events(
         location_start = location_idx
         while (
             location_idx < len(locations)
-            and int(locations[location_idx].timestamp_ms) == location_timestamp
+            and int(locations[location_idx].point.timestamp_ms) == location_timestamp
         ):
             location_idx += 1
 
@@ -379,7 +386,7 @@ def _merge_timeline_events(
 
     merged.extend(events[event_idx:])
     merged.extend(
-        _TimelineEvent(int(location.timestamp_ms), location=location)
+        _TimelineEvent(int(location.point.timestamp_ms), location=location)
         for location in locations[location_idx:]
     )
     return merged
@@ -399,7 +406,7 @@ def _build_unified_timeline(
     *,
     primary: Sequence[_PrimarySample],
     heart_rates: Sequence[HeartRate],
-    locations: Sequence[LocationPoint],
+    locations: Sequence[_ValidatedLocation],
     indoor_anchor: bool,
 ) -> list[_TimelineEvent]:
     """Merge sensor and location rows into deterministic TCX events."""
@@ -412,7 +419,7 @@ def _build_unified_timeline(
         return _align_timeline_sensors(events)
     if not events:
         return [
-            _TimelineEvent(int(location.timestamp_ms), location=location)
+            _TimelineEvent(int(location.point.timestamp_ms), location=location)
             for location in selected_locations
         ]
 
@@ -428,7 +435,7 @@ def _timeline_distance(
     has_primary: bool,
     last_primary_timestamp_ms: int,
     last_distance_m: float,
-    previous_location: LocationPoint | None,
+    previous_location: _ValidatedLocation | None,
 ) -> tuple[float, int, float]:
     """Calculate distance and state updates for one merged timeline event."""
     if event.primary is not None:
@@ -442,8 +449,8 @@ def _timeline_distance(
 
     if not has_primary and event.location is not None and previous_location is not None:
         last_distance_m += haversine_distance_m(
-            _location_fix(previous_location),
-            _location_fix(event.location),
+            previous_location.fix,
+            event.location.fix,
         )
     return last_distance_m, last_primary_timestamp_ms, last_distance_m
 
@@ -457,7 +464,7 @@ def _append_timeline_altitude(
     """Append the source altitude selected for one merged event."""
     altitude_m = event.sensor.altitude_m if event.sensor is not None else None
     if event.location is not None and (not indoor_anchor or altitude_m is None):
-        gps_altitude_m = _location_fix(event.location).altitude_m
+        gps_altitude_m = event.location.fix.altitude_m
         if gps_altitude_m is not None:
             altitude_m = gps_altitude_m
     if altitude_m is not None:
@@ -505,7 +512,7 @@ def _append_unified_trackpoints(
     first_primary = next((event for event in events if event.primary is not None), None)
     last_primary_timestamp_ms = first_primary.timestamp_ms if first_primary is not None else 0
     last_distance_m = 0.0
-    previous_location: LocationPoint | None = None
+    previous_location: _ValidatedLocation | None = None
     hr_idx = 0
 
     for event in events:
@@ -590,12 +597,15 @@ def activity_to_tcx(
         cadence_rpm_values = []
         cadence_spm_values = []
 
-    locations = sorted(locations or [], key=_location_sort_key)
+    location_points = sorted(locations or [], key=_location_sort_key)
     indoor_anchor = act.environment in {
         Environment.INDOOR.value,
         Environment.TRAINER.value,
     }
-    selected_locations = locations[:1] if indoor_anchor else locations
+    selected_points = location_points[:1] if indoor_anchor else location_points
+    selected_locations = [
+        _ValidatedLocation(point=point, fix=_location_fix(point)) for point in selected_points
+    ]
     tcx, track = _build_tcx_lap(
         act=act,
         heart_rates=heart_rates,

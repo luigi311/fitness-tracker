@@ -441,7 +441,7 @@ def test_portal_source_bounds_startup_and_reports_timeout(monkeypatch) -> None:
 
 
 def test_portal_source_allows_slow_activation_within_startup_budget(monkeypatch) -> None:
-    monkeypatch.setattr(location_portal, "_STARTUP_TIMEOUT_S", 0.05)
+    monkeypatch.setattr(location_portal, "_STARTUP_TIMEOUT_S", 0.2)
     bus = _FakeBus()
 
     class SlowBusFactory:

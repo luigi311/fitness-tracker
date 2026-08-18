@@ -387,9 +387,11 @@ def test_invalid_optional_location_values_do_not_enter_tcx_xml() -> None:
         sport_type=SportTypesEnum.running,
     )
 
-    xml_text = generated.decode("utf-8").lower()
-    assert "nan" not in xml_text
-    assert "inf" not in xml_text
+    root = ET.fromstring(generated)  # noqa: S314 - parsing exporter-generated XML
+    element_names = {element.tag.rsplit("}", 1)[-1] for element in root.iter()}
+    assert element_names.isdisjoint(
+        {"AccuracyMeters", "AltitudeMeters", "Speed", "HeadingDegrees"},
+    )
 
 
 def test_equal_timestamp_locations_use_database_id_order() -> None:

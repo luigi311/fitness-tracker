@@ -50,6 +50,16 @@ def _make_recorder(*, test_mode=False, trainer_supplied_hr=False, with_callback=
     )
 
 
+async def _wait_until(predicate: Callable[[], bool], *, wait_seconds: float = 1.0) -> None:
+    """Yield until an observable async state is reached or a deadline expires."""
+    deadline = time.monotonic() + wait_seconds
+    while not predicate():
+        if time.monotonic() >= deadline:
+            message = "Timed out waiting for recorder lifecycle state"
+            raise AssertionError(message)
+        await asyncio.sleep(0)
+
+
 class _RecorderLocationSource:
     """Controllable source double for recorder lifecycle tests."""
 
@@ -110,6 +120,13 @@ class _RecorderLocationSource:
 
 
 class RecorderLifecycleTests(unittest.TestCase):
+    _SECOND_SOURCE_OPERATION = 2
+
+    def _make_recorder(self, **kwargs):
+        recorder = _make_recorder(**kwargs)
+        self.addCleanup(recorder.shutdown)
+        return recorder
+
     def test_discovered_devices_match_the_profile_sensor_table(self):
         profile = SensorProfile(
             hr_address="hr-address",
@@ -126,6 +143,7 @@ class RecorderLifecycleTests(unittest.TestCase):
             on_error=lambda _msg: None,
             test_mode=True,
         )
+        self.addCleanup(recorder.shutdown)
         devices = [
             types.SimpleNamespace(address="hr-address", name="unknown"),
             types.SimpleNamespace(address="unknown", name="speed-name"),
@@ -150,7 +168,7 @@ class RecorderLifecycleTests(unittest.TestCase):
         recorder.shutdown()
 
     def test_shutdown_cancels_remaining_tasks_and_closes_loop(self):
-        recorder = _make_recorder()
+        recorder = self._make_recorder()
         workflow_started = threading.Event()
         lingering_cancelled = threading.Event()
 
@@ -177,13 +195,13 @@ class RecorderLifecycleTests(unittest.TestCase):
         self.assertFalse(recorder._thread.is_alive())
 
     def test_unstarted_test_recorder_closes_its_loop(self):
-        recorder = _make_recorder(test_mode=True)
+        recorder = self._make_recorder(test_mode=True)
 
         self.assertTrue(recorder.shutdown())
         self.assertTrue(recorder.loop.is_closed())
 
     def test_start_recording_forwards_environment_to_store(self):
-        recorder = _make_recorder()
+        recorder = self._make_recorder()
         recorder.store.start_activity = Mock(return_value=1)
         recorder.store.finalize_activity = Mock()
 
@@ -199,7 +217,7 @@ class RecorderLifecycleTests(unittest.TestCase):
     def test_outdoor_location_points_persist_and_report_state(self):
         source = _RecorderLocationSource()
         states: list[tuple[LocationState, str | None]] = []
-        recorder = _make_recorder(
+        recorder = self._make_recorder(
             location_source=source,
             on_location_state=lambda state, detail: states.append((state, detail)),
         )
@@ -211,8 +229,7 @@ class RecorderLifecycleTests(unittest.TestCase):
             recorder.loop.close()
             recorder.loop = asyncio.get_running_loop()
             recorder.start_recording(Environment.OUTDOOR)
-            for _ in range(3):
-                await asyncio.sleep(0)
+            await _wait_until(lambda: source.start_count == 1)
 
             self.assertEqual(source.policy, LocationPolicy.outdoor())
             source.emit(LocationFix(latitude_deg=39.7392, longitude_deg=-104.9903))
@@ -220,8 +237,7 @@ class RecorderLifecycleTests(unittest.TestCase):
             self.assertEqual(recorder.store.insert_location_point.call_count, 2)
 
             self.assertEqual(recorder.stop_recording(), 7)
-            for _ in range(3):
-                await asyncio.sleep(0)
+            await _wait_until(lambda: source.stop_count == 1)
 
         asyncio.run(exercise())
 
@@ -238,7 +254,7 @@ class RecorderLifecycleTests(unittest.TestCase):
 
     def test_indoor_anchor_persists_once_and_stops_source(self):
         source = _RecorderLocationSource()
-        recorder = _make_recorder(
+        recorder = self._make_recorder(
             location_source=source,
             record_indoor_anchor=True,
         )
@@ -250,14 +266,12 @@ class RecorderLifecycleTests(unittest.TestCase):
             recorder.loop.close()
             recorder.loop = asyncio.get_running_loop()
             recorder.start_recording(Environment.INDOOR)
-            for _ in range(3):
-                await asyncio.sleep(0)
+            await _wait_until(lambda: source.start_count == 1)
 
             self.assertEqual(source.policy, LocationPolicy.anchor())
             source.emit(LocationFix(latitude_deg=39.7392, longitude_deg=-104.9903))
             source.emit(LocationFix(latitude_deg=39.7393, longitude_deg=-104.9903))
-            for _ in range(3):
-                await asyncio.sleep(0)
+            await _wait_until(lambda: source.stop_count == 1)
 
             self.assertEqual(recorder.store.insert_location_point.call_count, 1)
             self.assertEqual(source.stop_count, 1)
@@ -272,7 +286,7 @@ class RecorderLifecycleTests(unittest.TestCase):
         for environment in (Environment.INDOOR, Environment.TRAINER):
             with self.subTest(environment=environment):
                 source = _RecorderLocationSource()
-                recorder = _make_recorder(location_source=source)
+                recorder = self._make_recorder(location_source=source)
 
                 recorder.start_recording(environment)
 
@@ -284,7 +298,7 @@ class RecorderLifecycleTests(unittest.TestCase):
 
     def test_trainer_anchor_persists_once_and_stops_source(self):
         source = _RecorderLocationSource()
-        recorder = _make_recorder(
+        recorder = self._make_recorder(
             location_source=source,
             record_indoor_anchor=True,
         )
@@ -296,13 +310,11 @@ class RecorderLifecycleTests(unittest.TestCase):
             recorder.loop.close()
             recorder.loop = asyncio.get_running_loop()
             recorder.start_recording(Environment.TRAINER)
-            for _ in range(3):
-                await asyncio.sleep(0)
+            await _wait_until(lambda: source.start_count == 1)
 
             self.assertEqual(source.policy, LocationPolicy.anchor())
             source.emit(LocationFix(latitude_deg=39.7392, longitude_deg=-104.9903))
-            for _ in range(3):
-                await asyncio.sleep(0)
+            await _wait_until(lambda: source.stop_count == 1)
 
             self.assertEqual(recorder.store.insert_location_point.call_count, 1)
             self.assertEqual(source.stop_count, 1)
@@ -313,7 +325,7 @@ class RecorderLifecycleTests(unittest.TestCase):
 
     def test_test_mode_does_not_construct_the_desktop_portal_source(self):
         with patch.object(recorder_module, "PortalLocationSource") as portal_source:
-            recorder = _make_recorder(test_mode=True)
+            recorder = self._make_recorder(test_mode=True)
             recorder.start_recording(Environment.OUTDOOR)
 
             portal_source.assert_not_called()
@@ -322,7 +334,7 @@ class RecorderLifecycleTests(unittest.TestCase):
 
     def test_stale_location_stop_cannot_cancel_next_recording_start(self):
         source = _RecorderLocationSource()
-        recorder = _make_recorder(location_source=source)
+        recorder = self._make_recorder(location_source=source)
         recorder.store.start_activity = Mock(side_effect=[17, 18])
         recorder.store.insert_location_point = Mock()
         recorder.store.finalize_activity = Mock()
@@ -331,14 +343,12 @@ class RecorderLifecycleTests(unittest.TestCase):
             recorder.loop.close()
             recorder.loop = asyncio.get_running_loop()
             recorder.start_recording(Environment.OUTDOOR)
-            for _ in range(3):
-                await asyncio.sleep(0)
+            await _wait_until(lambda: source.start_count == 1)
             self.assertEqual(source.start_count, 1)
 
             self.assertEqual(recorder.stop_recording(), 17)
             recorder.start_recording(Environment.OUTDOOR)
-            for _ in range(5):
-                await asyncio.sleep(0)
+            await _wait_until(lambda: source.start_count == self._SECOND_SOURCE_OPERATION)
 
             self.assertEqual(source.start_count, 2)
             self.assertEqual(source.stop_count, 1)
@@ -352,15 +362,14 @@ class RecorderLifecycleTests(unittest.TestCase):
                 LocationFix(latitude_deg=39.7392, longitude_deg=-104.9903),
             )
             self.assertEqual(recorder.stop_recording(), 18)
-            for _ in range(3):
-                await asyncio.sleep(0)
+            await _wait_until(lambda: source.stop_count == self._SECOND_SOURCE_OPERATION)
 
         asyncio.run(exercise())
         self.assertTrue(recorder.shutdown())
 
     def test_old_generation_location_fix_cannot_enter_new_activity(self):
         source = _RecorderLocationSource()
-        recorder = _make_recorder(location_source=source)
+        recorder = self._make_recorder(location_source=source)
         recorder.store.start_activity = Mock(side_effect=[11, 12])
         recorder.store.insert_location_point = Mock()
         recorder.store.finalize_activity = Mock()
@@ -369,17 +378,14 @@ class RecorderLifecycleTests(unittest.TestCase):
             recorder.loop.close()
             recorder.loop = asyncio.get_running_loop()
             recorder.start_recording(Environment.OUTDOOR)
-            for _ in range(3):
-                await asyncio.sleep(0)
+            await _wait_until(lambda: source.start_count == 1)
             old_callback = source.callbacks[0][0]
 
             self.assertEqual(recorder.stop_recording(), 11)
-            for _ in range(3):
-                await asyncio.sleep(0)
+            await _wait_until(lambda: source.stop_count == 1)
 
             recorder.start_recording(Environment.OUTDOOR)
-            for _ in range(3):
-                await asyncio.sleep(0)
+            await _wait_until(lambda: source.start_count == self._SECOND_SOURCE_OPERATION)
             new_callback = source.callbacks[1][0]
 
             old_callback(LocationFix(latitude_deg=39.7392, longitude_deg=-104.9903))
@@ -391,8 +397,7 @@ class RecorderLifecycleTests(unittest.TestCase):
                 LocationFix(latitude_deg=39.7393, longitude_deg=-104.9903),
             )
             self.assertEqual(recorder.stop_recording(), 12)
-            for _ in range(3):
-                await asyncio.sleep(0)
+            await _wait_until(lambda: source.stop_count == self._SECOND_SOURCE_OPERATION)
 
         asyncio.run(exercise())
         self.assertTrue(recorder.shutdown())
@@ -402,7 +407,7 @@ class RecorderLifecycleTests(unittest.TestCase):
         source.start_error = RuntimeError("portal unavailable")
         source.stop_error = RuntimeError("portal already closed")
         states: list[tuple[LocationState, str | None]] = []
-        recorder = _make_recorder(
+        recorder = self._make_recorder(
             location_source=source,
             on_location_state=lambda state, detail: states.append((state, detail)),
         )
@@ -413,13 +418,11 @@ class RecorderLifecycleTests(unittest.TestCase):
             recorder.loop.close()
             recorder.loop = asyncio.get_running_loop()
             recorder.start_recording(Environment.OUTDOOR)
-            for _ in range(3):
-                await asyncio.sleep(0)
+            await _wait_until(lambda: recorder.location_state is LocationState.UNAVAILABLE)
 
             self.assertEqual(recorder.location_state, LocationState.UNAVAILABLE)
             self.assertEqual(recorder.stop_recording(), 13)
-            for _ in range(3):
-                await asyncio.sleep(0)
+            await _wait_until(lambda: source.stop_count == 1)
 
         asyncio.run(exercise())
 
@@ -429,7 +432,7 @@ class RecorderLifecycleTests(unittest.TestCase):
 
     def test_stop_during_location_start_invalidates_pending_callbacks(self):
         source = _RecorderLocationSource()
-        recorder = _make_recorder(location_source=source)
+        recorder = self._make_recorder(location_source=source)
         recorder.store.start_activity = Mock(return_value=14)
         recorder.store.finalize_activity = Mock()
         start_entered = asyncio.Event()
@@ -447,8 +450,7 @@ class RecorderLifecycleTests(unittest.TestCase):
 
             self.assertEqual(recorder.stop_recording(), 14)
             start_release.set()
-            for _ in range(5):
-                await asyncio.sleep(0)
+            await _wait_until(lambda: source.stop_count == 1)
 
         asyncio.run(exercise())
 
@@ -460,7 +462,7 @@ class RecorderLifecycleTests(unittest.TestCase):
     def test_shutdown_stops_location_source_before_closing_event_loop(self):
         source = _RecorderLocationSource()
         source.thread_start_entered = threading.Event()
-        recorder = _make_recorder(location_source=source)
+        recorder = self._make_recorder(location_source=source)
         workflow_started = threading.Event()
 
         async def fake_workflow():
@@ -478,6 +480,26 @@ class RecorderLifecycleTests(unittest.TestCase):
         self.assertEqual(source.stop_count, 1)
         self.assertFalse(source.stop_loop_closed)
 
+    def test_shutdown_loop_stops_completed_source_when_worker_loop_is_stopped(self):
+        source = _RecorderLocationSource()
+        recorder = self._make_recorder(location_source=source)
+        recorder.store.start_activity = Mock(return_value=19)
+        recorder.store.finalize_activity = Mock()
+
+        recorder.start_recording(Environment.OUTDOOR)
+        recorder.loop.run_until_complete(_wait_until(lambda: source.started))
+
+        self.assertEqual(recorder.stop_recording(), 19)
+        self.assertFalse(recorder.loop.is_running())
+        self.assertTrue(recorder._location_source_pending)
+        self.assertEqual(source.stop_count, 0)
+
+        recorder.loop.run_until_complete(recorder._shutdown_loop())
+
+        self.assertEqual(source.stop_count, 1)
+        self.assertFalse(source.stop_loop_closed)
+        self.assertFalse(recorder._location_source_pending)
+
     def test_shutdown_recovers_from_wedged_portal_startup(self):
         class HangingBusFactory:
             def __init__(self) -> None:
@@ -489,7 +511,7 @@ class RecorderLifecycleTests(unittest.TestCase):
 
         factory = HangingBusFactory()
         source = PortalLocationSource(bus_factory=factory)
-        recorder = _make_recorder(location_source=source)
+        recorder = self._make_recorder(location_source=source)
         workflow_started = threading.Event()
 
         async def fake_workflow():
@@ -512,7 +534,7 @@ class RecorderLifecycleTests(unittest.TestCase):
     def test_location_start_queued_before_worker_loop_starts(self):
         source = _RecorderLocationSource()
         source.thread_start_entered = threading.Event()
-        recorder = _make_recorder(location_source=source)
+        recorder = self._make_recorder(location_source=source)
         recorder.store.start_activity = Mock(return_value=15)
         recorder.store.finalize_activity = Mock()
         workflow_started = threading.Event()
@@ -535,7 +557,7 @@ class RecorderLifecycleTests(unittest.TestCase):
         self.assertTrue(recorder.shutdown(timeout=2.0))
 
     def test_shutdown_surfaces_finalized_activity_id_once(self):
-        recorder = _make_recorder()
+        recorder = self._make_recorder()
         recorder.start_recording(Environment.INDOOR)
         activity_id = recorder.activity_id
         self.assertIsNotNone(activity_id)
@@ -545,7 +567,7 @@ class RecorderLifecycleTests(unittest.TestCase):
         self.assertIsNone(recorder.take_shutdown_finalized_activity_id())
 
     def test_shutdown_surfaces_activity_finalized_by_an_existing_worker(self):
-        recorder = _make_recorder()
+        recorder = self._make_recorder()
         recorder.start_recording(Environment.INDOOR)
         activity_id = recorder.activity_id
         self.assertIsNotNone(activity_id)
@@ -593,7 +615,7 @@ class RecorderLifecycleTests(unittest.TestCase):
         self.assertFalse(recorder.claim_finalization_reconciliation(activity_id))
 
     def test_trainer_target_can_switch_between_power_and_resistance(self):
-        recorder = _make_recorder(test_mode=True)
+        recorder = self._make_recorder(test_mode=True)
         recorder.trainer.erg_disabled = False
 
         recorder.set_target_power(150)
@@ -611,7 +633,7 @@ class RecorderLifecycleTests(unittest.TestCase):
         recorder.shutdown()
 
     def test_erg_lockout_keeps_recovery_resistance_when_power_target_arrives(self):
-        recorder = _make_recorder(test_mode=True)
+        recorder = self._make_recorder(test_mode=True)
         recorder.set_target_resistance(5)
         recorder.trainer.erg_disabled = True
 
@@ -624,7 +646,7 @@ class RecorderLifecycleTests(unittest.TestCase):
         recorder.shutdown()
 
     def test_erg_safeguard_recovers_from_an_applied_power_target(self):
-        recorder = _make_recorder(test_mode=True)
+        recorder = self._make_recorder(test_mode=True)
         recorder.trainer.erg_disabled = False
         recorder.trainer.target_mode = TrainerMode.POWER
         recorder.trainer.pending_target = None
@@ -645,7 +667,7 @@ class RecorderLifecycleTests(unittest.TestCase):
         recorder.shutdown()
 
     def test_erg_recovery_requires_three_seconds_above_threshold(self):
-        recorder = _make_recorder(test_mode=True)
+        recorder = self._make_recorder(test_mode=True)
         recorder.trainer.target_mode = TrainerMode.POWER
         recorder.trainer.erg_disabled = True
 
@@ -659,7 +681,7 @@ class RecorderLifecycleTests(unittest.TestCase):
         recorder.shutdown()
 
     def test_erg_disable_requires_three_seconds_below_threshold(self):
-        recorder = _make_recorder(test_mode=True)
+        recorder = self._make_recorder(test_mode=True)
         recorder.trainer.target_mode = TrainerMode.POWER
         recorder.trainer.erg_disabled = False
 
@@ -673,7 +695,7 @@ class RecorderLifecycleTests(unittest.TestCase):
         recorder.shutdown()
 
     def test_erg_safeguard_does_not_restore_resistance_as_power(self):
-        recorder = _make_recorder(test_mode=True)
+        recorder = self._make_recorder(test_mode=True)
         recorder.trainer.sport_type = SportTypesEnum.biking
         recorder.trainer.erg_disabled = False
         recorder.trainer.target_mode = TrainerMode.RESISTANCE
@@ -696,7 +718,7 @@ class RecorderLifecycleTests(unittest.TestCase):
         recorder.shutdown()
 
     def test_explicit_resistance_cancels_erg_recovery(self):
-        recorder = _make_recorder(test_mode=True)
+        recorder = self._make_recorder(test_mode=True)
         recorder.trainer.sport_type = SportTypesEnum.biking
         recorder.trainer.erg_disabled = False
         recorder.trainer.target_mode = TrainerMode.POWER
@@ -716,7 +738,7 @@ class RecorderLifecycleTests(unittest.TestCase):
         recorder.shutdown()
 
     def test_in_flight_power_result_does_not_clear_new_resistance_target(self):
-        recorder = _make_recorder()
+        recorder = self._make_recorder()
         command_started = asyncio.Event()
         resistance_started = asyncio.Event()
         hold_resistance = asyncio.Event()
@@ -754,7 +776,7 @@ class RecorderLifecycleTests(unittest.TestCase):
         recorder.shutdown()
 
     def test_speed_target_is_ignored_by_erg_safeguard(self):
-        recorder = _make_recorder(test_mode=True)
+        recorder = self._make_recorder(test_mode=True)
         recorder.set_target_speed(8.5)
         recorder.trainer.erg_disabled = False
 
@@ -779,7 +801,7 @@ class RecorderLifecycleTests(unittest.TestCase):
         recorder.shutdown()
 
     def test_metric_connectivity_combines_sensor_and_trainer_links(self):
-        recorder = _make_recorder(test_mode=True)
+        recorder = self._make_recorder(test_mode=True)
 
         recorder._on_running_link("sensor", connected=True, roles={"rsc": True, "cps": False})
         recorder._on_trainer_link("trainer", connected=True, _info={})
@@ -800,7 +822,7 @@ class RecorderLifecycleTests(unittest.TestCase):
         recorder.shutdown()
 
     def test_trainer_supplied_heart_rate_is_forwarded_and_persisted(self):
-        recorder = _make_recorder(test_mode=True, trainer_supplied_hr=True)
+        recorder = self._make_recorder(test_mode=True, trainer_supplied_hr=True)
         recorder._recording = True
         recorder.activity_id = 1
         recorder.store.insert_heart_rate = Mock()
@@ -817,7 +839,7 @@ class RecorderLifecycleTests(unittest.TestCase):
         recorder.shutdown()
 
     def test_stop_recording_waits_for_in_flight_sample_before_finalizing(self):
-        recorder = _make_recorder(test_mode=True)
+        recorder = self._make_recorder(test_mode=True)
         recorder._recording = True
         recorder.activity_id = 1
         insert_started = threading.Event()
@@ -865,7 +887,7 @@ class RecorderLifecycleTests(unittest.TestCase):
         recorder.shutdown()
 
     def test_location_persistence_does_not_hold_recording_lock(self):
-        recorder = _make_recorder(test_mode=True)
+        recorder = self._make_recorder(test_mode=True)
         recorder._recording = True
         recorder.activity_id = 1
         recorder._recording_origin_ns = time.monotonic_ns()
@@ -892,7 +914,7 @@ class RecorderLifecycleTests(unittest.TestCase):
         recorder.shutdown()
 
     def test_stale_persistence_callback_does_not_wait_for_finalization(self):
-        recorder = _make_recorder()
+        recorder = self._make_recorder()
         recorder._recording = True
         recorder.activity_id = 1
         generation = recorder._recording_generation
@@ -951,7 +973,7 @@ class RecorderLifecycleTests(unittest.TestCase):
             lock_available.set()
 
     def test_stop_recording_retries_failed_finalization(self):
-        recorder = _make_recorder()
+        recorder = self._make_recorder()
         recorder.store.start_activity = Mock(return_value=1)
         failure = RuntimeError("temporary finalization failure")
         recorder.store.finalize_activity = Mock(side_effect=[failure, None])
@@ -970,7 +992,7 @@ class RecorderLifecycleTests(unittest.TestCase):
         recorder.shutdown()
 
     def test_stop_recording_without_recording_clears_stale_activity_id(self):
-        recorder = _make_recorder(test_mode=True)
+        recorder = self._make_recorder(test_mode=True)
         recorder.activity_id = 99
 
         self.assertIsNone(recorder.stop_recording())
@@ -978,7 +1000,7 @@ class RecorderLifecycleTests(unittest.TestCase):
         recorder.shutdown()
 
     def test_sample_from_previous_recording_is_not_persisted_after_restart(self):
-        recorder = _make_recorder()
+        recorder = self._make_recorder()
         recorder.store.start_activity = Mock(side_effect=[1, 2])
         recorder.store.finalize_activity = Mock()
         recorder.store.insert_heart_rate = Mock()
@@ -1025,7 +1047,7 @@ class RecorderLifecycleTests(unittest.TestCase):
         recorder.shutdown()
 
     def test_recording_pipeline_does_not_require_sample_callback(self):
-        recorder = _make_recorder(
+        recorder = self._make_recorder(
             test_mode=True,
             trainer_supplied_hr=True,
             with_callback=False,
@@ -1045,7 +1067,7 @@ class RecorderLifecycleTests(unittest.TestCase):
         recorder.shutdown()
 
     def test_sample_dispatch_failure_does_not_prevent_persistence(self):
-        recorder = _make_recorder()
+        recorder = self._make_recorder()
         recorder._recording = True
         recorder.activity_id = 1
         recorder.store.insert_heart_rate = Mock()
@@ -1062,7 +1084,7 @@ class RecorderLifecycleTests(unittest.TestCase):
         recorder.shutdown()
 
     def test_target_heart_rate_requires_trainer_supplied_sample(self):
-        recorder = _make_recorder(test_mode=True, trainer_supplied_hr=True)
+        recorder = self._make_recorder(test_mode=True, trainer_supplied_hr=True)
         recorder.trainer.trainer_mux = types.SimpleNamespace(supports_target_heart_rate=True)
 
         self.assertFalse(recorder.set_target_heart_rate(150))
@@ -1078,7 +1100,7 @@ class RecorderLifecycleTests(unittest.TestCase):
         recorder.shutdown()
 
     def test_target_heart_rate_ignores_trainer_sample_when_hrm_is_external(self):
-        recorder = _make_recorder(test_mode=True, trainer_supplied_hr=False)
+        recorder = self._make_recorder(test_mode=True, trainer_supplied_hr=False)
         recorder.trainer.trainer_mux = types.SimpleNamespace(supports_target_heart_rate=True)
         recorder.inject_test_sample(TrainerSample(timestamp_ms=1000, heart_rate_bpm=145))
 
@@ -1088,7 +1110,7 @@ class RecorderLifecycleTests(unittest.TestCase):
         recorder.shutdown()
 
     def test_target_heart_rate_requires_trainer_control_support(self):
-        recorder = _make_recorder(test_mode=True, trainer_supplied_hr=True)
+        recorder = self._make_recorder(test_mode=True, trainer_supplied_hr=True)
         recorder.trainer.trainer_mux = types.SimpleNamespace(supports_target_heart_rate=False)
         recorder.inject_test_sample(TrainerSample(timestamp_ms=1000, heart_rate_bpm=145))
 
@@ -1098,7 +1120,7 @@ class RecorderLifecycleTests(unittest.TestCase):
         recorder.shutdown()
 
     def test_trainer_disconnect_clears_pending_heart_rate_retry(self):
-        recorder = _make_recorder(test_mode=True, trainer_supplied_hr=True)
+        recorder = self._make_recorder(test_mode=True, trainer_supplied_hr=True)
         recorder.trainer.trainer_mux = types.SimpleNamespace(supports_target_heart_rate=True)
         recorder.inject_test_sample(TrainerSample(timestamp_ms=1000, heart_rate_bpm=145))
         self.assertTrue(recorder.set_target_heart_rate(150))
@@ -1122,7 +1144,7 @@ class RecorderLifecycleTests(unittest.TestCase):
         recorder.shutdown()
 
     def test_replacing_trainer_mux_clears_heart_rate_target_availability(self):
-        recorder = _make_recorder(test_mode=True, trainer_supplied_hr=True)
+        recorder = self._make_recorder(test_mode=True, trainer_supplied_hr=True)
         recorder.trainer.trainer_mux = types.SimpleNamespace(supports_target_heart_rate=True)
         recorder.inject_test_sample(TrainerSample(timestamp_ms=1000, heart_rate_bpm=145))
         self.assertTrue(recorder.set_target_heart_rate(150))
@@ -1135,7 +1157,7 @@ class RecorderLifecycleTests(unittest.TestCase):
         recorder.shutdown()
 
     def test_neutralize_biking_trainer_bypasses_erg_gating(self):
-        recorder = _make_recorder(test_mode=True)
+        recorder = self._make_recorder(test_mode=True)
         recorder.trainer.sport_type = SportTypesEnum.biking
         recorder.trainer.target_mode = TrainerMode.RESISTANCE
         recorder.trainer.pending_target = 20

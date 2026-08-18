@@ -702,9 +702,8 @@ class Recorder:
             self._location_stop_scheduled_for = lifecycle_id
 
         if not self.loop.is_running():
-            with self._recording_lock:
-                if lifecycle_id == self._location_lifecycle_id:
-                    self._location_source_pending = False
+            # The worker may be between its workflow and final cleanup. Keep
+            # the source pending so _shutdown_loop can stop it on its own loop.
             return
 
         coroutine = self._stop_location_source(lifecycle_id)
@@ -869,6 +868,11 @@ class Recorder:
 
     async def _shutdown_loop(self) -> None:
         """Cancel tasks left outside the main workflow before closing the loop."""
+        with self._recording_lock:
+            lifecycle_id = self._location_lifecycle_id if self._location_source_pending else None
+        if lifecycle_id is not None:
+            await self._stop_location_source(lifecycle_id)
+
         current = asyncio.current_task()
         pending = [task for task in asyncio.all_tasks() if task is not current and not task.done()]
         for task in pending:

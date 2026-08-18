@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 from alembic import command
-from bleaksport import HeartRateSample, TrainerSample
+from bleaksport import CyclingSample, HeartRateSample, RunningSample, TrainerSample
 from fitness_tracker import database as database_module
 from fitness_tracker.core.environment import Environment
 from fitness_tracker.core.measurements import NormalizedHeartRate
@@ -74,6 +74,46 @@ def test_zero_altitude_is_preserved(
 
     assert row.altitude_m == 0.0
     assert row.incline_percent == 8.0
+
+
+def test_incomplete_required_metrics_are_not_queued() -> None:
+    db = _database()
+    activity_id = db.start_activity(SportTypesEnum.running, Environment.INDOOR)
+
+    db.insert_running_metrics(
+        activity_id,
+        RunningSample(timestamp_ms=1_000, speed_mps=None, cadence_spm=170),
+        incline_percent=None,
+    )
+    db.insert_running_metrics(
+        activity_id,
+        RunningSample(timestamp_ms=2_000, speed_mps=3.0, cadence_spm=None),
+        incline_percent=None,
+    )
+    db.insert_cycling_metrics(
+        activity_id,
+        CyclingSample(timestamp_ms=3_000, speed_mps=None, cadence_rpm=80.0),
+        incline_percent=None,
+    )
+
+    assert db._pending_run == []  # noqa: SLF001
+    assert db._pending_cyc == []  # noqa: SLF001
+
+
+def test_fractional_cycling_cadence_is_queued_as_an_integer() -> None:
+    db = _database()
+    activity_id = db.start_activity(SportTypesEnum.biking, Environment.OUTDOOR)
+
+    db.insert_cycling_metrics(
+        activity_id,
+        CyclingSample(timestamp_ms=1_000, speed_mps=8.0, cadence_rpm=80.6),
+        incline_percent=None,
+    )
+    db.stop_activity(activity_id)
+
+    with db.Session() as session:
+        row = session.query(CyclingMetrics).one()
+    assert row.cadence_rpm == 81
 
 
 def test_fresh_migration_matches_upload_metadata() -> None:
@@ -350,6 +390,24 @@ def test_migrations_upgrade_every_shipped_schema(
         constraint.get("column_names") == ["start_time"]
         for constraint in migrated_inspector.get_unique_constraints("activities")
     )
+    assert {
+        constraint["name"] for constraint in migrated_inspector.get_unique_constraints("activities")
+    } >= {"uq_activities_public_id"}
+    for table in (
+        "heart_rate",
+        "running_metrics",
+        "cycling_metrics",
+        "activity_uploads",
+        "location_points",
+    ):
+        activity_foreign_key = next(
+            constraint
+            for constraint in migrated_inspector.get_foreign_keys(table)
+            if constraint["constrained_columns"] == ["activity_id"]
+        )
+        assert activity_foreign_key["referred_table"] == "activities"
+        assert activity_foreign_key["referred_columns"] == ["id"]
+        assert activity_foreign_key["options"].get("ondelete") == "CASCADE"
     assert all(
         column in {item["name"] for item in migrated_inspector.get_columns(table)}
         for table, column in (

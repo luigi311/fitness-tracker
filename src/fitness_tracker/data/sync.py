@@ -7,9 +7,10 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 from loguru import logger
-from sqlalchemy import Engine, exc, inspect, select
+from sqlalchemy import Engine, exc, func, inspect, select
 from sqlalchemy.orm import Session, sessionmaker
 
+from fitness_tracker.core.environment import Environment
 from fitness_tracker.core.errors import DatabaseConnectionError
 from fitness_tracker.data.models import (
     Activity,
@@ -199,12 +200,20 @@ class DatabaseSynchronizer:
     @staticmethod
     def _reconcile_activity(source: Activity, destination: Activity) -> bool:
         """Apply monotonic activity closure without propagating deletions."""
+        changed = False
         if source.end_time is not None and (
             destination.end_time is None or _as_utc(source.end_time) > _as_utc(destination.end_time)
         ):
             destination.end_time = source.end_time
-            return True
-        return False
+            changed = True
+        if (
+            source.environment != destination.environment
+            and destination.environment == Environment.INDOOR.value
+            and source.environment != Environment.INDOOR.value
+        ):
+            destination.environment = source.environment
+            changed = True
+        return changed
 
     @staticmethod
     def _reconcile_sport(
@@ -351,6 +360,20 @@ class DatabaseSynchronizer:
         if source_sport != destination_sport:
             return False
 
+        for model in (HeartRate, RunningMetrics, CyclingMetrics, LocationPoint):
+            source_count = source_session.scalar(
+                select(func.count())
+                .select_from(model)
+                .where(model.activity_id == source_activity.id),
+            )
+            destination_count = destination_session.scalar(
+                select(func.count())
+                .select_from(model)
+                .where(model.activity_id == destination_activity.id),
+            )
+            if source_count != destination_count:
+                return False
+
         return all(
             DatabaseSynchronizer._measurement_counter(source_session, source_activity.id, model)
             == DatabaseSynchronizer._measurement_counter(
@@ -423,7 +446,10 @@ class DatabaseSynchronizer:
                 )
                 if source_row.status == "ok":
                     applied_source_ok_providers.add(source_row.provider)
-            elif DatabaseSynchronizer._upload_is_newer(source_row, destination_row):
+            elif not DatabaseSynchronizer._is_destination_invalidation(
+                source_row,
+                destination_row,
+            ) and DatabaseSynchronizer._upload_is_newer(source_row, destination_row):
                 destination_row.status = source_row.status
                 destination_row.uploaded_at = source_row.uploaded_at
                 destination_row.updated_at = source_row.updated_at
@@ -433,6 +459,21 @@ class DatabaseSynchronizer:
                 if source_row.status == "ok":
                     applied_source_ok_providers.add(source_row.provider)
         return applied_source_ok_providers
+
+    @staticmethod
+    def _is_destination_invalidation(
+        source: ActivityUpload,
+        destination: ActivityUpload,
+    ) -> bool:
+        """Identify a pending row produced by invalidating the peer's successful upload."""
+        return (
+            source.status == "pending"
+            and source.uploaded_at is None
+            and source.payload_hash is None
+            and source.last_error is None
+            and destination.status == "ok"
+            and source.provider_activity_id == destination.provider_activity_id
+        )
 
     @staticmethod
     def _upload_is_newer(source: ActivityUpload, destination: ActivityUpload) -> bool:

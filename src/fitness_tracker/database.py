@@ -105,8 +105,8 @@ class _RunningMetricsValues(TypedDict):
 
     activity_id: int
     timestamp_ms: int
-    speed_mps: float | None
-    cadence_spm: int | None
+    speed_mps: float
+    cadence_spm: int
     stride_length_m: float | None
     total_distance_m: float | None
     power_watts: float | None
@@ -119,8 +119,8 @@ class _CyclingMetricsValues(TypedDict):
 
     activity_id: int
     timestamp_ms: int
-    speed_mps: float | None
-    cadence_rpm: float | None
+    speed_mps: float
+    cadence_rpm: int | None
     total_distance_m: float | None
     power_watts: float | None
     incline_percent: float | None
@@ -310,6 +310,8 @@ class DatabaseManager:
         incline_percent: float | None,
     ) -> None:
         """Queue a running or trainer sample for batched persistence."""
+        if sample.speed_mps is None or sample.cadence_spm is None:
+            return
         rm: _RunningMetricsValues = {
             "activity_id": activity_id,
             "timestamp_ms": sample.timestamp_ms,
@@ -335,11 +337,14 @@ class DatabaseManager:
         incline_percent: float | None,
     ) -> None:
         """Queue a cycling or trainer sample for batched persistence."""
+        if sample.speed_mps is None:
+            return
+        cadence_rpm = None if sample.cadence_rpm is None else round(sample.cadence_rpm)
         cm: _CyclingMetricsValues = {
             "activity_id": activity_id,
             "timestamp_ms": sample.timestamp_ms,
             "speed_mps": sample.speed_mps,
-            "cadence_rpm": sample.cadence_rpm,
+            "cadence_rpm": cadence_rpm,
             "total_distance_m": sample.distance_m,
             "power_watts": sample.power_watts,
             "incline_percent": incline_percent,

@@ -88,5 +88,6 @@ def test_location_changes_tcx_payload_hash() -> None:
     ]
     assert len(payloads) == EXPECTED_PAYLOAD_COUNT
     assert payloads[0] != payloads[1]
+    assert b"<LatitudeDegrees>39.73920000</LatitudeDegrees>" in payloads[1]
     assert payload_hashes == [sha256(payload).hexdigest() for payload in payloads]
     assert payload_hashes[0] != payload_hashes[1]

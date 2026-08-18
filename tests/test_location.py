@@ -20,6 +20,7 @@ from fitness_tracker.hardware.location import (
     portal_accuracy_for_setting,
     relative_timestamp_ms,
 )
+from tests.conftest import FakeLocationSource, FakeLocationSourceFactory
 
 EXPECTED_ACCEPTED_POINTS = 2
 EXPECTED_LAST_TIMESTAMP_MS = 2_000
@@ -291,7 +292,7 @@ def test_spike_filter_keeps_high_speed_fix_when_accuracy_circles_overlap() -> No
 
 
 def test_fake_location_source_is_async_and_does_not_deliver_after_stop(
-    fake_location_source,
+    fake_location_source: FakeLocationSourceFactory,
 ) -> None:
     source = fake_location_source()
     received: list[LocationFix] = []
@@ -315,7 +316,9 @@ def test_fake_location_source_is_async_and_does_not_deliver_after_stop(
     assert source.stop_count == 1
 
 
-def test_fake_location_source_delivers_multiple_outdoor_points(fake_location_source) -> None:
+def test_fake_location_source_delivers_multiple_outdoor_points(
+    fake_location_source: FakeLocationSourceFactory,
+) -> None:
     source = fake_location_source()
     received: list[LocationFix] = []
 
@@ -332,7 +335,7 @@ def test_fake_location_source_delivers_multiple_outdoor_points(fake_location_sou
 
 
 def test_fake_location_source_limits_indoor_and_trainer_anchors_to_one_point(
-    fake_location_source,
+    fake_location_source: FakeLocationSourceFactory,
 ) -> None:
     policies = (
         location_policy_for_environment(Environment.INDOOR, record_indoor_anchor=True),
@@ -340,7 +343,7 @@ def test_fake_location_source_limits_indoor_and_trainer_anchors_to_one_point(
     )
 
     async def exercise(
-        source,
+        source: FakeLocationSource,
         policy: LocationPolicy,
         received: list[LocationFix],
     ) -> None:
@@ -361,7 +364,9 @@ def test_fake_location_source_limits_indoor_and_trainer_anchors_to_one_point(
         assert source.stop_count == 1
 
 
-def test_fake_location_source_filters_outdoor_spikes(fake_location_source) -> None:
+def test_fake_location_source_filters_outdoor_spikes(
+    fake_location_source: FakeLocationSourceFactory,
+) -> None:
     source = fake_location_source()
     received: list[LocationFix] = []
 

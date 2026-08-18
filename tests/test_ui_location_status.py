@@ -14,13 +14,11 @@ from unittest.mock import Mock
 
 import gi
 import gi.repository
+import pytest
 from fitness_tracker.core.environment import Environment
 from fitness_tracker.core.session_state import SessionState
 from fitness_tracker.core.sports import SportTypesEnum
 from fitness_tracker.hardware.location import LocationState
-
-_MISSING = object()
-_GI_NAMES = ("Adw", "Gdk", "GLib", "Gtk", "Pango")
 
 
 class _HeadlessWidget:
@@ -140,10 +138,10 @@ class _HeadlessGLib:
         return 1
 
 
-def _load_headless_ui_classes() -> tuple[type, type, type]:
+def _load_headless_ui_classes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[type, type, type]:
     """Import the UI classes while replacing GTK-only dependencies."""
-    original_require_versions = gi.require_versions
-    original_gi_attributes = {name: getattr(gi.repository, name, _MISSING) for name in _GI_NAMES}
     module_names = (
         "fitness_tracker.ui.pages.mode",
         "fitness_tracker.ui.pages.session",
@@ -157,10 +155,6 @@ def _load_headless_ui_classes() -> tuple[type, type, type]:
         "fitness_tracker.ui.widgets.timers",
         "fitness_tracker.ui.widgets.trainer_control",
     )
-    original_modules = {
-        name: sys.modules.get(name, _MISSING) for name in (*module_names, *widget_module_names)
-    }
-
     mode_module = types.ModuleType(module_names[0])
     mode_module.ModeSelectView = object  # ty:ignore[unresolved-attribute]
     widgets_package = types.ModuleType(widget_module_names[0])
@@ -191,20 +185,20 @@ def _load_headless_ui_classes() -> tuple[type, type, type]:
         SelectionMode=types.SimpleNamespace(NONE="none"),
     )
 
-    gi.require_versions = lambda _versions: None  # ty:ignore[invalid-assignment]
-    gi.repository.Adw = fake_adw  # ty:ignore[unresolved-attribute]
-    gi.repository.Gdk = types.SimpleNamespace()  # ty:ignore[unresolved-attribute]
-    gi.repository.GLib = _HeadlessGLib  # ty:ignore[unresolved-attribute]
-    gi.repository.Gtk = fake_gtk  # ty:ignore[unresolved-attribute]
-    gi.repository.Pango = types.SimpleNamespace()  # ty:ignore[unresolved-attribute]
-    sys.modules[module_names[0]] = mode_module
-    sys.modules[widget_module_names[0]] = widgets_package
-    sys.modules[widget_module_names[1]] = chart_module
-    sys.modules[widget_module_names[2]] = metric_tile_module
-    sys.modules[widget_module_names[3]] = session_controls_module
-    sys.modules[widget_module_names[4]] = timers_module
-    sys.modules[widget_module_names[5]] = trainer_control_module
-    sys.modules.pop(module_names[2], None)
+    monkeypatch.setattr(gi, "require_versions", lambda _versions: None)
+    monkeypatch.setattr(gi.repository, "Adw", fake_adw, raising=False)
+    monkeypatch.setattr(gi.repository, "Gdk", types.SimpleNamespace(), raising=False)
+    monkeypatch.setattr(gi.repository, "GLib", _HeadlessGLib, raising=False)
+    monkeypatch.setattr(gi.repository, "Gtk", fake_gtk, raising=False)
+    monkeypatch.setattr(gi.repository, "Pango", types.SimpleNamespace(), raising=False)
+    monkeypatch.setitem(sys.modules, module_names[0], mode_module)
+    monkeypatch.setitem(sys.modules, widget_module_names[0], widgets_package)
+    monkeypatch.setitem(sys.modules, widget_module_names[1], chart_module)
+    monkeypatch.setitem(sys.modules, widget_module_names[2], metric_tile_module)
+    monkeypatch.setitem(sys.modules, widget_module_names[3], session_controls_module)
+    monkeypatch.setitem(sys.modules, widget_module_names[4], timers_module)
+    monkeypatch.setitem(sys.modules, widget_module_names[5], trainer_control_module)
+    monkeypatch.delitem(sys.modules, module_names[2], raising=False)
 
     session_path = (
         Path(__file__).parents[1] / "src" / "fitness_tracker" / "ui" / "pages" / "session.py"
@@ -214,7 +208,7 @@ def _load_headless_ui_classes() -> tuple[type, type, type]:
         message = "Unable to load session page for headless tests"
         raise RuntimeError(message)
     session_module = importlib.util.module_from_spec(session_spec)
-    sys.modules[module_names[1]] = session_module
+    monkeypatch.setitem(sys.modules, module_names[1], session_module)
 
     section_module_name = "_headless_location_sections"
     section_path = (
@@ -231,30 +225,20 @@ def _load_headless_ui_classes() -> tuple[type, type, type]:
         message = "Unable to load settings sections for headless tests"
         raise RuntimeError(message)
     section_module = importlib.util.module_from_spec(section_spec)
-    sys.modules[section_module_name] = section_module
+    monkeypatch.setitem(sys.modules, section_module_name, section_module)
 
-    try:
-        session_spec.loader.exec_module(session_module)
-        section_spec.loader.exec_module(section_module)
-        tracker_module = importlib.import_module(module_names[2])
-    finally:
-        sys.modules.pop(section_module_name, None)
-        gi.require_versions = original_require_versions
-        for name, original in original_gi_attributes.items():
-            if original is _MISSING:
-                delattr(gi.repository, name)
-            else:
-                setattr(gi.repository, name, original)
-        for name, original in original_modules.items():
-            if original is _MISSING:
-                sys.modules.pop(name, None)
-            else:
-                sys.modules[name] = original  # ty:ignore[invalid-assignment]
+    session_spec.loader.exec_module(session_module)
+    section_spec.loader.exec_module(section_module)
+    tracker_module = importlib.import_module(module_names[2])
 
     return tracker_module.TrackerPageUI, section_module.LocationSection, session_module.SessionView
 
 
-TrackerPageUI, LocationSection, SessionView = _load_headless_ui_classes()
+@pytest.fixture(scope="module")
+def headless_ui_classes():
+    """Load headless UI classes under module-scoped dependency patches."""
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        yield _load_headless_ui_classes(monkeypatch)
 
 
 class _LocationView:
@@ -282,15 +266,17 @@ class _LocationRecorder:
     def __init__(self) -> None:
         self.started: list[Environment] = []
 
-    def start_recording(self, *, environment: Environment) -> None:
+    def start_recording(self, environment: Environment) -> None:
         self.started.append(environment)
 
 
-def _tracker_for_location_tests() -> tuple[object, _LocationView, _LocationRecorder, list[str]]:
+def _tracker_for_location_tests(
+    tracker_page_ui: type,
+) -> tuple[object, _LocationView, _LocationRecorder, list[str]]:
     view = _LocationView()
     recorder = _LocationRecorder()
     toasts: list[str] = []
-    page = TrackerPageUI.__new__(TrackerPageUI)  # ty:ignore[no-matching-overload]
+    page = tracker_page_ui.__new__(tracker_page_ui)
     page.app = SimpleNamespace(
         recorder=recorder,
         pebble_bridge=None,
@@ -309,8 +295,9 @@ def _tracker_for_location_tests() -> tuple[object, _LocationView, _LocationRecor
     return page, view, recorder, toasts
 
 
-def test_indoor_location_warning_copy_is_present() -> None:
-    section = LocationSection(
+def test_indoor_location_warning_copy_is_present(headless_ui_classes) -> None:
+    _tracker_page_ui, location_section, _session_view = headless_ui_classes
+    section = location_section(
         SimpleNamespace(
             record_outdoor_routes=True,
             record_indoor_anchor=False,
@@ -326,8 +313,9 @@ def test_indoor_location_warning_copy_is_present() -> None:
     assert "may reveal your home location" in indoor_row.subtitle
 
 
-def test_location_status_transitions_do_not_block_session_start() -> None:
-    page, view, recorder, toasts = _tracker_for_location_tests()
+def test_location_status_transitions_do_not_block_session_start(headless_ui_classes) -> None:
+    tracker_page_ui, _location_section, _session_view = headless_ui_classes
+    page, view, recorder, toasts = _tracker_for_location_tests(tracker_page_ui)
 
     for state in (
         LocationState.STARTING,
@@ -343,8 +331,9 @@ def test_location_status_transitions_do_not_block_session_start() -> None:
     assert toasts == []
 
 
-def test_outdoor_permission_error_notifies_once() -> None:
-    page, view, _recorder, toasts = _tracker_for_location_tests()
+def test_outdoor_permission_error_notifies_once(headless_ui_classes) -> None:
+    tracker_page_ui, _location_section, _session_view = headless_ui_classes
+    page, view, _recorder, toasts = _tracker_for_location_tests(tracker_page_ui)
 
     for state in (
         LocationState.DENIED,
@@ -358,8 +347,9 @@ def test_outdoor_permission_error_notifies_once() -> None:
     assert view.statuses[-1] == "Location unavailable"
 
 
-def test_location_status_visibility_follows_resolved_policy() -> None:
-    page = TrackerPageUI.__new__(TrackerPageUI)  # ty:ignore[no-matching-overload]
+def test_location_status_visibility_follows_resolved_policy(headless_ui_classes) -> None:
+    tracker_page_ui, _location_section, _session_view = headless_ui_classes
+    page = tracker_page_ui.__new__(tracker_page_ui)
     page.app = SimpleNamespace(
         app_settings=SimpleNamespace(
             location=SimpleNamespace(
@@ -374,7 +364,7 @@ def test_location_status_visibility_follows_resolved_policy() -> None:
         def __init__(self, **kwargs: object) -> None:
             self.location_enabled = kwargs["location_enabled"]
 
-    tracker_globals = TrackerPageUI._make_session_view.__globals__  # ty:ignore[unresolved-attribute]
+    tracker_globals = tracker_page_ui._make_session_view.__globals__
     original_session_view = tracker_globals["SessionView"]
     tracker_globals["SessionView"] = _CapturingSessionView
     try:
@@ -397,9 +387,11 @@ def test_location_status_visibility_follows_resolved_policy() -> None:
     assert outdoor_view.location_enabled is True
 
 
-def test_session_view_applies_location_status_visibility() -> None:
+def test_session_view_applies_location_status_visibility(headless_ui_classes) -> None:
+    _tracker_page_ui, _location_section, session_view = headless_ui_classes
+
     def build_metric_strip(*, location_enabled: bool) -> bool:
-        view = SessionView.__new__(SessionView)  # ty:ignore[no-matching-overload]
+        view = session_view.__new__(session_view)
         view.children = []
         view._build_metric_strip(location_enabled=location_enabled)
         return view.location_status.visible
