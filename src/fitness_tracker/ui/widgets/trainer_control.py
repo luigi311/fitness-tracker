@@ -22,6 +22,9 @@ if TYPE_CHECKING:
 gi.require_version("Gtk", "4.0")
 from gi.repository import Gtk  # noqa: E402  # ty:ignore[unresolved-import]
 
+_MODE_BUTTON_HEIGHT = 48
+_ADJUST_BUTTON_HEIGHT = 60
+
 
 class TrainerTargetControl(Gtk.Frame):
     """Touch-friendly control for selecting and adjusting trainer targets."""
@@ -83,12 +86,12 @@ class TrainerTargetControl(Gtk.Frame):
             getattr(outer, f"set_margin_{margin}")(4)
 
         if len(available_modes) > 1:
-            mode_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+            mode_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
             mode_row.set_homogeneous(True)
             mode_row.set_hexpand(True)
             for mode in available_modes:
                 button = Gtk.Button(label=mode.value)
-                button.set_size_request(-1, 56)
+                button.set_size_request(-1, _MODE_BUTTON_HEIGHT)
                 if mode == self._mode:
                     button.add_css_class("suggested-action")
                 button.connect("clicked", self._on_mode_clicked, mode)
@@ -100,11 +103,11 @@ class TrainerTargetControl(Gtk.Frame):
             title.add_css_class("caption")
             outer.append(title)
 
-        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         self._btn_down = Gtk.Button(label="-")
         self._btn_down.add_css_class("destructive-action")
         self._btn_down.set_hexpand(True)
-        self._btn_down.set_size_request(-1, 72)
+        self._btn_down.set_size_request(-1, _ADJUST_BUTTON_HEIGHT)
         self._btn_down.get_child().add_css_class("title-1")
         self._btn_down.connect("clicked", lambda *_: self._change(-1))
 
@@ -117,7 +120,7 @@ class TrainerTargetControl(Gtk.Frame):
         self._btn_up = Gtk.Button(label="+")
         self._btn_up.add_css_class("suggested-action")
         self._btn_up.set_hexpand(True)
-        self._btn_up.set_size_request(-1, 72)
+        self._btn_up.set_size_request(-1, _ADJUST_BUTTON_HEIGHT)
         self._btn_up.get_child().add_css_class("title-1")
         self._btn_up.connect("clicked", lambda *_: self._change(1))
 
