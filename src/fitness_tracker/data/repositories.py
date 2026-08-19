@@ -430,7 +430,9 @@ class SqlAlchemyActivityRepository:
         """Record remote acceptance pending local success reconciliation."""
         with self._session_factory() as session:
             now = datetime.now(UTC)
+            truncated_error = error_message[:1000]
             insert = self._upload_insert(session)
+            excluded = insert.excluded
             statement = insert.values(
                 activity_id=activity_id,
                 provider=provider,
@@ -439,16 +441,16 @@ class SqlAlchemyActivityRepository:
                 updated_at=now,
                 provider_activity_id=provider_activity_id,
                 payload_hash=payload_hash,
-                last_error=error_message[:1000],
+                last_error=truncated_error,
             ).on_conflict_do_update(
                 index_elements=["activity_id", "provider"],
                 set_={
                     "status": "accepted",
                     "uploaded_at": now,
                     "updated_at": now,
-                    "provider_activity_id": provider_activity_id,
-                    "payload_hash": payload_hash,
-                    "last_error": error_message[:1000],
+                    "provider_activity_id": excluded.provider_activity_id,
+                    "payload_hash": excluded.payload_hash,
+                    "last_error": excluded.last_error,
                 },
                 where=ActivityUpload.status != "ok",
             )

@@ -22,6 +22,10 @@ if TYPE_CHECKING:
 _API_BASE = "https://intervals.icu/api/v1"
 _INTEGRATION_NAME = "intervals.icu"
 _URL_PATTERN = re.compile(r"\b(?:https?://|www\.)[^\s<>\"']+", re.IGNORECASE)
+_ATHLETE_PATH_PATTERN = re.compile(
+    r"(/athlete/)[^/\s?&#<>\"']+",
+    re.IGNORECASE,
+)
 
 
 class IntervalsICUCredentials(BaseModel):
@@ -149,7 +153,8 @@ def _response_debug_detail(
     request_url = getattr(response, "url", None)
     if isinstance(request_url, str) and request_url:
         detail = detail.replace(request_url, "[redacted URL]")
-    return _URL_PATTERN.sub("[redacted URL]", detail)[:500]
+    detail = _URL_PATTERN.sub("[redacted URL]", detail)
+    return _ATHLETE_PATH_PATTERN.sub(r"\1[redacted]", detail)[:500]
 
 
 class IntervalsICUClient:

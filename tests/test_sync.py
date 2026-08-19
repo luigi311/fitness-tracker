@@ -774,6 +774,52 @@ def test_accepted_upload_state_is_recoverable_and_invalidated_by_new_samples(
     assert upload.payload_hash is None
 
 
+@pytest.mark.parametrize(
+    ("payload_case", "expected_status"),
+    [("matching", "accepted"), ("different", "pending")],
+)
+def test_reconcile_sessions_preserves_accepted_upload_only_for_matching_payloads(
+    tmp_path: Path,
+    payload_case: str,
+    expected_status: str,
+) -> None:
+    source = _manager(tmp_path / "source.db")
+    destination = _manager(tmp_path / "destination.db")
+    public_id = uuid4()
+    source_id = _insert_activity(source, public_id)
+    destination_id = _insert_activity(destination, public_id)
+    with source.Session() as session:
+        session.add(
+            ActivityUpload(
+                activity_id=source_id,
+                provider=PROVIDER,
+                status="accepted",
+                uploaded_at=START_TIME,
+                updated_at=START_TIME,
+                provider_activity_id="remote-1",
+                payload_hash="accepted-hash",
+                last_error="local success update failed",
+            ),
+        )
+        session.commit()
+    if payload_case == "different":
+        with destination.Session() as session:
+            session.add(HeartRate(activity_id=destination_id, timestamp_ms=1_000, bpm=140))
+            session.commit()
+
+    with source.Session() as source_session, destination.Session() as destination_session:
+        DatabaseSynchronizer.reconcile_sessions(
+            source_session,
+            destination_session,
+            Mock(),
+        )
+        destination_session.commit()
+
+    with destination.Session() as session:
+        upload = session.query(ActivityUpload).filter_by(activity_id=destination_id).one()
+    assert upload.status == expected_status
+
+
 def test_concurrent_upload_updates_share_one_provider_row(tmp_path: Path) -> None:
     db = _manager(tmp_path / "database.db")
     activity_id = db.start_activity(SportTypesEnum.running, Environment.INDOOR)

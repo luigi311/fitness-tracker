@@ -324,7 +324,12 @@ def test_transport_error_does_not_expose_request_url() -> None:
     response.status_code = 403
     athlete_id = "private-athlete-id"
     request_url = f"https://example.invalid/athlete/{athlete_id}/events"
-    response.raw = BytesIO(f'{{"request":"{request_url}"}}'.encode())
+    response.raw = BytesIO(
+        (
+            f'{{"request":"{request_url}",'
+            f'"path":"/api/v1/athlete/{athlete_id}/events"}}'
+        ).encode(),
+    )
     response.encoding = "utf-8"
 
     def fail_request(url: str, **_kwargs: object) -> requests.Response:
@@ -339,6 +344,8 @@ def test_transport_error_does_not_expose_request_url() -> None:
         )
 
     assert error_info.value.status_code == 403
-    assert error_info.value.debug_detail == '{"request":"[redacted URL]"}'
+    assert error_info.value.debug_detail == (
+        '{"request":"[redacted URL]","path":"/api/v1/athlete/[redacted]/events"}'
+    )
     assert athlete_id not in (error_info.value.debug_detail or "")
     assert athlete_id not in str(error_info.value)
