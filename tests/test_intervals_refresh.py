@@ -349,3 +349,36 @@ def test_transport_error_does_not_expose_request_url() -> None:
     )
     assert athlete_id not in (error_info.value.debug_detail or "")
     assert athlete_id not in str(error_info.value)
+
+
+def test_transport_error_redacts_json_escaped_url_and_athlete_path() -> None:
+    response = requests.Response()
+    response.status_code = 403
+    provider_id = "private-provider.invalid"
+    athlete_id = "private-athlete-id"
+    escaped_url = (
+        f"https:\\/\\/{provider_id}\\/api\\/v1\\/athlete\\/{athlete_id}\\/events"
+    )
+    escaped_path = f"\\/api\\/v1\\/athlete\\/{athlete_id}\\/events"
+    response.raw = BytesIO(
+        f'{{"request":"{escaped_url}","path":"{escaped_path}"}}'.encode(),
+    )
+    response.encoding = "utf-8"
+    request_url = "https://example.invalid/status"
+
+    def fail_request(url: str, **_kwargs: object) -> requests.Response:
+        response.url = url
+        message = f"403 for {url}"
+        raise requests.HTTPError(message, response=response)
+
+    with pytest.raises(IntegrationTransportError) as error_info:
+        IntervalsICUClient._request(  # noqa: SLF001
+            fail_request,
+            request_url,
+        )
+
+    debug_detail = error_info.value.debug_detail or ""
+    assert provider_id not in debug_detail
+    assert athlete_id not in debug_detail
+    assert "[redacted URL]" in debug_detail
+    assert "/athlete/[redacted]/" in debug_detail

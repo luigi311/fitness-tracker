@@ -150,6 +150,7 @@ def _response_debug_detail(
     if detail is None:
         return None
 
+    detail = detail.replace("\\/", "/")
     request_url = getattr(response, "url", None)
     if isinstance(request_url, str) and request_url:
         detail = detail.replace(request_url, "[redacted URL]")

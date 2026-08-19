@@ -6,7 +6,7 @@ from collections import defaultdict
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Protocol
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
@@ -410,11 +410,7 @@ class SqlAlchemyActivityRepository:
                     ),
                     "last_error": excluded.last_error,
                 },
-                where=or_(
-                    ActivityUpload.status != "ok",
-                    ActivityUpload.updated_at <= excluded.updated_at,
-                )
-                & (ActivityUpload.status != "accepted"),
+                where=ActivityUpload.status.not_in(("accepted", "ok")),
             )
             session.execute(statement)
             session.commit()

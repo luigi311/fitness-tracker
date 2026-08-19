@@ -870,29 +870,28 @@ def test_failed_activity_stats_excludes_pending_and_successful_uploads(tmp_path:
     assert [row.activity_id for row in rows] == [failed_id]
 
 
-def test_older_failure_does_not_overwrite_newer_success(tmp_path: Path) -> None:
+def test_failure_does_not_overwrite_successful_upload(tmp_path: Path) -> None:
     db = _manager(tmp_path / "database.db")
     activity_id = db.start_activity(SportTypesEnum.running, Environment.INDOOR)
-    future = datetime.now(UTC) + timedelta(days=1)
-    with db.Session() as session:
-        session.add(
-            ActivityUpload(
-                activity_id=activity_id,
-                provider=PROVIDER,
-                status="ok",
-                uploaded_at=future,
-                updated_at=future,
-                provider_activity_id="remote-success",
-            ),
-        )
-        session.commit()
+    db.repository.mark_upload_ok(
+        activity_id,
+        PROVIDER,
+        provider_activity_id="remote-success",
+        payload_hash="success-hash",
+    )
 
-    db.repository.mark_upload_failed(activity_id, PROVIDER, "late worker failure")
+    db.repository.mark_upload_failed(
+        activity_id,
+        PROVIDER,
+        "late worker failure",
+        payload_hash="failed-hash",
+    )
 
     with db.Session() as session:
         upload = session.query(ActivityUpload).filter_by(activity_id=activity_id).one()
     assert upload.status == "ok"
     assert upload.provider_activity_id == "remote-success"
+    assert upload.payload_hash == "success-hash"
     assert upload.last_error is None
 
 
