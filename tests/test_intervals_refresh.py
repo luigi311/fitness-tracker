@@ -4,6 +4,7 @@ import gzip
 import json
 import os
 from datetime import date
+from io import BytesIO
 from pathlib import Path
 from typing import Any
 
@@ -279,6 +280,28 @@ def test_upload_response_uses_first_list_item() -> None:
     assert result.provider_id == "42"
 
 
+def test_upload_response_accepts_current_activities_envelope() -> None:
+    result = IcuUploadResponse.from_response(  # type: ignore[arg-type]
+        _Response(
+            {
+                "icu_athlete_id": "i123",
+                "id": "upload-batch-id",
+                "activities": [{"icu_athlete_id": "i123", "id": "i456"}],
+            },
+        ),
+    )
+
+    assert result.provider_id == "i456"
+
+
+def test_upload_response_accepts_direct_activity_object() -> None:
+    result = IcuUploadResponse.from_response(  # type: ignore[arg-type]
+        _Response({"icu_athlete_id": "i123", "id": "i456"}),
+    )
+
+    assert result.provider_id == "i456"
+
+
 def test_upload_tcx_uses_deterministic_gzip_payload() -> None:
     calls: list[dict[str, Any]] = []
     client = IntervalsICUClient(
@@ -299,6 +322,8 @@ def test_upload_tcx_uses_deterministic_gzip_payload() -> None:
 def test_transport_error_does_not_expose_request_url() -> None:
     response = requests.Response()
     response.status_code = 403
+    response.raw = BytesIO(b'{"message":"activity access denied"}')
+    response.encoding = "utf-8"
 
     def fail_request(url: str, **_kwargs: object) -> requests.Response:
         response.url = url
@@ -313,4 +338,5 @@ def test_transport_error_does_not_expose_request_url() -> None:
         )
 
     assert error_info.value.status_code == 403
+    assert error_info.value.debug_detail == '{"message":"activity access denied"}'
     assert athlete_id not in str(error_info.value)

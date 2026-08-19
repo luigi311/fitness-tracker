@@ -8,7 +8,7 @@ from loguru import logger
 
 from fitness_tracker.core.sports import SportTypesEnum
 from fitness_tracker.exporters import activity_to_tcx, infer_sport
-from fitness_tracker.integrations.errors import IntegrationError
+from fitness_tracker.integrations.errors import IntegrationError, IntegrationTransportError
 
 if TYPE_CHECKING:
     from fitness_tracker.data.repositories import ActivityRepository
@@ -45,7 +45,25 @@ class IntervalsICUUploader:
                 else infer_sport(hrs, runs, cycles, a.id)
             )
             if sport_type == SportTypesEnum.unknown:
+                logger.warning(
+                    "Intervals.icu upload skipped: activity_id={}, reason=unknown sport",
+                    a.id,
+                )
                 continue
+            prefix = "Run" if sport_type == SportTypesEnum.running else "Ride"
+            name = a.start_time.astimezone().strftime(f"{prefix}_%Y-%m-%d_%H-%M")
+            logger.info(
+                "Intervals.icu upload starting: activity_id={}, name={}, sport={}, "
+                "samples(hr={}, running={}, cycling={}, location={})",
+                a.id,
+                name,
+                sport_type.name,
+                len(hrs),
+                len(runs),
+                len(cycles),
+                len(locations),
+            )
+            stage = "TCX export"
             try:
                 tcx = activity_to_tcx(
                     act=a,
@@ -57,17 +75,44 @@ class IntervalsICUUploader:
                 )
                 # Simple content hash (helps our own dedupe/debug)
                 phash = sha256(tcx).hexdigest()
-                prefix = "Run" if sport_type == SportTypesEnum.running else "Ride"
-                name = a.start_time.astimezone().strftime(f"{prefix}_%Y-%m-%d_%H-%M")
+                stage = "provider request"
                 provider_id = self.client.upload_tcx(name, tcx).provider_id or phash
             except Exception as error:
-                if not isinstance(error, IntegrationError):
-                    logger.exception("Unexpected Intervals.icu upload failure")
                 error_text = str(error)
+                status_code = (
+                    error.status_code if isinstance(error, IntegrationTransportError) else None
+                )
+                debug_detail = error.debug_detail if isinstance(error, IntegrationError) else None
+                logger.error(
+                    "Intervals.icu upload failed: activity_id={}, stage={}, error_type={}, "
+                    "http_status={}, reason={}, response_detail={}",
+                    a.id,
+                    stage,
+                    type(error).__name__,
+                    status_code,
+                    error_text,
+                    debug_detail,
+                )
+                if not isinstance(error, IntegrationError):
+                    logger.exception(
+                        "Unexpected Intervals.icu upload failure for activity_id={}",
+                        a.id,
+                    )
                 repository.mark_upload_failed(a.id, PROVIDER_NAME, error_text)
+                logger.info(
+                    "Stored failed upload state: activity_id={}, provider={}, reason={}",
+                    a.id,
+                    PROVIDER_NAME,
+                    error_text,
+                )
                 out.append((a.id, False, error_text))
                 continue
 
+            logger.info(
+                "Intervals.icu accepted upload: activity_id={}, provider_activity_id={}",
+                a.id,
+                provider_id,
+            )
             try:
                 repository.mark_upload_ok(
                     activity_id=a.id,
@@ -77,7 +122,9 @@ class IntervalsICUUploader:
                 )
             except Exception:
                 logger.exception(
-                    "Could not persist successful Intervals.icu upload; retrying local update",
+                    "Intervals.icu accepted activity_id={}, but saving the local success state "
+                    "failed; retrying local update",
+                    a.id,
                 )
                 try:
                     repository.mark_upload_ok(
@@ -87,10 +134,19 @@ class IntervalsICUUploader:
                         payload_hash=phash,
                     )
                 except Exception as retry_error:
-                    logger.exception("Could not persist successful Intervals.icu upload")
+                    logger.exception(
+                        "Intervals.icu accepted activity_id={}, but the local success state "
+                        "could not be saved after retry",
+                        a.id,
+                    )
                     error_text = str(retry_error)
                     out.append((a.id, False, error_text))
                     continue
 
+            logger.info(
+                "Stored successful upload state: activity_id={}, provider={}",
+                a.id,
+                PROVIDER_NAME,
+            )
             out.append((a.id, True, None))
         return out

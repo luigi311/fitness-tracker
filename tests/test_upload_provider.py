@@ -8,6 +8,8 @@ from unittest.mock import Mock
 from fitness_tracker.core.environment import Environment
 from fitness_tracker.core.sports import SportTypesEnum
 from fitness_tracker.data.models import Activity, LocationPoint, RunningMetrics
+from fitness_tracker.integrations.errors import IntegrationTransportError
+from fitness_tracker.upload_providers import intervals_icu as uploader_module
 from fitness_tracker.upload_providers.intervals_icu import IntervalsICUUploader
 
 EXPECTED_LOCAL_PERSISTENCE_ATTEMPTS = 2
@@ -42,6 +44,51 @@ def test_successful_remote_upload_retries_only_local_success_persistence() -> No
     assert all(
         call.kwargs["provider_activity_id"] == "remote-activity"
         for call in repository.mark_upload_ok.call_args_list
+    )
+
+
+def test_failed_upload_logs_activity_stage_and_provider_detail(
+    monkeypatch,
+) -> None:
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    activity = Activity(id=7, start_time=start, end_time=start + timedelta(minutes=30))
+    repository = Mock()
+    repository.list_not_uploaded.return_value = [activity]
+    repository.list_heart_rates.return_value = []
+    repository.list_running_metrics.return_value = [
+        RunningMetrics(timestamp_ms=0, speed_mps=3.0, cadence_spm=170),
+    ]
+    repository.list_cycling_metrics.return_value = []
+    repository.list_location_points.return_value = []
+    repository.get_activity_sport.return_value = SimpleNamespace(
+        sport_type_id=SportTypesEnum.running.value,
+    )
+    client = Mock()
+    client.upload_tcx.side_effect = IntegrationTransportError(
+        "intervals.icu",
+        "request failed",
+        status_code=422,
+        debug_detail='{"message":"invalid activity file"}',
+    )
+    mock_logger = Mock()
+    monkeypatch.setattr(uploader_module, "logger", mock_logger)
+
+    result = IntervalsICUUploader(client).upload_not_uploaded(repository)
+
+    assert result == [(7, False, "intervals.icu: request failed")]
+    repository.mark_upload_failed.assert_called_once_with(
+        7,
+        "intervals_icu",
+        "intervals.icu: request failed",
+    )
+    error_args = mock_logger.error.call_args.args
+    assert error_args[1:] == (
+        7,
+        "provider request",
+        "IntegrationTransportError",
+        422,
+        "intervals.icu: request failed",
+        '{"message":"invalid activity file"}',
     )
 
 
