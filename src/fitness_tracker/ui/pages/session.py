@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from functools import cache
+from time import monotonic
 from typing import TYPE_CHECKING
 
 import gi
@@ -25,7 +27,7 @@ from fitness_tracker.ui.widgets.timers import SessionTimer
 from fitness_tracker.ui.widgets.trainer_control import TrainerTargetControl
 
 gi.require_versions({"Gtk": "4.0", "Adw": "1"})
-from gi.repository import Gtk, Pango  # noqa: E402  # ty:ignore[unresolved-import]
+from gi.repository import Gdk, GLib, Gtk, Pango  # noqa: E402  # ty:ignore[unresolved-import]
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -41,6 +43,31 @@ if TYPE_CHECKING:
 
 
 _MIN_CHART_POINTS = 2
+_STOP_HOLD_SECONDS = 1.5
+_STOP_HOLD_TICK_MS = 32
+_SESSION_CSS = b"""
+.stop-hold-progress trough {
+    min-height: 32px;
+    background: transparent;
+    border: none;
+}
+.stop-hold-progress progress {
+    min-height: 32px;
+    background-color: rgba(255, 255, 255, 0.28);
+    border-radius: 6px;
+}
+"""
+
+
+@cache
+def _ensure_session_css() -> None:
+    provider = Gtk.CssProvider()
+    provider.load_from_data(_SESSION_CSS)
+    Gtk.StyleContext.add_provider_for_display(
+        Gdk.Display.get_default(),
+        provider,
+        Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION,
+    )
 
 
 class SessionView(Gtk.Box):
@@ -241,14 +268,50 @@ class SessionView(Gtk.Box):
         on_start_record: Callable[[], None],
     ) -> None:
         """Build the paired workout navigation and recording controls."""
+        self._on_stop = on_stop
+        self._stop_hold_started_at: float | None = None
+        self._stop_hold_source_id: int | None = None
+        _ensure_session_css()
+
         action_pair = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         action_pair.set_homogeneous(True)
         action_pair.set_hexpand(True)
-        self.btn_stop = Gtk.Button.new_with_label("⏹️  Stop")
+        self.btn_stop = Gtk.Button()
         self.btn_stop.add_css_class("destructive-action")
+        self.btn_stop.set_tooltip_text(
+            f"Press and hold for {_STOP_HOLD_SECONDS} seconds to stop the activity",
+        )
+        stop_overlay = Gtk.Overlay()
+        self._stop_progress = Gtk.ProgressBar()
+        self._stop_progress.add_css_class("stop-hold-progress")
+        self._stop_progress.set_fraction(0.0)
+        self._stop_progress.set_hexpand(True)
+        stop_overlay.set_child(self._stop_progress)
+        stop_overlay.add_overlay(Gtk.Label(label="Stop"))
+        self.btn_stop.set_child(stop_overlay)
         self.btn_start = Gtk.Button.new_with_label("▶️  Start")
         self.btn_start.add_css_class("suggested-action")
-        self.btn_stop.connect("clicked", lambda *_: on_stop())
+
+        stop_gesture = Gtk.GestureClick.new()
+        stop_gesture.set_button(1)
+        stop_gesture.connect("pressed", lambda *_: self._begin_stop_hold())
+        stop_gesture.connect("released", lambda *_: self._end_stop_hold())
+        stop_gesture.connect("cancel", lambda *_: self._cancel_stop_hold())
+        self.btn_stop.add_controller(stop_gesture)
+
+        stop_keys = Gtk.EventControllerKey.new()
+        stop_keys.connect("key-pressed", self._on_stop_key_pressed)
+        stop_keys.connect("key-released", self._on_stop_key_released)
+        self.btn_stop.add_controller(stop_keys)
+
+        stop_motion = Gtk.EventControllerMotion.new()
+        stop_motion.connect("leave", lambda *_: self._cancel_stop_hold())
+        self.btn_stop.add_controller(stop_motion)
+
+        stop_focus = Gtk.EventControllerFocus.new()
+        stop_focus.connect("leave", self._on_stop_focus_leave)
+        self.btn_stop.add_controller(stop_focus)
+
         self.btn_start.connect("clicked", lambda *_: on_start_record())
         action_pair.append(self.btn_stop)
         action_pair.append(self.btn_start)
@@ -258,6 +321,93 @@ class SessionView(Gtk.Box):
         controls.append(self._workout_navigation)
         controls.append(action_pair)
         self.append(controls)
+
+    def _begin_stop_hold(self) -> None:
+        """Start the stop countdown without allowing repeated presses to restart it."""
+        if self._stop_hold_started_at is not None:
+            return
+        self._stop_hold_started_at = monotonic()
+        self._stop_progress.set_fraction(0.0)
+        self._stop_hold_source_id = GLib.timeout_add(
+            _STOP_HOLD_TICK_MS,
+            self._update_stop_hold,
+        )
+
+    def _update_stop_hold(self) -> bool:
+        """Update the countdown and stop once the full hold duration elapses."""
+        started_at = self._stop_hold_started_at
+        if started_at is None:
+            return GLib.SOURCE_REMOVE
+        elapsed = monotonic() - started_at
+        self._stop_progress.set_fraction(
+            max(0.0, min(1.0, elapsed / _STOP_HOLD_SECONDS)),
+        )
+        if elapsed < _STOP_HOLD_SECONDS:
+            return GLib.SOURCE_CONTINUE
+
+        self._stop_hold_source_id = None
+        self._complete_stop_hold()
+        return GLib.SOURCE_REMOVE
+
+    def _end_stop_hold(self) -> None:
+        """Complete a sufficiently long hold or cancel an early release."""
+        started_at = self._stop_hold_started_at
+        if started_at is None:
+            return
+        if monotonic() - started_at >= _STOP_HOLD_SECONDS:
+            self._complete_stop_hold()
+        else:
+            self._cancel_stop_hold()
+
+    def _complete_stop_hold(self) -> None:
+        """Run the destructive stop action exactly once after confirmation."""
+        source_id = self._stop_hold_source_id
+        self._stop_hold_source_id = None
+        self._stop_hold_started_at = None
+        if source_id is not None:
+            GLib.source_remove(source_id)
+        self._stop_progress.set_fraction(1.0)
+        self.btn_stop.set_sensitive(False)
+        self._on_stop()
+
+    def _cancel_stop_hold(self) -> None:
+        """Reset an incomplete stop hold without ending the activity."""
+        source_id = self._stop_hold_source_id
+        self._stop_hold_source_id = None
+        self._stop_hold_started_at = None
+        if source_id is not None:
+            GLib.source_remove(source_id)
+        self._stop_progress.set_fraction(0.0)
+
+    def _on_stop_focus_leave(self, _controller: Gtk.EventControllerFocus) -> None:
+        """Cancel a keyboard-initiated hold when the button loses focus."""
+        self._cancel_stop_hold()
+
+    @staticmethod
+    def _is_stop_hold_key(keyval: int) -> bool:
+        return keyval in (Gdk.KEY_space, Gdk.KEY_Return, Gdk.KEY_KP_Enter)
+
+    def _on_stop_key_pressed(
+        self,
+        _controller: Gtk.EventControllerKey,
+        keyval: int,
+        _keycode: int,
+        _state: Gdk.ModifierType,
+    ) -> bool:
+        if not self._is_stop_hold_key(keyval):
+            return False
+        self._begin_stop_hold()
+        return True
+
+    def _on_stop_key_released(
+        self,
+        _controller: Gtk.EventControllerKey,
+        keyval: int,
+        _keycode: int,
+        _state: Gdk.ModifierType,
+    ) -> None:
+        if self._is_stop_hold_key(keyval):
+            self._end_stop_hold()
 
     def _build_live_chart(self) -> None:
         """Build the live heart-rate and power chart."""
@@ -274,6 +424,7 @@ class SessionView(Gtk.Box):
     def set_workout_visible(self, *, visible: bool) -> None:
         """Reveal or hide workout guidance without replacing the session page."""
         self._workout_visible = visible
+        self._cancel_stop_hold()
         self._workout_revealer.set_reveal_child(visible)
         self.timer.set_visible(not visible)
         self._live_chart_frame.set_visible(not visible)
@@ -286,10 +437,8 @@ class SessionView(Gtk.Box):
             )
         if visible:
             self.btn_start.set_label("Start")
-            self.btn_stop.set_label("Stop")
         else:
             self.btn_start.set_label("▶️  Start")
-            self.btn_stop.set_label("⏹️  Stop")
 
     def set_title(self, title: str) -> None:
         """Update the workout title shown in the guidance panel."""

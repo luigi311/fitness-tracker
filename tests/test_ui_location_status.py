@@ -133,9 +133,16 @@ class _HeadlessCombo(_HeadlessWidget):
 
 
 class _HeadlessGLib:
+    SOURCE_CONTINUE = True
+    SOURCE_REMOVE = False
+
     @staticmethod
     def timeout_add(*_args: object) -> int:
         return 1
+
+    @staticmethod
+    def source_remove(_source_id: int) -> None:
+        return None
 
 
 def _load_headless_ui_classes(
@@ -399,3 +406,58 @@ def test_session_view_applies_location_status_visibility(headless_ui_classes) ->
 
     assert build_metric_strip(location_enabled=False) is False
     assert build_metric_strip(location_enabled=True) is True
+
+
+def test_stop_requires_configured_hold_duration_and_cancels_on_focus_loss(
+    headless_ui_classes,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _tracker_page_ui, _location_section, session_view = headless_ui_classes
+    now = [10.0]
+    removed_sources: list[int] = []
+    stop = Mock()
+    button = Mock()
+    progress = Mock()
+    view = session_view.__new__(session_view)
+    view._workout_visible = False
+    view._on_stop = stop
+    view._stop_hold_started_at = None
+    view._stop_hold_source_id = None
+    view.btn_stop = button
+    view._stop_progress = progress
+    method_globals = session_view._begin_stop_hold.__globals__
+    hold_seconds = method_globals["_STOP_HOLD_SECONDS"]
+    monkeypatch.setitem(method_globals, "monotonic", lambda: now[0])
+    monkeypatch.setitem(
+        method_globals,
+        "GLib",
+        SimpleNamespace(
+            SOURCE_CONTINUE=True,
+            SOURCE_REMOVE=False,
+            timeout_add=lambda *_args: 41,
+            source_remove=removed_sources.append,
+        ),
+    )
+
+    view._begin_stop_hold()
+    now[0] += hold_seconds - 0.1
+    assert view._update_stop_hold() is True
+    assert progress.set_fraction.call_args.args[0] == pytest.approx(
+        (hold_seconds - 0.1) / hold_seconds,
+    )
+    view._on_stop_focus_leave(Mock())
+
+    stop.assert_not_called()
+    assert removed_sources == [41]
+    assert view._stop_hold_started_at is None
+    assert view._stop_hold_source_id is None
+    assert progress.set_fraction.call_args.args == (0.0,)
+
+    view._begin_stop_hold()
+    now[0] += hold_seconds
+    assert view._update_stop_hold() is False
+    view._end_stop_hold()
+
+    stop.assert_called_once_with()
+    assert progress.set_fraction.call_args.args == (1.0,)
+    assert button.set_sensitive.call_args.args == (False,)
