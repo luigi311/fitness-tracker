@@ -133,6 +133,25 @@ def test_history_failed_filter_queries_only_failed_upload_stats() -> None:
     repository.list_activity_stats.assert_not_called()
 
 
+def test_upload_result_refreshes_history_after_status_changes() -> None:
+    page = settings_page_module.SettingsPageUI.__new__(settings_page_module.SettingsPageUI)
+    page.app = SimpleNamespace(history=Mock(), show_toast=Mock())
+
+    page._on_upload_success([(7, True, None)])
+
+    page.app.history.refresh.assert_called_once_with()
+
+
+def test_failed_upload_batch_does_not_refresh_history() -> None:
+    page = settings_page_module.SettingsPageUI.__new__(settings_page_module.SettingsPageUI)
+    page.app = SimpleNamespace(history=Mock(), show_toast=Mock())
+
+    page._on_upload_success([(7, False, "provider unavailable")])
+
+    page.app.history.refresh.assert_not_called()
+    page.app.show_toast.assert_called_once_with("⚠️ 1 failed")
+
+
 def test_history_backfill_discard_and_duplicate_release_reload_guard() -> None:
     page = HistoryPageUI.__new__(HistoryPageUI)
     jobs = Mock()

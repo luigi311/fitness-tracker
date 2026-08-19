@@ -745,6 +745,81 @@ def test_new_samples_invalidate_successful_uploads(tmp_path: Path) -> None:
     assert [activity.id for activity in db.repository.list_not_uploaded(PROVIDER)] == [activity_id]
 
 
+def test_accepted_upload_state_is_recoverable_and_invalidated_by_new_samples(
+    tmp_path: Path,
+) -> None:
+    db = _manager(tmp_path / "database.db")
+    activity_id = db.start_activity(SportTypesEnum.running, Environment.INDOOR)
+    db.stop_activity(activity_id)
+    db.repository.mark_upload_accepted(
+        activity_id,
+        PROVIDER,
+        provider_activity_id="remote-1",
+        payload_hash="accepted-hash",
+        error_message="local success update failed",
+    )
+
+    upload = db.repository.get_activity_upload(activity_id, PROVIDER)
+    assert upload is not None
+    assert upload.status == "accepted"
+    assert upload.provider_activity_id == "remote-1"
+    assert [activity.id for activity in db.repository.list_not_uploaded(PROVIDER)] == [activity_id]
+
+    db.insert_heart_rate(activity_id, 1_000, 140, None)
+    db._flush_pending()  # noqa: SLF001
+
+    upload = db.repository.get_activity_upload(activity_id, PROVIDER)
+    assert upload is not None
+    assert upload.status == "pending"
+    assert upload.payload_hash is None
+
+
+@pytest.mark.parametrize(
+    ("payload_case", "expected_status"),
+    [("matching", "accepted"), ("different", "pending")],
+)
+def test_reconcile_sessions_preserves_accepted_upload_only_for_matching_payloads(
+    tmp_path: Path,
+    payload_case: str,
+    expected_status: str,
+) -> None:
+    source = _manager(tmp_path / "source.db")
+    destination = _manager(tmp_path / "destination.db")
+    public_id = uuid4()
+    source_id = _insert_activity(source, public_id)
+    destination_id = _insert_activity(destination, public_id)
+    with source.Session() as session:
+        session.add(
+            ActivityUpload(
+                activity_id=source_id,
+                provider=PROVIDER,
+                status="accepted",
+                uploaded_at=START_TIME,
+                updated_at=START_TIME,
+                provider_activity_id="remote-1",
+                payload_hash="accepted-hash",
+                last_error="local success update failed",
+            ),
+        )
+        session.commit()
+    if payload_case == "different":
+        with destination.Session() as session:
+            session.add(HeartRate(activity_id=destination_id, timestamp_ms=1_000, bpm=140))
+            session.commit()
+
+    with source.Session() as source_session, destination.Session() as destination_session:
+        DatabaseSynchronizer.reconcile_sessions(
+            source_session,
+            destination_session,
+            Mock(),
+        )
+        destination_session.commit()
+
+    with destination.Session() as session:
+        upload = session.query(ActivityUpload).filter_by(activity_id=destination_id).one()
+    assert upload.status == expected_status
+
+
 def test_concurrent_upload_updates_share_one_provider_row(tmp_path: Path) -> None:
     db = _manager(tmp_path / "database.db")
     activity_id = db.start_activity(SportTypesEnum.running, Environment.INDOOR)
@@ -795,29 +870,28 @@ def test_failed_activity_stats_excludes_pending_and_successful_uploads(tmp_path:
     assert [row.activity_id for row in rows] == [failed_id]
 
 
-def test_older_failure_does_not_overwrite_newer_success(tmp_path: Path) -> None:
+def test_failure_does_not_overwrite_successful_upload(tmp_path: Path) -> None:
     db = _manager(tmp_path / "database.db")
     activity_id = db.start_activity(SportTypesEnum.running, Environment.INDOOR)
-    future = datetime.now(UTC) + timedelta(days=1)
-    with db.Session() as session:
-        session.add(
-            ActivityUpload(
-                activity_id=activity_id,
-                provider=PROVIDER,
-                status="ok",
-                uploaded_at=future,
-                updated_at=future,
-                provider_activity_id="remote-success",
-            ),
-        )
-        session.commit()
+    db.repository.mark_upload_ok(
+        activity_id,
+        PROVIDER,
+        provider_activity_id="remote-success",
+        payload_hash="success-hash",
+    )
 
-    db.repository.mark_upload_failed(activity_id, PROVIDER, "late worker failure")
+    db.repository.mark_upload_failed(
+        activity_id,
+        PROVIDER,
+        "late worker failure",
+        payload_hash="failed-hash",
+    )
 
     with db.Session() as session:
         upload = session.query(ActivityUpload).filter_by(activity_id=activity_id).one()
     assert upload.status == "ok"
     assert upload.provider_activity_id == "remote-success"
+    assert upload.payload_hash == "success-hash"
     assert upload.last_error is None
 
 

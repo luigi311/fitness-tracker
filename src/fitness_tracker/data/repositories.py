@@ -6,7 +6,7 @@ from collections import defaultdict
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Protocol
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
@@ -114,6 +114,10 @@ class ActivityRepository(Protocol):
         """List activities not successfully uploaded to a provider."""
         ...
 
+    def get_activity_upload(self, activity_id: int, provider: str) -> ActivityUpload | None:
+        """Return one activity's upload state for a provider."""
+        ...
+
     def mark_upload_ok(
         self,
         activity_id: int,
@@ -132,6 +136,17 @@ class ActivityRepository(Protocol):
         payload_hash: str | None = None,
     ) -> None:
         """Record a failed upload and its truncated error message."""
+        ...
+
+    def mark_upload_accepted(
+        self,
+        activity_id: int,
+        provider: str,
+        provider_activity_id: str,
+        payload_hash: str,
+        error_message: str,
+    ) -> None:
+        """Record remote acceptance pending local success reconciliation."""
         ...
 
 
@@ -313,6 +328,15 @@ class SqlAlchemyActivityRepository:
         with self._session_factory() as session:
             return list(session.scalars(statement).all())
 
+    def get_activity_upload(self, activity_id: int, provider: str) -> ActivityUpload | None:
+        """Return one activity's upload state for a provider."""
+        statement = select(ActivityUpload).where(
+            ActivityUpload.activity_id == activity_id,
+            ActivityUpload.provider == provider,
+        )
+        with self._session_factory() as session:
+            return session.scalar(statement)
+
     def mark_upload_ok(
         self,
         activity_id: int,
@@ -386,10 +410,45 @@ class SqlAlchemyActivityRepository:
                     ),
                     "last_error": excluded.last_error,
                 },
-                where=or_(
-                    ActivityUpload.status != "ok",
-                    ActivityUpload.updated_at <= excluded.updated_at,
-                ),
+                where=ActivityUpload.status.not_in(("accepted", "ok")),
+            )
+            session.execute(statement)
+            session.commit()
+
+    def mark_upload_accepted(
+        self,
+        activity_id: int,
+        provider: str,
+        provider_activity_id: str,
+        payload_hash: str,
+        error_message: str,
+    ) -> None:
+        """Record remote acceptance pending local success reconciliation."""
+        with self._session_factory() as session:
+            now = datetime.now(UTC)
+            truncated_error = error_message[:1000]
+            insert = self._upload_insert(session)
+            excluded = insert.excluded
+            statement = insert.values(
+                activity_id=activity_id,
+                provider=provider,
+                status="accepted",
+                uploaded_at=now,
+                updated_at=now,
+                provider_activity_id=provider_activity_id,
+                payload_hash=payload_hash,
+                last_error=truncated_error,
+            ).on_conflict_do_update(
+                index_elements=["activity_id", "provider"],
+                set_={
+                    "status": "accepted",
+                    "uploaded_at": now,
+                    "updated_at": now,
+                    "provider_activity_id": excluded.provider_activity_id,
+                    "payload_hash": excluded.payload_hash,
+                    "last_error": excluded.last_error,
+                },
+                where=ActivityUpload.status != "ok",
             )
             session.execute(statement)
             session.commit()

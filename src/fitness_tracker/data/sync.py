@@ -34,7 +34,8 @@ DATABASE_MODEL = type[HeartRate] | type[RunningMetrics] | type[CyclingMetrics] |
 _UPLOAD_STATUS_PRIORITY = {
     "failed": 0,
     "pending": 1,
-    "ok": 2,
+    "accepted": 2,
+    "ok": 3,
 }
 _MIN_UPLOAD_TIME = datetime.min.replace(tzinfo=UTC)
 
@@ -167,7 +168,7 @@ class DatabaseSynchronizer:
                 copied_measurements |= copied_rows
                 if model is not LocationPoint:
                     copied_stats_inputs |= copied_rows
-            applied_source_ok_providers = DatabaseSynchronizer._reconcile_uploads(
+            applied_source_upload_providers = DatabaseSynchronizer._reconcile_uploads(
                 source,
                 destination,
                 source_activity,
@@ -180,14 +181,14 @@ class DatabaseSynchronizer:
                 destination_activity,
             )
             preserve_providers = set()
-            if applied_source_ok_providers and DatabaseSynchronizer._payload_aggregates_match(
+            if applied_source_upload_providers and DatabaseSynchronizer._payload_aggregates_match(
                 source,
                 destination,
                 source_activity,
                 destination_activity,
             ):
-                preserve_providers = applied_source_ok_providers
-            if copied_measurements or applied_source_ok_providers or tcx_metadata_changed:
+                preserve_providers = applied_source_upload_providers
+            if copied_measurements or applied_source_upload_providers or tcx_metadata_changed:
                 DatabaseSynchronizer._invalidate_successful_uploads(
                     destination,
                     destination_activity.id,
@@ -395,7 +396,7 @@ class DatabaseSynchronizer:
         uploads = destination_session.scalars(
             select(ActivityUpload).where(
                 ActivityUpload.activity_id == activity_id,
-                ActivityUpload.status == "ok",
+                ActivityUpload.status.in_(("accepted", "ok")),
             ),
         ).all()
         now = datetime.now(UTC)
@@ -420,7 +421,7 @@ class DatabaseSynchronizer:
         ).all()
         if not source_rows:
             return set()
-        applied_source_ok_providers: set[str] = set()
+        applied_source_upload_providers: set[str] = set()
         destination_rows = {
             row.provider: row
             for row in destination_session.scalars(
@@ -444,8 +445,8 @@ class DatabaseSynchronizer:
                         last_error=source_row.last_error,
                     ),
                 )
-                if source_row.status == "ok":
-                    applied_source_ok_providers.add(source_row.provider)
+                if source_row.status in {"accepted", "ok"}:
+                    applied_source_upload_providers.add(source_row.provider)
             elif not DatabaseSynchronizer._is_destination_invalidation(
                 source_row,
                 destination_row,
@@ -456,9 +457,9 @@ class DatabaseSynchronizer:
                 destination_row.provider_activity_id = source_row.provider_activity_id
                 destination_row.payload_hash = source_row.payload_hash
                 destination_row.last_error = source_row.last_error
-                if source_row.status == "ok":
-                    applied_source_ok_providers.add(source_row.provider)
-        return applied_source_ok_providers
+                if source_row.status in {"accepted", "ok"}:
+                    applied_source_upload_providers.add(source_row.provider)
+        return applied_source_upload_providers
 
     @staticmethod
     def _is_destination_invalidation(
@@ -471,7 +472,7 @@ class DatabaseSynchronizer:
             and source.uploaded_at is None
             and source.payload_hash is None
             and source.last_error is None
-            and destination.status == "ok"
+            and destination.status in {"accepted", "ok"}
             and source.provider_activity_id == destination.provider_activity_id
         )
 

@@ -420,7 +420,7 @@ class DatabaseManager:
         uploads = session.scalars(
             select(ActivityUpload).where(
                 ActivityUpload.activity_id.in_(activity_ids),
-                ActivityUpload.status == "ok",
+                ActivityUpload.status.in_(("accepted", "ok")),
             ),
         ).all()
         now = datetime.now(UTC)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import gzip
+import re
 from datetime import date, datetime  # noqa: TC003 - Pydantic resolves these at runtime
 from typing import TYPE_CHECKING, Protocol
 
@@ -20,6 +21,11 @@ if TYPE_CHECKING:
 
 _API_BASE = "https://intervals.icu/api/v1"
 _INTEGRATION_NAME = "intervals.icu"
+_URL_PATTERN = re.compile(r"\b(?:https?://|www\.)[^\s<>\"']+", re.IGNORECASE)
+_ATHLETE_PATH_PATTERN = re.compile(
+    r"(/athlete/)[^/\s?&#<>\"']+",
+    re.IGNORECASE,
+)
 
 
 class IntervalsICUCredentials(BaseModel):
@@ -63,19 +69,31 @@ class IcuUploadResponse(BaseModel):
 
     @classmethod
     def from_response(cls, response: requests.Response) -> IcuUploadResponse:
-        """Parse a successful upload response and require its activity identifier."""
+        """Parse current and legacy upload responses and require an activity ID."""
         try:
-            payloads = _ICU_UPLOAD_RESPONSES.validate_python(response.json())
+            raw_payload = response.json()
+            if isinstance(raw_payload, list):
+                payloads = _ICU_UPLOAD_RESPONSES.validate_python(raw_payload)
+            elif isinstance(raw_payload, dict) and "activities" in raw_payload:
+                envelope = _ICU_UPLOAD_ENVELOPE.validate_python(raw_payload)
+                payloads = envelope.activities
+            else:
+                payloads = [cls.model_validate(raw_payload)]
         except (ValidationError, ValueError) as exc:
             message = "returned unexpected data"
             raise IntegrationResponseError(
                 _INTEGRATION_NAME,
                 message,
+                debug_detail=_response_debug_detail(response),
             ) from exc
 
         if not payloads:
             message = "returned no upload result"
-            raise IntegrationResponseError(_INTEGRATION_NAME, message)
+            raise IntegrationResponseError(
+                _INTEGRATION_NAME,
+                message,
+                debug_detail=_response_debug_detail(response),
+            )
         payload = payloads[0]
 
         if payload.provider_id is None:
@@ -83,6 +101,7 @@ class IcuUploadResponse(BaseModel):
             raise IntegrationResponseError(
                 _INTEGRATION_NAME,
                 message,
+                debug_detail=_response_debug_detail(response),
             )
         return payload
 
@@ -104,6 +123,39 @@ class _HttpTransport(Protocol):
 
 _ICU_WORKOUT_EVENTS = TypeAdapter(list[IcuWorkoutEvent])
 _ICU_UPLOAD_RESPONSES = TypeAdapter(list[IcuUploadResponse])
+
+
+class _IcuUploadEnvelope(BaseModel):
+    """Current Intervals.icu upload wrapper containing created activities."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    activities: list[IcuUploadResponse]
+
+
+_ICU_UPLOAD_ENVELOPE = TypeAdapter(_IcuUploadEnvelope)
+
+
+def _response_debug_detail(
+    response: requests.Response,
+    fallback: str | None = None,
+) -> str | None:
+    """Return a compact provider response without exposing the request URL."""
+    response_text = getattr(response, "text", None)
+    if isinstance(response_text, str) and response_text.strip():
+        detail = " ".join(response_text.split())
+    else:
+        reason = getattr(response, "reason", None)
+        detail = str(reason) if reason else fallback
+    if detail is None:
+        return None
+
+    detail = detail.replace("\\/", "/")
+    request_url = getattr(response, "url", None)
+    if isinstance(request_url, str) and request_url:
+        detail = detail.replace(request_url, "[redacted URL]")
+    detail = _URL_PATTERN.sub("[redacted URL]", detail)
+    return _ATHLETE_PATH_PATTERN.sub(r"\1[redacted]", detail)[:500]
 
 
 class IntervalsICUClient:
@@ -174,11 +226,16 @@ class IntervalsICUClient:
             response = request(url, **kwargs)
             response.raise_for_status()
         except requests.RequestException as exc:
-            status_code = exc.response.status_code if exc.response is not None else None
+            error_response = exc.response
+            status_code = error_response.status_code if error_response is not None else None
+            debug_detail = type(exc).__name__
+            if error_response is not None:
+                debug_detail = _response_debug_detail(error_response, debug_detail)
             message = "request failed"
             raise IntegrationTransportError(
                 _INTEGRATION_NAME,
                 message,
                 status_code=status_code,
+                debug_detail=debug_detail,
             ) from exc
         return response
