@@ -212,7 +212,7 @@ class ActivityUpload(Base):
         String(16),
         nullable=False,
         default="pending",
-    )  # "pending"|"ok"|"failed"
+    )  # "pending"|"accepted"|"ok"|"failed"
     uploaded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

@@ -745,6 +745,35 @@ def test_new_samples_invalidate_successful_uploads(tmp_path: Path) -> None:
     assert [activity.id for activity in db.repository.list_not_uploaded(PROVIDER)] == [activity_id]
 
 
+def test_accepted_upload_state_is_recoverable_and_invalidated_by_new_samples(
+    tmp_path: Path,
+) -> None:
+    db = _manager(tmp_path / "database.db")
+    activity_id = db.start_activity(SportTypesEnum.running, Environment.INDOOR)
+    db.stop_activity(activity_id)
+    db.repository.mark_upload_accepted(
+        activity_id,
+        PROVIDER,
+        provider_activity_id="remote-1",
+        payload_hash="accepted-hash",
+        error_message="local success update failed",
+    )
+
+    upload = db.repository.get_activity_upload(activity_id, PROVIDER)
+    assert upload is not None
+    assert upload.status == "accepted"
+    assert upload.provider_activity_id == "remote-1"
+    assert [activity.id for activity in db.repository.list_not_uploaded(PROVIDER)] == [activity_id]
+
+    db.insert_heart_rate(activity_id, 1_000, 140, None)
+    db._flush_pending()  # noqa: SLF001
+
+    upload = db.repository.get_activity_upload(activity_id, PROVIDER)
+    assert upload is not None
+    assert upload.status == "pending"
+    assert upload.payload_hash is None
+
+
 def test_concurrent_upload_updates_share_one_provider_row(tmp_path: Path) -> None:
     db = _manager(tmp_path / "database.db")
     activity_id = db.start_activity(SportTypesEnum.running, Environment.INDOOR)

@@ -13,6 +13,7 @@ from fitness_tracker.upload_providers import intervals_icu as uploader_module
 from fitness_tracker.upload_providers.intervals_icu import IntervalsICUUploader
 
 EXPECTED_LOCAL_PERSISTENCE_ATTEMPTS = 2
+EXPECTED_RECONCILIATION_ATTEMPTS = 3
 EXPECTED_PAYLOAD_COUNT = 2
 
 
@@ -44,6 +45,50 @@ def test_successful_remote_upload_retries_only_local_success_persistence() -> No
     assert all(
         call.kwargs["provider_activity_id"] == "remote-activity"
         for call in repository.mark_upload_ok.call_args_list
+    )
+
+
+def test_accepted_remote_upload_is_reconciled_without_resubmission() -> None:
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    activity = Activity(id=1, start_time=start, end_time=start + timedelta(minutes=30))
+    repository = Mock()
+    repository.list_not_uploaded.side_effect = [[activity], [activity]]
+    repository.get_activity_upload.side_effect = [
+        None,
+        SimpleNamespace(
+            status="accepted",
+            provider_activity_id="remote-activity",
+            payload_hash="payload-hash",
+        ),
+    ]
+    repository.list_heart_rates.return_value = []
+    repository.list_running_metrics.return_value = [
+        RunningMetrics(timestamp_ms=0, speed_mps=3.0, cadence_spm=170),
+    ]
+    repository.list_cycling_metrics.return_value = []
+    repository.list_location_points.return_value = []
+    repository.get_activity_sport.return_value = SimpleNamespace(
+        sport_type_id=SportTypesEnum.running.value,
+    )
+    repository.mark_upload_ok.side_effect = [
+        OSError("database unavailable"),
+        OSError("database still unavailable"),
+        None,
+    ]
+    client = Mock()
+    client.upload_tcx.return_value = SimpleNamespace(provider_id="remote-activity")
+
+    assert IntervalsICUUploader(client).upload_not_uploaded(repository) == [(1, True, None)]
+    assert IntervalsICUUploader(client).upload_not_uploaded(repository) == [(1, True, None)]
+
+    client.upload_tcx.assert_called_once()
+    assert repository.mark_upload_ok.call_count == EXPECTED_RECONCILIATION_ATTEMPTS
+    repository.mark_upload_accepted.assert_called_once_with(
+        activity_id=1,
+        provider="intervals_icu",
+        provider_activity_id="remote-activity",
+        payload_hash=repository.mark_upload_ok.call_args_list[0].kwargs["payload_hash"],
+        error_message="database still unavailable",
     )
 
 

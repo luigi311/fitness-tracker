@@ -656,8 +656,9 @@ class SettingsPageUI:
         if not results:
             self.app.show_toast("No new activities to upload")
             return
-        self.app.history.refresh()
         ok = sum(1 for _, succeeded, _ in results if succeeded)
+        if ok:
+            self.app.history.refresh()
         failures = [error for _, succeeded, error in results if not succeeded]
         if ok:
             self.app.show_toast(

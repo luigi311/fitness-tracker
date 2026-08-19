@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import gzip
+import re
 from datetime import date, datetime  # noqa: TC003 - Pydantic resolves these at runtime
 from typing import TYPE_CHECKING, Protocol
 
@@ -20,6 +21,7 @@ if TYPE_CHECKING:
 
 _API_BASE = "https://intervals.icu/api/v1"
 _INTEGRATION_NAME = "intervals.icu"
+_URL_PATTERN = re.compile(r"\b(?:https?://|www\.)[^\s<>\"']+", re.IGNORECASE)
 
 
 class IntervalsICUCredentials(BaseModel):
@@ -137,11 +139,17 @@ def _response_debug_detail(
     """Return a compact provider response without exposing the request URL."""
     response_text = getattr(response, "text", None)
     if isinstance(response_text, str) and response_text.strip():
-        return " ".join(response_text.split())[:500]
-    reason = getattr(response, "reason", None)
-    if reason:
-        return str(reason)[:500]
-    return fallback
+        detail = " ".join(response_text.split())
+    else:
+        reason = getattr(response, "reason", None)
+        detail = str(reason) if reason else fallback
+    if detail is None:
+        return None
+
+    request_url = getattr(response, "url", None)
+    if isinstance(request_url, str) and request_url:
+        detail = detail.replace(request_url, "[redacted URL]")
+    return _URL_PATTERN.sub("[redacted URL]", detail)[:500]
 
 
 class IntervalsICUClient:

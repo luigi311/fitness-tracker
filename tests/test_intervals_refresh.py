@@ -322,7 +322,9 @@ def test_upload_tcx_uses_deterministic_gzip_payload() -> None:
 def test_transport_error_does_not_expose_request_url() -> None:
     response = requests.Response()
     response.status_code = 403
-    response.raw = BytesIO(b'{"message":"activity access denied"}')
+    athlete_id = "private-athlete-id"
+    request_url = f"https://example.invalid/athlete/{athlete_id}/events"
+    response.raw = BytesIO(f'{{"request":"{request_url}"}}'.encode())
     response.encoding = "utf-8"
 
     def fail_request(url: str, **_kwargs: object) -> requests.Response:
@@ -330,13 +332,13 @@ def test_transport_error_does_not_expose_request_url() -> None:
         message = f"403 for {url}"
         raise requests.HTTPError(message, response=response)
 
-    athlete_id = "private-athlete-id"
     with pytest.raises(IntegrationTransportError) as error_info:
         IntervalsICUClient._request(  # noqa: SLF001
             fail_request,
-            f"https://example.invalid/athlete/{athlete_id}/events",
+            request_url,
         )
 
     assert error_info.value.status_code == 403
-    assert error_info.value.debug_detail == '{"message":"activity access denied"}'
+    assert error_info.value.debug_detail == '{"request":"[redacted URL]"}'
+    assert athlete_id not in (error_info.value.debug_detail or "")
     assert athlete_id not in str(error_info.value)

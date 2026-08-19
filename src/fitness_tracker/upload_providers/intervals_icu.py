@@ -11,10 +11,12 @@ from fitness_tracker.exporters import activity_to_tcx, infer_sport
 from fitness_tracker.integrations.errors import IntegrationError, IntegrationTransportError
 
 if TYPE_CHECKING:
+    from fitness_tracker.data.models import ActivityUpload
     from fitness_tracker.data.repositories import ActivityRepository
     from fitness_tracker.integrations.intervals_icu import IntervalsICUClient
 
 PROVIDER_NAME = "intervals_icu"
+UploadResult = tuple[int, bool, str | None]
 
 
 @dataclass
@@ -23,17 +25,125 @@ class IntervalsICUUploader:
 
     client: IntervalsICUClient
 
+    @staticmethod
+    def _reconcile_accepted_upload(
+        repository: ActivityRepository,
+        activity_id: int,
+        upload: ActivityUpload,
+    ) -> UploadResult:
+        """Promote a durable remote acceptance without another provider request."""
+        if not upload.provider_activity_id or not upload.payload_hash:
+            error_text = "accepted upload is missing provider reconciliation metadata"
+            logger.error(
+                "Could not reconcile accepted Intervals.icu upload: activity_id={}, reason={}",
+                activity_id,
+                error_text,
+            )
+            return activity_id, False, error_text
+        try:
+            repository.mark_upload_ok(
+                activity_id=activity_id,
+                provider=PROVIDER_NAME,
+                provider_activity_id=upload.provider_activity_id,
+                payload_hash=upload.payload_hash,
+            )
+        except Exception as error:
+            logger.exception(
+                "Could not reconcile accepted Intervals.icu upload for activity_id={}",
+                activity_id,
+            )
+            return activity_id, False, str(error)
+        logger.info(
+            "Reconciled accepted Intervals.icu upload: activity_id={}, provider_activity_id={}",
+            activity_id,
+            upload.provider_activity_id,
+        )
+        return activity_id, True, None
+
+    @staticmethod
+    def _store_remote_acceptance(
+        repository: ActivityRepository,
+        activity_id: int,
+        provider_id: str,
+        payload_hash: str,
+    ) -> UploadResult:
+        """Persist provider acceptance, retaining a recoverable state on failure."""
+        logger.info(
+            "Intervals.icu accepted upload: activity_id={}, provider_activity_id={}",
+            activity_id,
+            provider_id,
+        )
+        try:
+            repository.mark_upload_ok(
+                activity_id=activity_id,
+                provider=PROVIDER_NAME,
+                provider_activity_id=provider_id,
+                payload_hash=payload_hash,
+            )
+        except Exception:
+            logger.exception(
+                "Intervals.icu accepted activity_id={}, but saving the local success state "
+                "failed; retrying local update",
+                activity_id,
+            )
+            try:
+                repository.mark_upload_ok(
+                    activity_id=activity_id,
+                    provider=PROVIDER_NAME,
+                    provider_activity_id=provider_id,
+                    payload_hash=payload_hash,
+                )
+            except Exception as retry_error:
+                logger.exception(
+                    "Intervals.icu accepted activity_id={}, but the local success state "
+                    "could not be saved after retry",
+                    activity_id,
+                )
+                try:
+                    repository.mark_upload_accepted(
+                        activity_id=activity_id,
+                        provider=PROVIDER_NAME,
+                        provider_activity_id=provider_id,
+                        payload_hash=payload_hash,
+                        error_message=str(retry_error),
+                    )
+                except Exception as recovery_error:
+                    logger.exception(
+                        "Could not store recoverable accepted-upload state for activity_id={}",
+                        activity_id,
+                    )
+                    return activity_id, False, str(recovery_error)
+                logger.warning(
+                    "Stored recoverable accepted-upload state: activity_id={}, "
+                    "provider_activity_id={}",
+                    activity_id,
+                    provider_id,
+                )
+                return activity_id, True, None
+
+        logger.info(
+            "Stored successful upload state: activity_id={}, provider={}",
+            activity_id,
+            PROVIDER_NAME,
+        )
+        return activity_id, True, None
+
     def upload_not_uploaded(
         self,
         repository: ActivityRepository,
-    ) -> list[tuple[int, bool, str | None]]:
+    ) -> list[UploadResult]:
         """Upload all activities that don't have an OK upload row for Intervals.icu."""
-        out: list[tuple[int, bool, str | None]] = []
+        out: list[UploadResult] = []
         acts = repository.list_not_uploaded(PROVIDER_NAME)
         if not acts:
             return out
 
         for a in acts:
+            existing_upload = repository.get_activity_upload(a.id, PROVIDER_NAME)
+            if existing_upload is not None and existing_upload.status == "accepted":
+                out.append(self._reconcile_accepted_upload(repository, a.id, existing_upload))
+                continue
+
             hrs = repository.list_heart_rates(a.id)
             runs = repository.list_running_metrics(a.id)
             cycles = repository.list_cycling_metrics(a.id)
@@ -108,45 +218,5 @@ class IntervalsICUUploader:
                 out.append((a.id, False, error_text))
                 continue
 
-            logger.info(
-                "Intervals.icu accepted upload: activity_id={}, provider_activity_id={}",
-                a.id,
-                provider_id,
-            )
-            try:
-                repository.mark_upload_ok(
-                    activity_id=a.id,
-                    provider=PROVIDER_NAME,
-                    provider_activity_id=provider_id,
-                    payload_hash=phash,
-                )
-            except Exception:
-                logger.exception(
-                    "Intervals.icu accepted activity_id={}, but saving the local success state "
-                    "failed; retrying local update",
-                    a.id,
-                )
-                try:
-                    repository.mark_upload_ok(
-                        activity_id=a.id,
-                        provider=PROVIDER_NAME,
-                        provider_activity_id=provider_id,
-                        payload_hash=phash,
-                    )
-                except Exception as retry_error:
-                    logger.exception(
-                        "Intervals.icu accepted activity_id={}, but the local success state "
-                        "could not be saved after retry",
-                        a.id,
-                    )
-                    error_text = str(retry_error)
-                    out.append((a.id, False, error_text))
-                    continue
-
-            logger.info(
-                "Stored successful upload state: activity_id={}, provider={}",
-                a.id,
-                PROVIDER_NAME,
-            )
-            out.append((a.id, True, None))
+            out.append(self._store_remote_acceptance(repository, a.id, provider_id, phash))
         return out
