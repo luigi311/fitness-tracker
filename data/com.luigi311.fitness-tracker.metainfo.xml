@@ -66,6 +66,39 @@
         type="desktop-id"
     >com.luigi311.fitness-tracker.desktop</launchable>
     <releases>
+        <release version="5.0.0" date="2026-08-20">
+            <url
+                type="details"
+            >https://github.com/luigi311/fitness-tracker/releases/tag/v5.0.0</url>
+            <description>
+                <p>
+                    Features
+                </p>
+                <ul>
+                    <li>Record GPS routes through the desktop location portal</li>
+                    <li>Export and upload location-aware TCX activities</li>
+                    <li>Filter activity history to find failed uploads</li>
+                    <li>Require holding the stop button to prevent accidentally ending a workout</li>
+                </ul>
+                <p>
+                    Improvements
+                </p>
+                <ul>
+                    <li>Refresh live metrics more frequently</li>
+                    <li>Use a more compact layout</li>
+                    <li>Send workout change notifications only while the app is in the background</li>
+                    <li>Launch and Close the Pebble companion app automatically with active sessions</li>
+                    <li>Compress Intervals.icu activity uploads</li>
+                </ul>
+                <p>
+                    Bug Fixes
+                </p>
+                <ul>
+                    <li>Recover and reconcile failed Intervals.icu uploads across response variants</li>
+                    <li>Improve Pebble bridge restart and shutdown reliability</li>
+                </ul>
+            </description>
+        </release>
         <release version="4.1.0" date="2026-08-07">
             <url
                 type="details"
