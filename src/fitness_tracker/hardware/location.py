@@ -39,6 +39,19 @@ class PortalAccuracy(IntEnum):
     EXACT = 5
 
 
+_MAX_ANCHOR_ACCURACY_M_BY_LEVEL: Final[dict[PortalAccuracy, float]] = {
+    PortalAccuracy.NONE: 1.0,
+    PortalAccuracy.COUNTRY: 1_000_000.0,
+    PortalAccuracy.CITY: 50_000.0,
+    PortalAccuracy.NEIGHBORHOOD: 5_000.0,
+    PortalAccuracy.STREET: 500.0,
+    PortalAccuracy.EXACT: 100.0,
+}
+_MAX_ANCHOR_FIX_AGE_S: Final = 300
+_MAX_ANCHOR_FIX_FUTURE_S: Final = 60
+_ANCHOR_ACQUISITION_TIMEOUT_S: Final = 20.0 * 60.0
+
+
 _PORTAL_ACCURACY_BY_SETTING: Final[dict[str, PortalAccuracy]] = {
     "city": PortalAccuracy.CITY,
     "neighborhood": PortalAccuracy.NEIGHBORHOOD,
@@ -164,6 +177,9 @@ class LocationPolicy:
     time_threshold_s: int
     distance_threshold_m: int
     max_points: int | None = None
+    max_accuracy_m: float | None = None
+    max_fix_age_s: int | None = None
+    acquisition_timeout_s: float | None = None
 
     def __post_init__(self) -> None:
         try:
@@ -185,6 +201,29 @@ class LocationPolicy:
         ):
             message = "max_points must be a positive integer or None"
             raise ValueError(message)
+        if self.max_accuracy_m is not None and (
+            isinstance(self.max_accuracy_m, bool)
+            or not isinstance(self.max_accuracy_m, Real)
+            or not isfinite(float(self.max_accuracy_m))
+            or self.max_accuracy_m <= 0
+        ):
+            message = "max_accuracy_m must be a finite positive number or None"
+            raise ValueError(message)
+        if self.max_fix_age_s is not None and (
+            isinstance(self.max_fix_age_s, bool)
+            or not isinstance(self.max_fix_age_s, int)
+            or self.max_fix_age_s < 1
+        ):
+            message = "max_fix_age_s must be a positive integer or None"
+            raise ValueError(message)
+        if self.acquisition_timeout_s is not None and (
+            isinstance(self.acquisition_timeout_s, bool)
+            or not isinstance(self.acquisition_timeout_s, Real)
+            or not isfinite(float(self.acquisition_timeout_s))
+            or self.acquisition_timeout_s <= 0
+        ):
+            message = "acquisition_timeout_s must be a finite positive number or None"
+            raise ValueError(message)
 
     @classmethod
     def outdoor(cls) -> Self:
@@ -198,11 +237,15 @@ class LocationPolicy:
     @classmethod
     def anchor(cls, accuracy: PortalAccuracy = PortalAccuracy.NEIGHBORHOOD) -> Self:
         """Return the initial one-point policy for an indoor or trainer anchor."""
+        accuracy = PortalAccuracy(accuracy)
         return cls(
             accuracy=accuracy,
             time_threshold_s=0,
             distance_threshold_m=0,
             max_points=1,
+            max_accuracy_m=_MAX_ANCHOR_ACCURACY_M_BY_LEVEL[accuracy],
+            max_fix_age_s=_MAX_ANCHOR_FIX_AGE_S,
+            acquisition_timeout_s=_ANCHOR_ACQUISITION_TIMEOUT_S,
         )
 
 
@@ -308,6 +351,29 @@ def is_plausible_motion(
     return distance_m <= previous.accuracy_m + current.accuracy_m
 
 
+def _meets_policy_quality(
+    fix: LocationFix,
+    policy: LocationPolicy,
+    receipt_time_utc: datetime | None,
+) -> bool:
+    """Return whether a fix satisfies optional one-shot quality constraints."""
+    if policy.max_accuracy_m is not None and (
+        fix.accuracy_m is None or fix.accuracy_m > policy.max_accuracy_m
+    ):
+        return False
+    if policy.max_fix_age_s is None:
+        return True
+    if fix.source_time_utc is None:
+        return False
+    if receipt_time_utc is None:
+        receipt_time_utc = datetime.now(UTC)
+    elif receipt_time_utc.tzinfo is None or receipt_time_utc.utcoffset() is None:
+        message = "receipt_time_utc must be timezone-aware"
+        raise ValueError(message)
+    age_s = (receipt_time_utc.astimezone(UTC) - fix.source_time_utc).total_seconds()
+    return -_MAX_ANCHOR_FIX_FUTURE_S <= age_s <= policy.max_fix_age_s
+
+
 @dataclass(slots=True)
 class LocationFilter:
     """Accept valid, ordered fixes according to one recording policy."""
@@ -343,7 +409,13 @@ class LocationFilter:
         """Return the timestamp of the most recently accepted fix, if any."""
         return self._last_timestamp_ms
 
-    def accept(self, fix: LocationFix, timestamp_ms: int) -> LocationFix | None:
+    def accept(
+        self,
+        fix: LocationFix,
+        timestamp_ms: int,
+        *,
+        receipt_time_utc: datetime | None = None,
+    ) -> LocationFix | None:
         """Return a fix when it passes validation, ordering, and policy limits."""
         if not isinstance(fix, LocationFix):
             message = "fix must be a LocationFix"
@@ -351,7 +423,11 @@ class LocationFilter:
         if isinstance(timestamp_ms, bool) or not isinstance(timestamp_ms, int):
             message = "timestamp_ms must be an integer"
             raise TypeError(message)
-        if timestamp_ms < 0:
+        if timestamp_ms < 0 or not _meets_policy_quality(
+            fix,
+            self.policy,
+            receipt_time_utc,
+        ):
             return None
         if self.policy.max_points is not None and self._accepted_count >= self.policy.max_points:
             return None

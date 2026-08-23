@@ -2,7 +2,7 @@
 
 import asyncio
 import math
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from fitness_tracker.core.environment import Environment
@@ -112,6 +112,8 @@ def test_location_policies_match_recording_decisions() -> None:
 
     assert outdoor == LocationPolicy.outdoor()
     assert indoor == LocationPolicy.anchor(PortalAccuracy.CITY)
+    assert indoor.acquisition_timeout_s is not None
+    assert indoor.acquisition_timeout_s > 12.5 * 60
     assert location_policy_for_environment(Environment.TRAINER) is None
     assert (
         location_policy_for_environment(
@@ -179,8 +181,58 @@ def test_anchor_filter_accepts_at_most_one_point() -> None:
         max_speed_mps=max_speed_mps_for_sport(SportTypesEnum.running),
     )
 
-    assert location_filter.accept(_fix(), 0) is not None
-    assert location_filter.accept(_fix(latitude=39.7393), 1_000) is None
+    source_time = datetime.now(UTC)
+    first = _fix(accuracy_m=100.0, source_time_utc=source_time)
+    second = _fix(latitude=39.7393, accuracy_m=100.0, source_time_utc=source_time)
+
+    assert location_filter.accept(first, 0) == first
+    assert location_filter.accept(second, 1_000) is None
+    assert location_filter.accepted_count == 1
+
+
+def test_anchor_filter_waits_for_fresh_accurate_fix() -> None:
+    receipt_time = datetime(2026, 8, 23, 12, 0, tzinfo=UTC)
+    location_filter = LocationFilter(
+        LocationPolicy.anchor(PortalAccuracy.NEIGHBORHOOD),
+        max_speed_mps=max_speed_mps_for_sport(SportTypesEnum.running),
+    )
+    coarse = _fix(
+        accuracy_m=130_000.0,
+        source_time_utc=receipt_time,
+    )
+    stale = _fix(
+        latitude=39.7393,
+        accuracy_m=100.0,
+        source_time_utc=receipt_time - timedelta(minutes=6),
+    )
+    acceptable = _fix(
+        latitude=39.7394,
+        accuracy_m=100.0,
+        source_time_utc=receipt_time,
+    )
+
+    assert (
+        location_filter.accept(
+            _fix(source_time_utc=receipt_time),
+            0,
+            receipt_time_utc=receipt_time,
+        )
+        is None
+    )
+    assert (
+        location_filter.accept(
+            _fix(accuracy_m=100.0),
+            0,
+            receipt_time_utc=receipt_time,
+        )
+        is None
+    )
+    assert location_filter.accept(coarse, 0, receipt_time_utc=receipt_time) is None
+    assert location_filter.accept(stale, 1_000, receipt_time_utc=receipt_time) is None
+    assert (
+        location_filter.accept(acceptable, 2_000, receipt_time_utc=receipt_time)
+        == acceptable
+    )
     assert location_filter.accepted_count == 1
 
 
@@ -199,11 +251,14 @@ def test_location_filter_can_be_reset() -> None:
         LocationPolicy.anchor(),
         max_speed_mps=max_speed_mps_for_sport(SportTypesEnum.running),
     )
-    location_filter.accept(_fix(), 10)
+    source_time = datetime.now(UTC)
+    first = _fix(accuracy_m=100.0, source_time_utc=source_time)
+    second = _fix(latitude=39.7400, accuracy_m=100.0, source_time_utc=source_time)
+    location_filter.accept(first, 10)
 
     location_filter.reset()
 
-    assert location_filter.accept(_fix(latitude=39.7400), 0) is not None
+    assert location_filter.accept(second, 0) == second
     assert location_filter.accepted_count == 1
 
 
@@ -348,9 +403,13 @@ def test_fake_location_source_limits_indoor_and_trainer_anchors_to_one_point(
         received: list[LocationFix],
     ) -> None:
         await source.start(policy, received.append, lambda _state, _detail: None)
-        source.emit_fix(_fix(), timestamp_ms=0)
-        source.emit_fix(_fix(latitude=39.7393), timestamp_ms=1_000)
+        source_time = datetime.now(UTC)
+        first = _fix(accuracy_m=100.0, source_time_utc=source_time)
+        second = _fix(latitude=39.7393, accuracy_m=100.0, source_time_utc=source_time)
+        source.emit_fix(first, timestamp_ms=0)
+        source.emit_fix(second, timestamp_ms=1_000)
         await source.stop()
+        assert received == [first]
 
     for policy in policies:
         assert policy is not None
@@ -359,7 +418,6 @@ def test_fake_location_source_limits_indoor_and_trainer_anchors_to_one_point(
 
         asyncio.run(exercise(source, policy, received))
 
-        assert received == [_fix()]
         assert source.start_count == 1
         assert source.stop_count == 1
 

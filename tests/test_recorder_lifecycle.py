@@ -6,6 +6,7 @@ import time
 import types
 import unittest
 from collections.abc import Callable
+from datetime import UTC, datetime
 from unittest.mock import ANY, Mock, patch
 
 # Recorder only needs these modules for UI callbacks. Stub them so its
@@ -269,8 +270,30 @@ class RecorderLifecycleTests(unittest.TestCase):
             await _wait_until(lambda: source.start_count == 1)
 
             self.assertEqual(source.policy, LocationPolicy.anchor())
-            source.emit(LocationFix(latitude_deg=39.7392, longitude_deg=-104.9903))
-            source.emit(LocationFix(latitude_deg=39.7393, longitude_deg=-104.9903))
+            source.emit(
+                LocationFix(
+                    latitude_deg=38.0000,
+                    longitude_deg=-105.0000,
+                    accuracy_m=130_000.0,
+                    source_time_utc=datetime.now(UTC),
+                ),
+            )
+            source.emit(
+                LocationFix(
+                    latitude_deg=39.7392,
+                    longitude_deg=-104.9903,
+                    accuracy_m=100.0,
+                    source_time_utc=datetime.now(UTC),
+                ),
+            )
+            source.emit(
+                LocationFix(
+                    latitude_deg=39.7393,
+                    longitude_deg=-104.9903,
+                    accuracy_m=100.0,
+                    source_time_utc=datetime.now(UTC),
+                ),
+            )
             await _wait_until(lambda: source.stop_count == 1)
 
             self.assertEqual(recorder.store.insert_location_point.call_count, 1)
@@ -296,6 +319,62 @@ class RecorderLifecycleTests(unittest.TestCase):
                 self.assertEqual(recorder.location_state, LocationState.DISABLED)
                 self.assertTrue(recorder.shutdown())
 
+    def test_indoor_anchor_times_out_without_acceptable_fix(self):
+        source = _RecorderLocationSource()
+        states: list[tuple[LocationState, str | None]] = []
+        recorder = self._make_recorder(
+            location_source=source,
+            record_indoor_anchor=True,
+            on_location_state=lambda state, detail: states.append((state, detail)),
+        )
+        recorder.store.start_activity = Mock(return_value=20)
+        recorder.store.insert_location_point = Mock()
+        recorder.store.finalize_activity = Mock()
+        timeout_policy = LocationPolicy(
+            accuracy=LocationPolicy.anchor().accuracy,
+            time_threshold_s=0,
+            distance_threshold_m=0,
+            max_points=1,
+            max_accuracy_m=5_000.0,
+            max_fix_age_s=300,
+            acquisition_timeout_s=0.01,
+        )
+
+        async def exercise() -> None:
+            recorder.loop.close()
+            recorder.loop = asyncio.get_running_loop()
+            with patch.object(
+                recorder_module,
+                "location_policy_for_environment",
+                return_value=timeout_policy,
+            ):
+                recorder.start_recording(Environment.INDOOR)
+            await _wait_until(lambda: source.start_count == 1)
+
+            source.emit(
+                LocationFix(
+                    latitude_deg=39.7392,
+                    longitude_deg=-104.9903,
+                    accuracy_m=130_000.0,
+                    source_time_utc=datetime.now(UTC),
+                ),
+            )
+            await _wait_until(lambda: source.stop_count == 1)
+
+            recorder.store.insert_location_point.assert_not_called()
+            self.assertEqual(recorder._location_points_accepted, 0)
+            self.assertEqual(recorder.stop_recording(), 20)
+
+        asyncio.run(exercise())
+        self.assertIn(
+            (
+                LocationState.UNAVAILABLE,
+                "Location acquisition timed out without an acceptable fix",
+            ),
+            states,
+        )
+        self.assertTrue(recorder.shutdown())
+
     def test_trainer_anchor_persists_once_and_stops_source(self):
         source = _RecorderLocationSource()
         recorder = self._make_recorder(
@@ -313,7 +392,14 @@ class RecorderLifecycleTests(unittest.TestCase):
             await _wait_until(lambda: source.start_count == 1)
 
             self.assertEqual(source.policy, LocationPolicy.anchor())
-            source.emit(LocationFix(latitude_deg=39.7392, longitude_deg=-104.9903))
+            source.emit(
+                LocationFix(
+                    latitude_deg=39.7392,
+                    longitude_deg=-104.9903,
+                    accuracy_m=100.0,
+                    source_time_utc=datetime.now(UTC),
+                ),
+            )
             await _wait_until(lambda: source.stop_count == 1)
 
             self.assertEqual(recorder.store.insert_location_point.call_count, 1)
