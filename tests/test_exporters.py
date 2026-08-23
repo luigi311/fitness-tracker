@@ -28,7 +28,12 @@ def _use_utc_local_timezone(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
 
 def test_running_activity_matches_tcx_golden_file() -> None:
     start = datetime(2026, 1, 2, 8, 0, tzinfo=UTC)
-    activity = Activity(id=7, start_time=start, end_time=start + timedelta(seconds=3))
+    activity = Activity(
+        id=7,
+        start_time=start,
+        end_time=start + timedelta(seconds=3),
+        environment=Environment.INDOOR.value,
+    )
     heart_rates = [
         HeartRate(timestamp_ms=0, bpm=140),
         HeartRate(timestamp_ms=1_500, bpm=142),
@@ -93,6 +98,25 @@ def _tcx_trackpoints(generated: bytes) -> list[ET.Element]:
         "tcx:Activities/tcx:Activity/tcx:Lap/tcx:Track/tcx:Trackpoint",
         namespace,
     )
+
+
+def test_outdoor_tcx_without_locations_omits_sensor_altitude() -> None:
+    start = datetime(2026, 1, 2, 8, 0, tzinfo=UTC)
+    generated = activity_to_tcx(
+        act=Activity(
+            id=7,
+            start_time=start,
+            environment=Environment.OUTDOOR.value,
+        ),
+        heart_rates=[],
+        running=[RunningMetrics(timestamp_ms=0, altitude_m=100.0)],
+        locations=[],
+        sport_type=SportTypesEnum.running,
+    )
+
+    namespace = {"tcx": "http://www.garmin.com/xmlschemas/TrainingCenterDatabase/v2"}
+    trackpoints = _tcx_trackpoints(generated)
+    assert trackpoints[0].find("tcx:AltitudeMeters", namespace) is None
 
 
 def test_outdoor_tcx_merges_sensor_and_location_timelines() -> None:
@@ -163,12 +187,13 @@ def test_outdoor_tcx_merges_sensor_and_location_timelines() -> None:
         )
         == "2.500000"
     )
-    assert trackpoints[1].findtext("tcx:AltitudeMeters", namespaces=namespace) == "1609.000"
-    assert trackpoints[2].findtext("tcx:AltitudeMeters", namespaces=namespace) == "100.500"
+    assert [
+        point.findtext("tcx:AltitudeMeters", namespaces=namespace) for point in trackpoints
+    ] == [None, "1609.000", None, "1610.000"]
     assert trackpoints[3].findtext("tcx:DistanceMeters", namespaces=namespace) == "6.000"
 
 
-def test_outdoor_location_without_altitude_preserves_sensor_altitude() -> None:
+def test_outdoor_location_without_altitude_omits_altitude() -> None:
     start = datetime(2026, 1, 2, 8, 0, tzinfo=UTC)
     generated = activity_to_tcx(
         act=Activity(
@@ -197,7 +222,7 @@ def test_outdoor_location_without_altitude_preserves_sensor_altitude() -> None:
     assert [
         point.findtext("tcx:AltitudeMeters", namespaces=namespace)
         for point in _tcx_trackpoints(generated)
-    ] == ["100.000", "101.000"]
+    ] == [None, None]
 
 
 def test_outdoor_gps_only_tcx_has_position_and_cumulative_distance() -> None:
