@@ -279,6 +279,7 @@ def _append_primary_trackpoints(
     timeline_kind: Literal["running", "cycling"],
     cadence_rpm_values: Sequence[float | None],
     cadence_spm_values: Sequence[float | None],
+    include_sensor_altitude: bool,
 ) -> None:
     """Append running or cycling samples to a TCX track."""
     last_timestamp_ms = int(primary[0].timestamp_ms)
@@ -300,7 +301,7 @@ def _append_primary_trackpoints(
             last_timestamp_ms=last_timestamp_ms,
             last_distance_m=last_distance_m,
         )
-        if sample.altitude_m is not None:
+        if include_sensor_altitude and sample.altitude_m is not None:
             SubElement(trackpoint, "AltitudeMeters").text = f"{float(sample.altitude_m):.3f}"
         SubElement(trackpoint, "DistanceMeters").text = f"{distance_m:.3f}"
         last_timestamp_ms = timestamp_ms
@@ -638,6 +639,7 @@ def activity_to_tcx(
             timeline_kind=timeline_kind,
             cadence_rpm_values=cadence_rpm_values,
             cadence_spm_values=cadence_spm_values,
+            include_sensor_altitude=indoor_anchor,
         )
     else:
         _append_heart_rate_trackpoints(track=track, act=act, heart_rates=heart_rates)
