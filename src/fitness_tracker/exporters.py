@@ -461,12 +461,13 @@ def _append_timeline_altitude(
     *,
     indoor_anchor: bool,
 ) -> None:
-    """Append the source altitude selected for one merged event."""
-    altitude_m = event.sensor.altitude_m if event.sensor is not None else None
-    if event.location is not None and (not indoor_anchor or altitude_m is None):
-        gps_altitude_m = event.location.fix.altitude_m
-        if gps_altitude_m is not None:
-            altitude_m = gps_altitude_m
+    """Append measured GPS altitude outdoors and sensor altitude indoors."""
+    if indoor_anchor:
+        altitude_m = event.sensor.altitude_m if event.sensor is not None else None
+        if altitude_m is None and event.location is not None:
+            altitude_m = event.location.fix.altitude_m
+    else:
+        altitude_m = event.location.fix.altitude_m if event.location is not None else None
     if altitude_m is not None:
         SubElement(trackpoint, "AltitudeMeters").text = f"{float(altitude_m):.3f}"
 

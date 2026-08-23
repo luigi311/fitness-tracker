@@ -163,12 +163,13 @@ def test_outdoor_tcx_merges_sensor_and_location_timelines() -> None:
         )
         == "2.500000"
     )
-    assert trackpoints[1].findtext("tcx:AltitudeMeters", namespaces=namespace) == "1609.000"
-    assert trackpoints[2].findtext("tcx:AltitudeMeters", namespaces=namespace) == "100.500"
+    assert [
+        point.findtext("tcx:AltitudeMeters", namespaces=namespace) for point in trackpoints
+    ] == [None, "1609.000", None, "1610.000"]
     assert trackpoints[3].findtext("tcx:DistanceMeters", namespaces=namespace) == "6.000"
 
 
-def test_outdoor_location_without_altitude_preserves_sensor_altitude() -> None:
+def test_outdoor_location_without_altitude_omits_altitude() -> None:
     start = datetime(2026, 1, 2, 8, 0, tzinfo=UTC)
     generated = activity_to_tcx(
         act=Activity(
@@ -197,7 +198,7 @@ def test_outdoor_location_without_altitude_preserves_sensor_altitude() -> None:
     assert [
         point.findtext("tcx:AltitudeMeters", namespaces=namespace)
         for point in _tcx_trackpoints(generated)
-    ] == ["100.000", "101.000"]
+    ] == [None, None]
 
 
 def test_outdoor_gps_only_tcx_has_position_and_cumulative_distance() -> None:
