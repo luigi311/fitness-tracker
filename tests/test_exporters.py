@@ -265,7 +265,7 @@ def test_outdoor_gps_only_tcx_has_position_and_cumulative_distance() -> None:
     assert float(lap_distance or 0) > 0
 
 
-def test_indoor_tcx_attaches_only_one_anchor_to_first_trackpoint() -> None:
+def test_indoor_tcx_adds_sensor_altitude_to_gps_anchor_altitude() -> None:
     start = datetime(2026, 1, 2, 8, 0, tzinfo=UTC)
     generated = activity_to_tcx(
         act=Activity(
@@ -279,13 +279,13 @@ def test_indoor_tcx_attaches_only_one_anchor_to_first_trackpoint() -> None:
                 timestamp_ms=0,
                 speed_mps=2.5,
                 cadence_spm=80,
-                altitude_m=100.0,
+                altitude_m=0.0,
             ),
             RunningMetrics(
                 timestamp_ms=2_000,
                 speed_mps=3.0,
                 cadence_spm=82,
-                altitude_m=100.5,
+                altitude_m=0.5,
             ),
         ],
         locations=[
@@ -310,7 +310,9 @@ def test_indoor_tcx_attaches_only_one_anchor_to_first_trackpoint() -> None:
         )
         == "39.73920000"
     )
-    assert trackpoints[0].findtext("tcx:AltitudeMeters", namespaces=namespace) == "100.000"
+    assert [
+        point.findtext("tcx:AltitudeMeters", namespaces=namespace) for point in trackpoints
+    ] == ["1609.000", "1609.500"]
 
 
 def test_indoor_gps_only_tcx_emits_one_anchor_trackpoint() -> None:
@@ -328,6 +330,7 @@ def test_indoor_gps_only_tcx_emits_one_anchor_trackpoint() -> None:
                 timestamp_ms=500,
                 latitude_deg=39.7392,
                 longitude_deg=-104.9903,
+                altitude_m=1609.0,
             ),
         ],
         sport_type=SportTypesEnum.running,
@@ -337,6 +340,7 @@ def test_indoor_gps_only_tcx_emits_one_anchor_trackpoint() -> None:
     trackpoints = _tcx_trackpoints(generated)
     assert len(trackpoints) == 1
     assert trackpoints[0].find("tcx:Position", namespace) is not None
+    assert trackpoints[0].findtext("tcx:AltitudeMeters", namespaces=namespace) == "1609.000"
     assert trackpoints[0].findtext("tcx:DistanceMeters", namespaces=namespace) == "0.000"
 
 
