@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 from enum import IntEnum, StrEnum
 from math import atan2, cos, isfinite, radians, sin, sqrt
 from numbers import Real
-from typing import Final, Protocol, Self
+from typing import Final, Protocol, Self, cast
 
 from fitness_tracker.core.environment import Environment
 from fitness_tracker.core.sports import SportTypesEnum
@@ -181,6 +181,18 @@ class LocationPolicy:
     max_fix_age_s: int | None = None
     acquisition_timeout_s: float | None = None
 
+    @staticmethod
+    def _is_finite_positive_real(value: object, field_name: str) -> bool:
+        """Validate a finite positive real while normalizing conversion overflow."""
+        if isinstance(value, bool) or not isinstance(value, Real):
+            return False
+        try:
+            finite = isfinite(float(value))
+        except OverflowError as exc:
+            message = f"{field_name} must be a finite positive number or None"
+            raise ValueError(message) from exc
+        return finite and cast("float", value) > 0
+
     def __post_init__(self) -> None:
         try:
             accuracy = PortalAccuracy(self.accuracy)
@@ -201,11 +213,9 @@ class LocationPolicy:
         ):
             message = "max_points must be a positive integer or None"
             raise ValueError(message)
-        if self.max_accuracy_m is not None and (
-            isinstance(self.max_accuracy_m, bool)
-            or not isinstance(self.max_accuracy_m, Real)
-            or not isfinite(float(self.max_accuracy_m))
-            or self.max_accuracy_m <= 0
+        if self.max_accuracy_m is not None and not self._is_finite_positive_real(
+            self.max_accuracy_m,
+            "max_accuracy_m",
         ):
             message = "max_accuracy_m must be a finite positive number or None"
             raise ValueError(message)
@@ -216,11 +226,9 @@ class LocationPolicy:
         ):
             message = "max_fix_age_s must be a positive integer or None"
             raise ValueError(message)
-        if self.acquisition_timeout_s is not None and (
-            isinstance(self.acquisition_timeout_s, bool)
-            or not isinstance(self.acquisition_timeout_s, Real)
-            or not isfinite(float(self.acquisition_timeout_s))
-            or self.acquisition_timeout_s <= 0
+        if self.acquisition_timeout_s is not None and not self._is_finite_positive_real(
+            self.acquisition_timeout_s,
+            "acquisition_timeout_s",
         ):
             message = "acquisition_timeout_s must be a finite positive number or None"
             raise ValueError(message)

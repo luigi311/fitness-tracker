@@ -3,6 +3,7 @@
 import asyncio
 import math
 from datetime import UTC, datetime, timedelta
+from fractions import Fraction
 
 import pytest
 from fitness_tracker.core.environment import Environment
@@ -122,6 +123,20 @@ def test_location_policies_match_recording_decisions() -> None:
         )
         is None
     )
+
+
+@pytest.mark.parametrize("field_name", ["max_accuracy_m", "acquisition_timeout_s"])
+def test_location_policy_normalizes_finite_real_conversion_overflow(field_name: str) -> None:
+    with pytest.raises(
+        ValueError,
+        match=rf"{field_name} must be a finite positive number or None",
+    ):
+        LocationPolicy(
+            accuracy=PortalAccuracy.EXACT,
+            time_threshold_s=0,
+            distance_threshold_m=0,
+            **{field_name: Fraction(10**10_000, 1)},
+        )
 
 
 @pytest.mark.parametrize(
