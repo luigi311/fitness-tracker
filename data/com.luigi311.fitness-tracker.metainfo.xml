@@ -66,6 +66,27 @@
         type="desktop-id"
     >com.luigi311.fitness-tracker.desktop</launchable>
     <releases>
+        <release version="5.1.0" date="2026-08-25">
+            <url
+                type="details"
+            >https://github.com/luigi311/fitness-tracker/releases/tag/v5.1.0</url>
+            <description>
+                <p>
+                    Improvements
+                </p>
+                <ul>
+                    <li>Wait for a fresh, accuracy-appropriate indoor or trainer location anchor, with more time for GPS cold starts</li>
+                    <li>Combine GPS starting elevation with sensor-derived elevation changes for indoor and trainer TCX exports</li>
+                </ul>
+                <p>
+                    Bug Fixes
+                </p>
+                <ul>
+                    <li>Prevent outdoor elevation spikes by exporting altitude only when a GPS measurement exists</li>
+                    <li>Treat unknown GeoClue altitude values as missing instead of exporting invalid elevations</li>
+                </ul>
+            </description>
+        </release>
         <release version="5.0.0" date="2026-08-20">
             <url
                 type="details"
