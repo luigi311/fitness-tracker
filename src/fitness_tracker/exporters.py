@@ -461,12 +461,17 @@ def _append_timeline_altitude(
     event: _TimelineEvent,
     *,
     indoor_anchor: bool,
+    indoor_base_altitude_m: float | None,
 ) -> None:
-    """Append measured GPS altitude outdoors and sensor altitude indoors."""
+    """Append measured GPS altitude outdoors and baseline-adjusted altitude indoors."""
     if indoor_anchor:
-        altitude_m = event.sensor.altitude_m if event.sensor is not None else None
-        if altitude_m is None and event.location is not None:
-            altitude_m = event.location.fix.altitude_m
+        sensor_altitude_m = event.sensor.altitude_m if event.sensor is not None else None
+        if indoor_base_altitude_m is None:
+            altitude_m = sensor_altitude_m
+        elif sensor_altitude_m is None:
+            altitude_m = indoor_base_altitude_m
+        else:
+            altitude_m = indoor_base_altitude_m + sensor_altitude_m
     else:
         altitude_m = event.location.fix.altitude_m if event.location is not None else None
     if altitude_m is not None:
@@ -505,6 +510,7 @@ def _append_unified_trackpoints(
     heart_rates: list[HeartRate],
     timeline_kind: _TimelineKind,
     indoor_anchor: bool,
+    indoor_base_altitude_m: float | None,
 ) -> None:
     """Append trackpoints for the merged sensor/location timeline."""
     if not events:
@@ -531,7 +537,12 @@ def _append_unified_trackpoints(
             last_distance_m=last_distance_m,
             previous_location=previous_location,
         )
-        _append_timeline_altitude(trackpoint, event, indoor_anchor=indoor_anchor)
+        _append_timeline_altitude(
+            trackpoint,
+            event,
+            indoor_anchor=indoor_anchor,
+            indoor_base_altitude_m=indoor_base_altitude_m,
+        )
         SubElement(trackpoint, "DistanceMeters").text = f"{distance_m:.3f}"
 
         hr_idx = _append_timeline_metrics(
@@ -608,6 +619,9 @@ def activity_to_tcx(
     selected_locations = [
         _ValidatedLocation(point=point, fix=_location_fix(point)) for point in selected_points
     ]
+    indoor_base_altitude_m = (
+        selected_locations[0].fix.altitude_m if indoor_anchor and selected_locations else None
+    )
     tcx, track = _build_tcx_lap(
         act=act,
         heart_rates=heart_rates,
@@ -629,6 +643,7 @@ def activity_to_tcx(
             heart_rates=heart_rates,
             timeline_kind=timeline_kind,
             indoor_anchor=indoor_anchor,
+            indoor_base_altitude_m=indoor_base_altitude_m,
         )
     elif timeline_kind in ("running", "cycling"):
         _append_primary_trackpoints(

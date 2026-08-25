@@ -276,6 +276,7 @@ class Recorder:
         self._location_lifecycle_id = 0
         self._location_async_lock: asyncio.Lock | None = None
         self._location_start_task: asyncio.Task[None] | None = None
+        self._location_timeout_handle: asyncio.TimerHandle | None = None
         self._location_source_pending = False
         self._location_stop_scheduled_for: int | None = None
         self._location_stop_future: Future[None] | None = None
@@ -370,6 +371,7 @@ class Recorder:
             self._recording_generation += 1
             self._sample_processor.reset()
             self._recording_origin_ns = time.monotonic_ns()
+            self._cancel_location_timeout_locked()
             self._location_points_accepted = 0
             self._location_operation += 1
             self._location_lifecycle_id += 1
@@ -413,6 +415,7 @@ class Recorder:
                 self._recording = False
                 self._recording_generation += 1
                 self._location_operation += 1
+                self._cancel_location_timeout_locked()
                 self._recording_origin_ns = None
                 self._location_filter = None
                 self.location_policy = None
@@ -638,6 +641,71 @@ class Recorder:
         if self._location_start_task is task:
             self._location_start_task = None
 
+    def _cancel_location_timeout_locked(self) -> None:
+        """Cancel the current acquisition timeout while holding the recorder lock."""
+        timeout_handle = self._location_timeout_handle
+        self._location_timeout_handle = None
+        if timeout_handle is not None:
+            timeout_handle.cancel()
+
+    def _schedule_location_timeout(
+        self,
+        policy: LocationPolicy,
+        generation: int,
+        operation: int,
+        lifecycle_id: int,
+    ) -> None:
+        """Bound one-shot anchor acquisition after portal startup completes."""
+        timeout_s = policy.acquisition_timeout_s
+        if timeout_s is None:
+            return
+        timeout_handle = self.loop.call_later(
+            timeout_s,
+            self._handle_location_timeout,
+            generation,
+            operation,
+            lifecycle_id,
+        )
+        with self._recording_lock:
+            if (
+                self._recording
+                and generation == self._recording_generation
+                and operation == self._location_operation
+                and lifecycle_id == self._location_lifecycle_id
+                and self._location_filter is not None
+            ):
+                self._cancel_location_timeout_locked()
+                self._location_timeout_handle = timeout_handle
+            else:
+                timeout_handle.cancel()
+
+    def _handle_location_timeout(
+        self,
+        generation: int,
+        operation: int,
+        lifecycle_id: int,
+    ) -> None:
+        """Stop one-shot acquisition when no acceptable anchor arrives in time."""
+        with self._recording_lock:
+            if not (
+                self._recording
+                and generation == self._recording_generation
+                and operation == self._location_operation
+                and lifecycle_id == self._location_lifecycle_id
+                and self._location_filter is not None
+            ):
+                return
+            self._location_timeout_handle = None
+            self._location_operation += 1
+            self._location_filter = None
+            changed = self._set_location_state_locked(
+                LocationState.UNAVAILABLE,
+                "Location acquisition timed out without an acceptable fix",
+            )
+        if changed:
+            self._dispatch_location_state_if_changed()
+        self._schedule_location_stop()
+
     async def _start_location_source(
         self,
         policy: LocationPolicy,
@@ -666,6 +734,8 @@ class Recorder:
                         operation,
                         state,
                         detail,
+                        policy=policy,
+                        lifecycle_id=lifecycle_id,
                     ),
                 )
             except asyncio.CancelledError:
@@ -685,11 +755,16 @@ class Recorder:
         operation: int,
         state: LocationState,
         detail: str | None,
+        *,
+        policy: LocationPolicy,
+        lifecycle_id: int,
     ) -> None:
         """Apply source states, reserving tracking for accepted fixes."""
         if state is LocationState.TRACKING:
             return
         self._handle_location_state(generation, operation, state, detail)
+        if state is LocationState.ACQUIRING:
+            self._schedule_location_timeout(policy, generation, operation, lifecycle_id)
 
     def _schedule_location_stop(self) -> None:
         """Stop the current source asynchronously and coalesce duplicate requests."""
@@ -734,6 +809,7 @@ class Recorder:
             finally:
                 with self._recording_lock:
                     if lifecycle_id == self._location_lifecycle_id:
+                        self._cancel_location_timeout_locked()
                         self._location_source_pending = False
                         changed = self._set_location_state_locked(LocationState.STOPPED, None)
                     else:
@@ -767,7 +843,11 @@ class Recorder:
                 timestamp_ms = relative_timestamp_ms(self._recording_origin_ns)
                 accepted = self._location_filter.accept(fix, timestamp_ms)
                 if accepted is None:
+                    logger.bind(data={"timestamp_ms": timestamp_ms, "fix": fix}).trace(
+                        "Rejected location fix by policy",
+                    )
                     return
+                self._cancel_location_timeout_locked()
                 max_points = self._location_filter.policy.max_points
 
             persisted = self._persist_if_recording(
@@ -780,6 +860,9 @@ class Recorder:
             )
             if not persisted:
                 return
+            logger.bind(data={"timestamp_ms": timestamp_ms, "fix": accepted}).trace(
+                "Persisted location fix",
+            )
 
             with self._recording_lock:
                 if (
