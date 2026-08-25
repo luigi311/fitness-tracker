@@ -989,13 +989,17 @@ class RecorderLifecycleTests(unittest.TestCase):
             ),
         )
 
-        recorder._handle_location_fix(
-            recorder._recording_generation,
-            recorder._location_operation,
-            LocationFix(latitude_deg=39.7392, longitude_deg=-104.9903),
-        )
+        fix = LocationFix(latitude_deg=39.7392, longitude_deg=-104.9903)
+        with patch.object(recorder_module, "logger") as trace_logger:
+            recorder._handle_location_fix(
+                recorder._recording_generation,
+                recorder._location_operation,
+                fix,
+            )
 
         self.assertTrue(lock_available.is_set())
+        trace_logger.bind.assert_any_call(data={"timestamp_ms": ANY, "fix": fix})
+        trace_logger.bind.return_value.trace.assert_any_call("Persisted location fix")
         recorder._recording = False
         recorder.shutdown()
 

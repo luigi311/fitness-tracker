@@ -3,6 +3,7 @@
 import asyncio
 from datetime import UTC, datetime
 from typing import Any
+from unittest.mock import Mock
 
 import pytest
 from dbus_fast import BusType, Variant
@@ -174,11 +175,13 @@ def _state_callback(states: list[tuple[LocationState, str | None]]):
     return record
 
 
-def test_portal_source_uses_session_bus_options_and_delivers_fixes() -> None:
+def test_portal_source_uses_session_bus_options_and_delivers_fixes(monkeypatch) -> None:
     bus = _FakeBus()
     states: list[tuple[LocationState, str | None]] = []
     fixes: list[LocationFix] = []
     source = PortalLocationSource(bus_factory=_factory(bus))
+    trace_logger = Mock()
+    monkeypatch.setattr(location_portal, "logger", trace_logger)
 
     _exercise_start(source, LocationPolicy.outdoor(), fixes.append, _state_callback(states))
 
@@ -231,6 +234,21 @@ def test_portal_source_uses_session_bus_options_and_delivers_fixes() -> None:
             source_time_utc=datetime(2023, 11, 14, 22, 13, 20, 123_456, tzinfo=UTC),
         ),
     ]
+    trace_logger.bind.assert_any_call(
+        data={
+            "raw": {
+                "Latitude": 39.7392,
+                "Longitude": -104.9903,
+                "Accuracy": 5.0,
+                "Altitude": 1_600.0,
+                "Speed": 2.5,
+                "Heading": 90.0,
+                "Timestamp": (1_700_000_000, 123_456),
+            },
+            "normalized": fixes[0],
+        },
+    )
+    trace_logger.bind.return_value.trace.assert_any_call("Received location portal fix")
 
     asyncio.run(source.stop())
     assert states[-1] == (LocationState.STOPPED, None)

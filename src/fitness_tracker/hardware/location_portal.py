@@ -322,6 +322,9 @@ class PortalLocationSource(LocationSource):
                 heading_deg=_optional_float(values.get("Heading")),
                 source_time_utc=_portal_timestamp(values.get("Timestamp")),
             )
+            logger.bind(data={"raw": values, "normalized": fix}).trace(
+                "Received location portal fix",
+            )
         except (TypeError, ValueError, OverflowError) as error:
             logger.warning("Ignoring malformed location update: {}", error)
             now = time.monotonic()

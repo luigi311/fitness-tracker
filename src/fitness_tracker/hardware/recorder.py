@@ -843,6 +843,9 @@ class Recorder:
                 timestamp_ms = relative_timestamp_ms(self._recording_origin_ns)
                 accepted = self._location_filter.accept(fix, timestamp_ms)
                 if accepted is None:
+                    logger.bind(data={"timestamp_ms": timestamp_ms, "fix": fix}).trace(
+                        "Rejected location fix by policy",
+                    )
                     return
                 self._cancel_location_timeout_locked()
                 max_points = self._location_filter.policy.max_points
@@ -857,6 +860,9 @@ class Recorder:
             )
             if not persisted:
                 return
+            logger.bind(data={"timestamp_ms": timestamp_ms, "fix": accepted}).trace(
+                "Persisted location fix",
+            )
 
             with self._recording_lock:
                 if (
