@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 from enum import IntEnum, StrEnum
 from math import atan2, cos, isfinite, radians, sin, sqrt
 from numbers import Real
+from sys import float_info
 from typing import Final, Protocol, Self, cast
 
 from fitness_tracker.core.environment import Environment
@@ -20,6 +21,7 @@ _MIN_LATITUDE_DEG: Final = -90.0
 _MAX_LATITUDE_DEG: Final = 90.0
 _MIN_LONGITUDE_DEG: Final = -180.0
 _MAX_LONGITUDE_DEG: Final = 180.0
+_GEOCLUE_UNKNOWN_ALTITUDE_M: Final = -float_info.max
 # Conservative upper bounds in metres per second for the pure spike filter helper.
 _MAX_SPEED_MPS_BY_SPORT: Final[dict[SportTypesEnum, float]] = {
     SportTypesEnum.running: 12.0,
@@ -120,6 +122,14 @@ def _optional_number(
     return number
 
 
+def _optional_altitude(value: object) -> float | None:
+    """Normalize altitude, including GeoClue's minimum-double unknown sentinel."""
+    altitude_m = _optional_number(value)
+    if altitude_m == _GEOCLUE_UNKNOWN_ALTITUDE_M:
+        return None
+    return altitude_m
+
+
 def _optional_source_time(value: object) -> datetime | None:
     if not isinstance(value, datetime) or value.tzinfo is None or value.utcoffset() is None:
         return None
@@ -155,7 +165,7 @@ class LocationFix:
             "accuracy_m",
             _optional_number(self.accuracy_m, nonnegative=True),
         )
-        object.__setattr__(self, "altitude_m", _optional_number(self.altitude_m))
+        object.__setattr__(self, "altitude_m", _optional_altitude(self.altitude_m))
         object.__setattr__(
             self,
             "speed_mps",

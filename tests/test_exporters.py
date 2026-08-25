@@ -4,6 +4,7 @@ import time
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from sys import float_info
 from xml.etree import ElementTree as ET
 
 import pytest
@@ -313,6 +314,34 @@ def test_indoor_tcx_adds_sensor_altitude_to_gps_anchor_altitude() -> None:
     assert [
         point.findtext("tcx:AltitudeMeters", namespaces=namespace) for point in trackpoints
     ] == ["1609.000", "1609.500"]
+
+
+def test_indoor_tcx_unknown_gps_altitude_uses_sensor_altitude() -> None:
+    start = datetime(2026, 1, 2, 8, 0, tzinfo=UTC)
+    generated = activity_to_tcx(
+        act=Activity(
+            id=7,
+            start_time=start,
+            environment=Environment.INDOOR.value,
+        ),
+        heart_rates=[],
+        running=[RunningMetrics(timestamp_ms=0, altitude_m=5.0)],
+        locations=[
+            LocationPoint(
+                id=1,
+                timestamp_ms=0,
+                latitude_deg=39.7392,
+                longitude_deg=-104.9903,
+                altitude_m=-float_info.max,
+            ),
+        ],
+        sport_type=SportTypesEnum.running,
+    )
+
+    namespace = {"tcx": "http://www.garmin.com/xmlschemas/TrainingCenterDatabase/v2"}
+    trackpoint = _tcx_trackpoints(generated)[0]
+    assert trackpoint.find("tcx:Position", namespace) is not None
+    assert trackpoint.findtext("tcx:AltitudeMeters", namespaces=namespace) == "5.000"
 
 
 def test_indoor_gps_only_tcx_emits_one_anchor_trackpoint() -> None:

@@ -4,6 +4,7 @@ import asyncio
 import math
 from datetime import UTC, datetime, timedelta
 from fractions import Fraction
+from sys import float_info
 
 import pytest
 from fitness_tracker.core.environment import Environment
@@ -93,6 +94,12 @@ def test_location_fix_normalizes_invalid_optional_values() -> None:
     assert fix.speed_mps is None
     assert fix.heading_deg is None
     assert fix.source_time_utc == source_time
+
+
+def test_location_fix_normalizes_geoclue_unknown_altitude() -> None:
+    fix = _fix(altitude_m=-float_info.max)
+
+    assert fix.altitude_m is None
 
 
 def test_location_fix_normalizes_aware_source_time_to_utc() -> None:
