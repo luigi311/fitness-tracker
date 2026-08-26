@@ -284,12 +284,19 @@ class TrackerPageUI:
             )
 
     def _tick_chart(self) -> bool:
-        """Redraw the chart independently of the 2 Hz metric updates."""
-        if self._session_state is None or self.session_view is None:
+        """Redraw the chart independently of the metric updates."""
+        view = self.session_view
+        if self._session_state is None or view is None:
             self._chart_timer_id = None
             return False
-        self.session_view.redraw()
+        if self._should_render_chart(view):
+            view.redraw()
         return True
+
+    def _should_render_chart(self, view: SessionView) -> bool:
+        """Return whether a live chart redraw would currently be visible."""
+        window = self.app.window
+        return view.chart_is_displayed and window is not None and window.is_active()
 
     # -------------------------
     #  Page show / run control
@@ -1227,8 +1234,9 @@ class TrackerPageUI:
 
     def redraw(self) -> None:
         """Redraw the active session chart, if one is open."""
-        if self.session_view:
-            self.session_view.redraw()
+        view = self.session_view
+        if view and self._should_render_chart(view):
+            view.redraw()
 
     def refresh_units(self) -> None:
         """Refresh active metric values and labels after a unit preference change."""

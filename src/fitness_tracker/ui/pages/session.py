@@ -597,6 +597,11 @@ class SessionView(Gtk.Box):
         else:
             self.live_chart.power_axes.set_ylim(0, 500)
 
+    @property
+    def chart_is_displayed(self) -> bool:
+        """Return whether the live chart is mapped into the visible widget tree."""
+        return bool(self._live_chart_frame.get_mapped())
+
     def refresh_theme(self) -> None:
         """Restyle the continuous chart without discarding its data."""
         self.live_chart.refresh_theme(
