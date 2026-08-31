@@ -3,13 +3,15 @@
 import gzip
 import json
 import os
-from datetime import date
+from datetime import date, datetime
 from io import BytesIO
 from pathlib import Path
 from typing import Any
+from unittest.mock import Mock
 
 import pytest
 import requests
+from fitness_tracker.integrations import intervals_icu as client_module
 from fitness_tracker.integrations.errors import (
     IntegrationResponseError,
     IntegrationTransportError,
@@ -19,6 +21,7 @@ from fitness_tracker.integrations.intervals_icu import (
     IntervalsICUClient,
     IntervalsICUCredentials,
 )
+from fitness_tracker.workout_providers import intervals_icu as provider_module
 from fitness_tracker.workout_providers.intervals_icu import IntervalsICUProvider
 from fitness_tracker.workout_providers.utils import WorkoutRefreshResult
 
@@ -128,6 +131,23 @@ def test_mixed_run_and_ride_response_is_filtered_by_sport(
     assert cycling[0].title == "Ride workout"
     stored_event = json.loads(running[0].path.read_text(encoding="utf-8"))
     assert stored_event["provider_metadata"] == "preserve"
+
+
+def test_fetch_uses_local_dates_for_timezone_aware_datetime_range() -> None:
+    calls: list[dict[str, Any]] = []
+    client = IntervalsICUClient(
+        IntervalsICUCredentials(athlete_id="athlete", api_key="key"),
+        transport=_Transport([], calls),
+    )
+
+    client.fetch_events(
+        start=datetime.fromisoformat("2026-08-30T00:00:00-06:00"),
+        end=datetime.fromisoformat("2026-09-05T23:59:59-06:00"),
+        ext="fit",
+    )
+
+    assert calls[0]["params"]["oldest"] == "2026-08-30"
+    assert calls[0]["params"]["newest"] == "2026-09-05"
 
 
 def test_response_without_requested_sport_preserves_last_known_good_workouts(
@@ -265,6 +285,98 @@ def test_unsupported_event_is_counted_once_across_sports(tmp_path: Path) -> None
     result = _refresh_running(provider, tmp_path / "running")
 
     assert result.skipped == 1
+
+
+def test_fetch_logs_request_response_and_event_summary_without_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    athlete_id = "private-athlete-id"
+    api_key = "private-api-key"
+    mock_logger = Mock()
+    monkeypatch.setattr(client_module, "logger", mock_logger)
+    client = IntervalsICUClient(
+        IntervalsICUCredentials(athlete_id=athlete_id, api_key=api_key),
+        transport=_Transport([_event("Run")], None),
+    )
+
+    events = client.fetch_events(start=START, end=END, ext="fit")
+
+    assert len(events) == 1
+    debug_messages = [call.args[0] for call in mock_logger.debug.call_args_list]
+    trace_messages = [call.args[0] for call in mock_logger.trace.call_args_list]
+    assert any("event fetch starting" in message for message in debug_messages)
+    assert any("event fetch completed" in message for message in debug_messages)
+    assert any("request starting" in message for message in trace_messages)
+    assert any("request completed" in message for message in trace_messages)
+    assert any("event summary" in message for message in trace_messages)
+    rendered_calls = repr(mock_logger.method_calls)
+    assert athlete_id not in rendered_calls
+    assert api_key not in rendered_calls
+
+
+def test_fetch_failure_log_and_error_redact_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    athlete_id = "private-athlete-id"
+    api_key = "private-api-key"
+    response = requests.Response()
+    response.status_code = 403
+    response.raw = BytesIO(
+        f'{{"athlete":"{athlete_id}","credential":"{api_key}"}}'.encode(),
+    )
+    response.encoding = "utf-8"
+
+    class FailingTransport:
+        @staticmethod
+        def get(url: str, **_kwargs: object) -> requests.Response:
+            response.url = url
+            raise requests.HTTPError("forbidden", response=response)
+
+    mock_logger = Mock()
+    monkeypatch.setattr(client_module, "logger", mock_logger)
+    client = IntervalsICUClient(
+        IntervalsICUCredentials(athlete_id=athlete_id, api_key=api_key),
+        transport=FailingTransport(),  # type: ignore[arg-type]
+    )
+
+    with pytest.raises(IntegrationTransportError) as error_info:
+        client.fetch_events(start=START, end=END, ext="fit")
+
+    assert error_info.value.debug_detail == (
+        '{"athlete":"[redacted]","credential":"[redacted]"}'
+    )
+    rendered_calls = repr(mock_logger.method_calls)
+    assert athlete_id not in rendered_calls
+    assert api_key not in rendered_calls
+    assert "status={}, elapsed_ms={}" in mock_logger.warning.call_args.args[0]
+
+
+def test_validation_failure_logs_safe_schema_summary(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sensitive_payload = "sensitive-workout-payload"
+    malformed = _event("Run", start_date="not-a-date")
+    malformed["workout_file_base64"] = sensitive_payload
+    mock_logger = Mock()
+    monkeypatch.setattr(client_module, "logger", mock_logger)
+    monkeypatch.setattr(provider_module, "logger", mock_logger)
+    provider = _provider([malformed])
+
+    with pytest.raises(IntegrationResponseError) as error_info:
+        _refresh_running(provider, tmp_path / "running")
+
+    detail = error_info.value.debug_detail or ""
+    assert "payload=list(length=1)" in detail
+    assert "0.start_date_local" in detail
+    assert sensitive_payload not in detail
+    assert sensitive_payload not in repr(mock_logger.method_calls)
+    provider_error = mock_logger.error.call_args.args
+    assert provider_error[1:4] == (
+        "fetch events",
+        "IntegrationResponseError",
+        None,
+    )
 
 
 def test_upload_response_requires_non_empty_list() -> None:

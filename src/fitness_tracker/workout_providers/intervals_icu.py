@@ -9,7 +9,10 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
+from loguru import logger
+
 from fitness_tracker.core.sports import SportTypesEnum
+from fitness_tracker.integrations.errors import IntegrationError
 from fitness_tracker.workout_providers.utils import DownloadedWorkout, WorkoutRefreshResult
 
 if TYPE_CHECKING:
@@ -55,36 +58,75 @@ class IntervalsICUProvider:
         cycling_dir: Path,
     ) -> WorkoutRefreshResult:
         """Fetch once and prepare both sport directories from one snapshot."""
-        events = self.client.fetch_events(start=start, end=end, ext=self.ext)
         prepared: list[_PreparedRefresh] = []
         results: list[WorkoutRefreshResult] = []
-        skipped = sum(
-            not self._matches_sport(event, SportTypesEnum.running)
-            and not self._matches_sport(event, SportTypesEnum.biking)
-            for event in events
+        phase = "fetch events"
+        logger.debug(
+            "Intervals.icu workout refresh starting: start={}, end={}, ext={}, "
+            "running_dir={}, cycling_dir={}",
+            start,
+            end,
+            self.ext,
+            running_dir,
+            cycling_dir,
         )
         try:
+            events = self.client.fetch_events(start=start, end=end, ext=self.ext)
+            skipped = sum(
+                not self._matches_sport(event, SportTypesEnum.running)
+                and not self._matches_sport(event, SportTypesEnum.biking)
+                for event in events
+            )
+            logger.debug(
+                "Intervals.icu snapshot ready for refresh: events={}, unsupported={}",
+                len(events),
+                skipped,
+            )
             for sport, out_dir in (
                 (SportTypesEnum.running, running_dir),
                 (SportTypesEnum.biking, cycling_dir),
             ):
+                phase = f"prepare {sport.name} workouts"
                 out_dir.mkdir(parents=True, exist_ok=True)
                 current, result = self._prepare_refresh(sport, start, events, out_dir)
                 results.append(result)
                 if current is not None:
                     prepared.append(current)
             if prepared:
+                phase = "commit staged workouts"
                 self._commit_staged(prepared)
-        except Exception:
+        except Exception as error:
             for current in prepared:
                 _remove_path(current.stage_dir)
+            if isinstance(error, IntegrationError):
+                logger.error(
+                    "Intervals.icu workout refresh failed: phase={}, error_type={}, status={}, "
+                    "detail={}",
+                    phase,
+                    type(error).__name__,
+                    getattr(error, "status_code", None),
+                    error.debug_detail,
+                )
+            else:
+                logger.opt(exception=error).error(
+                    "Intervals.icu workout refresh failed: phase={}, prepared_directories={}",
+                    phase,
+                    len(prepared),
+                )
             raise
 
-        return WorkoutRefreshResult(
+        result = WorkoutRefreshResult(
             written=tuple(workout for result in results for workout in result.written),
             skipped=skipped,
             invalid=sum(result.invalid for result in results),
         )
+        logger.debug(
+            "Intervals.icu workout refresh completed: written={}, skipped={}, invalid={}",
+            len(result.written),
+            result.skipped,
+            result.invalid,
+        )
+        return result
 
     def _prepare_refresh(
         self,
@@ -99,17 +141,31 @@ class IntervalsICUProvider:
         stage_dir = Path(
             tempfile.mkdtemp(prefix=f".{out_dir.name}.refresh-", dir=out_dir.parent),
         )
+        logger.trace(
+            "Preparing Intervals.icu workout directory: sport={}, destination={}, stage={}",
+            sport.name,
+            out_dir,
+            stage_dir,
+        )
         written: list[DownloadedWorkout] = []
         invalid = 0
         used_names: set[str] = set()
         try:
             self._copy_unmanaged_files(out_dir, stage_dir)
-            for event in events:
+            for index, event in enumerate(events):
                 if not self._matches_sport(event, sport):
                     continue
 
                 if not event.workout_file_base64 or not event.workout_filename:
                     invalid += 1
+                    logger.debug(
+                        "Skipping incomplete Intervals.icu workout: sport={}, event_index={}, "
+                        "has_filename={}, has_workout_data={}",
+                        sport.name,
+                        index,
+                        bool(event.workout_filename),
+                        bool(event.workout_file_base64),
+                    )
                     continue
 
                 workout_date = event.planned_date or start
@@ -133,14 +189,34 @@ class IntervalsICUProvider:
                         title=safe_title,
                     ),
                 )
+                logger.trace(
+                    "Staged Intervals.icu workout: sport={}, event_index={}, "
+                    "planned_date={}, output={}",
+                    sport.name,
+                    index,
+                    workout_date,
+                    out_dir / output_name,
+                )
 
             result = WorkoutRefreshResult(
                 written=tuple(written),
                 invalid=invalid,
             )
             if not written:
+                logger.debug(
+                    "No valid Intervals.icu workouts for sport={}; preserving existing files "
+                    "(invalid={})",
+                    sport.name,
+                    invalid,
+                )
                 _remove_path(stage_dir)
                 return None, result
+            logger.debug(
+                "Prepared Intervals.icu workouts: sport={}, written={}, invalid={}",
+                sport.name,
+                len(written),
+                invalid,
+            )
             return _PreparedRefresh(out_dir, stage_dir, result), result
         except Exception:
             _remove_path(stage_dir)
@@ -194,6 +270,7 @@ class IntervalsICUProvider:
     @staticmethod
     def _commit_staged(prepared: Iterable[_PreparedRefresh]) -> None:
         staged = list(prepared)
+        logger.debug("Committing Intervals.icu workout directories: count={}", len(staged))
         backups: list[tuple[Path, Path | None]] = []
         installed: list[_PreparedRefresh] = []
         try:
@@ -206,11 +283,18 @@ class IntervalsICUProvider:
             for current in staged:
                 current.stage_dir.replace(current.out_dir)
                 installed.append(current)
+                logger.trace("Installed Intervals.icu workout directory: {}", current.out_dir)
         except Exception:
+            logger.warning(
+                "Intervals.icu workout commit failed; rolling back: backed_up={}, installed={}",
+                len(backups),
+                len(installed),
+            )
             IntervalsICUProvider._rollback_staged(backups, installed)
             raise
         else:
             IntervalsICUProvider._remove_backups(backups)
+            logger.debug("Intervals.icu workout directory commit completed")
         finally:
             for current in staged:
                 if current.stage_dir.exists():
