@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import gzip
 import re
+from collections import Counter
 from datetime import date, datetime  # noqa: TC003 - Pydantic resolves these at runtime
+from time import monotonic
 from typing import TYPE_CHECKING, Protocol
 
 import requests
+from loguru import logger
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 from requests.auth import HTTPBasicAuth
 
@@ -136,6 +139,40 @@ class _IcuUploadEnvelope(BaseModel):
 _ICU_UPLOAD_ENVELOPE = TypeAdapter(_IcuUploadEnvelope)
 
 
+def _payload_shape(payload: object) -> str:
+    """Describe a JSON payload without logging provider-supplied values."""
+    if isinstance(payload, list):
+        return f"list(length={len(payload)})"
+    if isinstance(payload, dict):
+        keys = sorted(str(key) for key in payload)[:20]
+        suffix = ", ..." if len(payload) > len(keys) else ""
+        return f"object(keys=[{', '.join(keys)}{suffix}])"
+    return type(payload).__name__
+
+
+def _validation_debug_detail(payload: object, error: ValidationError) -> str:
+    """Summarize schema errors without including response field values."""
+    problems = []
+    for problem in error.errors(include_input=False, include_url=False)[:10]:
+        location = ".".join(str(part) for part in problem.get("loc", ())) or "response"
+        problems.append(
+            f"{location}: {problem.get('type', 'validation_error')} "
+            f"({problem.get('msg', 'invalid value')})",
+        )
+    suffix = f"; errors={'; '.join(problems)}" if problems else ""
+    return f"payload={_payload_shape(payload)}{suffix}"[:500]
+
+
+def _redact_values(detail: str | None, values: tuple[str, ...]) -> str | None:
+    """Remove caller-known credentials and identifiers from provider detail."""
+    if detail is None:
+        return None
+    for value in values:
+        if value:
+            detail = detail.replace(value, "[redacted]")
+    return detail
+
+
 def _response_debug_detail(
     response: requests.Response,
     fallback: str | None = None,
@@ -178,9 +215,17 @@ class IntervalsICUClient:
         ext: str,
     ) -> list[IcuWorkoutEvent]:
         """Fetch and validate planned workouts for an inclusive date range."""
+        logger.debug(
+            "Intervals.icu event fetch starting: start={}, end={}, ext={}",
+            start,
+            end,
+            ext,
+        )
         response = self._request(
             self._transport.get,
             f"{_API_BASE}/athlete/{self.credentials.athlete_id}/events",
+            operation="fetch events",
+            redactions=(self.credentials.athlete_id, self.credentials.api_key),
             params={
                 "category": "WORKOUT",
                 "oldest": start.isoformat(),
@@ -192,13 +237,54 @@ class IntervalsICUClient:
             timeout=20,
         )
         try:
-            return _ICU_WORKOUT_EVENTS.validate_python(response.json())
-        except (ValidationError, ValueError) as exc:
+            payload = response.json()
+        except ValueError as exc:
+            detail = _response_debug_detail(response, type(exc).__name__)
+            detail = _redact_values(
+                detail,
+                (self.credentials.athlete_id, self.credentials.api_key),
+            )
+            logger.warning(
+                "Intervals.icu event response was not valid JSON: status={}, detail={}",
+                getattr(response, "status_code", None),
+                detail,
+            )
             message = "returned unexpected data"
             raise IntegrationResponseError(
                 _INTEGRATION_NAME,
                 message,
+                debug_detail=detail,
             ) from exc
+        logger.trace("Intervals.icu event response JSON shape: {}", _payload_shape(payload))
+        try:
+            events = _ICU_WORKOUT_EVENTS.validate_python(payload)
+        except ValidationError as exc:
+            detail = _validation_debug_detail(payload, exc)
+            logger.warning("Intervals.icu event response validation failed: {}", detail)
+            message = "returned unexpected data"
+            raise IntegrationResponseError(
+                _INTEGRATION_NAME,
+                message,
+                debug_detail=detail,
+            ) from exc
+
+        event_types = Counter((event.type.strip() or "<empty>") for event in events)
+        logger.debug(
+            "Intervals.icu event fetch completed: events={}, event_types={}",
+            len(events),
+            dict(sorted(event_types.items())),
+        )
+        for index, event in enumerate(events):
+            logger.trace(
+                "Intervals.icu event summary: index={}, type={!r}, planned_date={}, "
+                "has_filename={}, has_workout_data={}",
+                index,
+                event.type,
+                event.planned_date,
+                bool(event.workout_filename),
+                bool(event.workout_file_base64),
+            )
+        return events
 
     def upload_tcx(self, name: str, data: bytes) -> IcuUploadResponse:
         """Gzip TCX bytes, upload them, and validate the activity identifier."""
@@ -206,6 +292,8 @@ class IntervalsICUClient:
         response = self._request(
             self._transport.post,
             f"{_API_BASE}/athlete/{self.credentials.athlete_id}/activities",
+            operation="upload activity",
+            redactions=(self.credentials.athlete_id, self.credentials.api_key),
             auth=self._auth(),
             files={"file": (f"{name}.tcx.gz", compressed, "application/gzip")},
             timeout=60,
@@ -220,17 +308,45 @@ class IntervalsICUClient:
     def _request(
         request: Callable[..., requests.Response],
         url: str,
+        *,
+        operation: str = "request",
+        redactions: tuple[str, ...] = (),
         **kwargs: object,
     ) -> requests.Response:
+        method = getattr(request, "__name__", type(request).__name__).upper()
+        params = kwargs.get("params")
+        param_keys = sorted(str(key) for key in params) if isinstance(params, dict) else []
+        timeout = kwargs.get("timeout")
+        logger.trace(
+            "Intervals.icu request starting: operation={}, method={}, timeout_s={}, "
+            "query_keys={}",
+            operation,
+            method,
+            timeout,
+            param_keys,
+        )
+        started = monotonic()
         try:
             response = request(url, **kwargs)
             response.raise_for_status()
         except requests.RequestException as exc:
+            elapsed_ms = round((monotonic() - started) * 1000)
             error_response = exc.response
             status_code = error_response.status_code if error_response is not None else None
             debug_detail = type(exc).__name__
             if error_response is not None:
                 debug_detail = _response_debug_detail(error_response, debug_detail)
+            debug_detail = _redact_values(debug_detail, redactions)
+            logger.warning(
+                "Intervals.icu request failed: operation={}, method={}, status={}, "
+                "elapsed_ms={}, error_type={}, detail={}",
+                operation,
+                method,
+                status_code,
+                elapsed_ms,
+                type(exc).__name__,
+                debug_detail,
+            )
             message = "request failed"
             raise IntegrationTransportError(
                 _INTEGRATION_NAME,
@@ -238,4 +354,16 @@ class IntervalsICUClient:
                 status_code=status_code,
                 debug_detail=debug_detail,
             ) from exc
+        elapsed_ms = round((monotonic() - started) * 1000)
+        headers = getattr(response, "headers", {})
+        logger.trace(
+            "Intervals.icu request completed: operation={}, method={}, status={}, "
+            "elapsed_ms={}, content_type={}, content_length={}",
+            operation,
+            method,
+            getattr(response, "status_code", None),
+            elapsed_ms,
+            headers.get("content-type") if hasattr(headers, "get") else None,
+            headers.get("content-length") if hasattr(headers, "get") else None,
+        )
         return response
