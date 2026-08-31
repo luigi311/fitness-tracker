@@ -66,6 +66,26 @@
         type="desktop-id"
     >com.luigi311.fitness-tracker.desktop</launchable>
     <releases>
+        <release version="5.1.1" date="2026-08-30">
+            <url
+                type="details"
+            >https://github.com/luigi311/fitness-tracker/releases/tag/v5.1.1</url>
+            <description>
+                <p>
+                    Improvements
+                </p>
+                <ul>
+                    <li>Add detailed diagnostics for Intervals.icu workout fetching</li>
+                    <li>Skip live chart redraws while the tracker page is hidden</li>
+                </ul>
+                <p>
+                    Bug Fixes
+                </p>
+                <ul>
+                    <li>Fix Intervals.icu workout fetching by sending date-only calendar ranges</li>
+                </ul>
+            </description>
+        </release>
         <release version="5.1.0" date="2026-08-25">
             <url
                 type="details"
