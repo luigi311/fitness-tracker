@@ -3,7 +3,7 @@
 import gzip
 import json
 import os
-from datetime import date
+from datetime import date, datetime
 from io import BytesIO
 from pathlib import Path
 from typing import Any
@@ -131,6 +131,23 @@ def test_mixed_run_and_ride_response_is_filtered_by_sport(
     assert cycling[0].title == "Ride workout"
     stored_event = json.loads(running[0].path.read_text(encoding="utf-8"))
     assert stored_event["provider_metadata"] == "preserve"
+
+
+def test_fetch_uses_local_dates_for_timezone_aware_datetime_range() -> None:
+    calls: list[dict[str, Any]] = []
+    client = IntervalsICUClient(
+        IntervalsICUCredentials(athlete_id="athlete", api_key="key"),
+        transport=_Transport([], calls),
+    )
+
+    client.fetch_events(
+        start=datetime.fromisoformat("2026-08-30T00:00:00-06:00"),
+        end=datetime.fromisoformat("2026-09-05T23:59:59-06:00"),
+        ext="fit",
+    )
+
+    assert calls[0]["params"]["oldest"] == "2026-08-30"
+    assert calls[0]["params"]["newest"] == "2026-09-05"
 
 
 def test_response_without_requested_sport_preserves_last_known_good_workouts(

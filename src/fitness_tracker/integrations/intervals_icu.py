@@ -5,7 +5,7 @@ from __future__ import annotations
 import gzip
 import re
 from collections import Counter
-from datetime import date, datetime  # noqa: TC003 - Pydantic resolves these at runtime
+from datetime import date, datetime
 from time import monotonic
 from typing import TYPE_CHECKING, Protocol
 
@@ -173,6 +173,13 @@ def _redact_values(detail: str | None, values: tuple[str, ...]) -> str | None:
     return detail
 
 
+def _local_date_iso(value: date) -> str:
+    """Format a date-like value as the local calendar date required by the API."""
+    if isinstance(value, datetime):
+        value = value.date()
+    return value.isoformat()
+
+
 def _response_debug_detail(
     response: requests.Response,
     fallback: str | None = None,
@@ -215,10 +222,12 @@ class IntervalsICUClient:
         ext: str,
     ) -> list[IcuWorkoutEvent]:
         """Fetch and validate planned workouts for an inclusive date range."""
+        oldest = _local_date_iso(start)
+        newest = _local_date_iso(end)
         logger.debug(
-            "Intervals.icu event fetch starting: start={}, end={}, ext={}",
-            start,
-            end,
+            "Intervals.icu event fetch starting: oldest={}, newest={}, ext={}",
+            oldest,
+            newest,
             ext,
         )
         response = self._request(
@@ -228,8 +237,8 @@ class IntervalsICUClient:
             redactions=(self.credentials.athlete_id, self.credentials.api_key),
             params={
                 "category": "WORKOUT",
-                "oldest": start.isoformat(),
-                "newest": end.isoformat(),
+                "oldest": oldest,
+                "newest": newest,
                 "resolve": "true",
                 "ext": ext,
             },
