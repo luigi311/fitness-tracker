@@ -11,7 +11,10 @@
 enum { PKEY_UNITS = 100, PKEY_HERO = 101, PKEY_FOCUS = 102 };
 
 // Which metric is the hero (top, big)
-typedef enum { HERO_HR = 0, HERO_PACE = 1, HERO_POWER = 2 } HeroMetric;
+typedef enum {
+  HERO_HR = 0, HERO_PACE = 1, HERO_POWER = 2, HERO_CAD = 3, HERO_DIST = 4,
+} HeroMetric;
+#define HERO_COUNT 5
 
 // Display density
 typedef enum { FOCUS_GRID = 0, FOCUS_HERO_ONLY = 1 } FocusMode;
@@ -48,11 +51,20 @@ static TextLayer *s_hero_label;
 typedef struct {
   TextLayer *label;
   TextLayer *value;
-  bool *have_flag;
   int id;
 } MetricCellID;
 
 enum { CELL_HR=0, CELL_PACE=1, CELL_CAD=2, CELL_DIST=3, CELL_PWR=4 };
+
+static int hero_cell_id(HeroMetric hero) {
+  switch (hero) {
+    case HERO_PACE:  return CELL_PACE;
+    case HERO_POWER: return CELL_PWR;
+    case HERO_CAD:   return CELL_CAD;
+    case HERO_DIST:  return CELL_DIST;
+    default:         return CELL_HR;
+  }
+}
 
 static TextLayer *s_hr_label_grid,  *s_hr_value_grid;
 static TextLayer *s_pace_label,     *s_pace_value;
@@ -102,10 +114,6 @@ static bool target_metric_live(void) {
 // ---------- Formatting adapters ----------
 static void view_format_distance(char *out, size_t n, KEY_DISTANCE_C_TYPE meters) {
   pebble_format_distance(out, n, meters, s_protocol.units);
-}
-
-static void view_format_pace(char *out, size_t n, KEY_PACE_C_TYPE speed_ms_x100) {
-  pebble_format_pace(out, n, speed_ms_x100, s_protocol.units);
 }
 
 static void view_format_pace_value_only(char *out, size_t n) {
@@ -513,41 +521,23 @@ static void layout_layers(Window *w) {
     return;
   }
 
-  // ---- Build active grid list (exclude current hero) ----
+  // ---- Grid: every metric that is not the hero, always ----
+  // The set never depends on what has arrived, so the geometry is fixed for
+  // the whole session. Picking cells by have_flag meant a GPS fix landing a
+  // minute into a run added a row and moved every cell already on screen; a
+  // metric that is not reporting shows "-" in its own fixed place instead.
   MetricCellID *active[5] = {0};
   int n = 0;
+  const int hero_id = hero_cell_id(s_hero);
 
   for (int i = 0; i < 5; ++i) {
-    bool is_hero_cell =
-      (s_hero == HERO_HR    && s_cells[i].id == CELL_HR) ||
-      (s_hero == HERO_PACE  && s_cells[i].id == CELL_PACE) ||
-      (s_hero == HERO_POWER && s_cells[i].id == CELL_PWR);
-
-    if (is_hero_cell) {
+    if (s_cells[i].id == hero_id) {
       // Hide the hero's grid twin
       layer_set_hidden(text_layer_get_layer(s_cells[i].label), true);
       layer_set_hidden(text_layer_get_layer(s_cells[i].value), true);
       continue;
     }
-
-    if (*(s_cells[i].have_flag)) {
-      active[n++] = &s_cells[i];
-    }
-  }
-
-  // If nothing yet, add placeholders that are not the hero
-  if (n == 0) {
-    int candidates[3] = { CELL_PACE, CELL_DIST, CELL_CAD };
-    for (int k = 0; k < 3 && n < 2; ++k) {
-      int id = candidates[k];
-      bool is_hero =
-        (s_hero == HERO_HR    && id == CELL_HR) ||
-        (s_hero == HERO_PACE  && id == CELL_PACE) ||
-        (s_hero == HERO_POWER && id == CELL_PWR);
-      if (!is_hero) {
-        active[n++] = &s_cells[id];
-      }
-    }
+    active[n++] = &s_cells[i];
   }
 
   // Grid geometry
@@ -568,9 +558,7 @@ static void layout_layers(Window *w) {
 
   // Hide all non-hero grid cells first, then unhide the active ones.
   for (int i = 0; i < 5; ++i) {
-    if ( (s_hero == HERO_HR    && s_cells[i].id == CELL_HR) ||
-         (s_hero == HERO_PACE  && s_cells[i].id == CELL_PACE) ||
-         (s_hero == HERO_POWER && s_cells[i].id == CELL_PWR) ) {
+    if (s_cells[i].id == hero_id) {
       continue; // hero's grid twin already hidden above
     }
     layer_set_hidden(text_layer_get_layer(s_cells[i].label), true);
@@ -708,53 +696,47 @@ static void render_all(void) {
   }
 
   // ----- Free-run rendering -----
+  // Units live in the labels, so every value here is bare digits.
   static char hr_buf[20], pace_buf[16], cad_buf[16], dist_buf[20], pwr_buf[16];
 
   if (metric_live(s_protocol.have_hr)) snprintf(hr_buf, sizeof(hr_buf), "%u", (unsigned)s_protocol.last_hr);
   else                                 snprintf(hr_buf, sizeof(hr_buf), "-");
 
-  if (metric_live(s_protocol.have_pace)) view_format_pace(pace_buf, sizeof(pace_buf), s_protocol.last_pace_x100);
+  if (metric_live(s_protocol.have_pace)) view_format_pace_value_only(pace_buf, sizeof(pace_buf));
   else                                   snprintf(pace_buf, sizeof(pace_buf), "-");
 
   if (metric_live(s_protocol.have_cad)) snprintf(cad_buf, sizeof(cad_buf), "%u", (unsigned)s_protocol.last_cad);
   else                                  snprintf(cad_buf, sizeof(cad_buf), "-");
 
-  if (metric_live(s_protocol.have_dist)) view_format_distance(dist_buf, sizeof(dist_buf), s_protocol.last_dist_m);
-  else                                   snprintf(dist_buf, sizeof(dist_buf), "-");
+  if (metric_live(s_protocol.have_dist)) {
+    // The unit is in the label, so trim it from the value.
+    view_format_distance(dist_buf, sizeof(dist_buf), s_protocol.last_dist_m);
+    char *space = strchr(dist_buf, ' ');
+    if (space) *space = '\0';
+  } else {
+    snprintf(dist_buf, sizeof(dist_buf), "-");
+  }
 
   if (metric_live(s_protocol.have_power)) snprintf(pwr_buf, sizeof(pwr_buf), "%u", (unsigned)s_protocol.last_power);
   else                                    snprintf(pwr_buf, sizeof(pwr_buf), "-");
 
-  // Hero content
+  const bool metric = (s_protocol.units == PEBBLE_UNITS_METRIC);
+  const char *hero_label = "HEART RATE";
+  const char *hero_value = hr_buf;
   switch (s_hero) {
-    case HERO_HR: {
-      text_layer_set_text(s_hero_label, "HEART RATE");
-      text_layer_set_text(s_hero_value, hr_buf);
-      int vh = layer_get_bounds(text_layer_get_layer(s_hero_value)).size.h;
-      text_layer_set_font(s_hero_value,
-        pick_font_value(vh, /*is_hero=*/true, /*in_focus=*/(s_focus == FOCUS_HERO_ONLY)));
-      break;
-    }
-    case HERO_POWER: {
-      text_layer_set_text(s_hero_label, "POWER/W");
-      text_layer_set_text(s_hero_value, pwr_buf);
-      int vh = layer_get_bounds(text_layer_get_layer(s_hero_value)).size.h;
-      text_layer_set_font(s_hero_value,
-        pick_font_value(vh, /*is_hero=*/true, /*in_focus=*/(s_focus == FOCUS_HERO_ONLY)));
-      break;
-    }
-    case HERO_PACE: {
-      // Big m:ss only; unit in the label
-      static char pace_val[12];
-      if (metric_live(s_protocol.have_pace)) view_format_pace_value_only(pace_val, sizeof(pace_val));
-      else                                   snprintf(pace_val, sizeof(pace_val), "-");
-      text_layer_set_text(s_hero_label, (s_protocol.units == PEBBLE_UNITS_METRIC) ? "PACE/KM" : "PACE/MI");
-      text_layer_set_text(s_hero_value, pace_val);
-      int vh = layer_get_bounds(text_layer_get_layer(s_hero_value)).size.h;
-      text_layer_set_font(s_hero_value,
-        pick_font_value(vh, /*is_hero=*/true, /*in_focus=*/(s_focus == FOCUS_HERO_ONLY)));
-      break;
-    }
+    case HERO_PACE:  hero_label = metric ? "PACE/KM" : "PACE/MI"; hero_value = pace_buf; break;
+    case HERO_POWER: hero_label = "POWER/W";                      hero_value = pwr_buf;  break;
+    case HERO_CAD:   hero_label = "CADENCE/SPM";                  hero_value = cad_buf;  break;
+    case HERO_DIST:  hero_label = metric ? "DISTANCE/KM" : "DISTANCE/MI";
+                     hero_value = dist_buf; break;
+    default: break;
+  }
+  text_layer_set_text(s_hero_label, hero_label);
+  text_layer_set_text(s_hero_value, hero_value);
+  {
+    int vh = layer_get_bounds(text_layer_get_layer(s_hero_value)).size.h;
+    text_layer_set_font(s_hero_value,
+      pick_font_value(vh, /*is_hero=*/true, /*in_focus=*/(s_focus == FOCUS_HERO_ONLY)));
   }
 
   // Grid labels/values (stacked view). Units live in the labels so the values
@@ -763,27 +745,14 @@ static void render_all(void) {
     text_layer_set_text(s_hr_label_grid, "HR/BPM");
     text_layer_set_text(s_hr_value_grid, hr_buf);
 
-    static char pace_val_grid[12];
-    if (metric_live(s_protocol.have_pace)) view_format_pace_value_only(pace_val_grid, sizeof(pace_val_grid));
-    else                                   snprintf(pace_val_grid, sizeof(pace_val_grid), "-");
-    text_layer_set_text(s_pace_label, (s_protocol.units == PEBBLE_UNITS_METRIC) ? "PACE/KM" : "PACE/MI");
-    text_layer_set_text(s_pace_value, pace_val_grid);
+    text_layer_set_text(s_pace_label, metric ? "PACE/KM" : "PACE/MI");
+    text_layer_set_text(s_pace_value, pace_buf);
 
     text_layer_set_text(s_cad_label, "CAD/SPM");
     text_layer_set_text(s_cad_value, cad_buf);
 
-    static char dist_val_grid[20];
-    if (metric_live(s_protocol.have_dist)) {
-      // The unit is in the label, so trim it from the value.
-      view_format_distance(dist_val_grid, sizeof(dist_val_grid), s_protocol.last_dist_m);
-      char *space = strchr(dist_val_grid, ' ');
-      if (space) *space = '\0';
-    } else {
-      snprintf(dist_val_grid, sizeof(dist_val_grid), "-");
-    }
-    text_layer_set_text(s_dist_label,
-      (s_protocol.units == PEBBLE_UNITS_METRIC) ? "DIST/KM" : "DIST/MI");
-    text_layer_set_text(s_dist_value, dist_val_grid);
+    text_layer_set_text(s_dist_label, metric ? "DIST/KM" : "DIST/MI");
+    text_layer_set_text(s_dist_value, dist_buf);
 
     text_layer_set_text(s_power_label, "PWR/W");
     text_layer_set_text(s_power_value, pwr_buf);
@@ -805,13 +774,13 @@ static void toggle_units(void) {
 }
 
 static void next_hero(void) {
-  s_hero = (HeroMetric)((s_hero + 1) % 3);
+  s_hero = (HeroMetric)((s_hero + 1) % HERO_COUNT);
   persist_write_int(PKEY_HERO, (int)s_hero);
   render_all();
 }
 
 static void prev_hero(void) {
-  s_hero = (HeroMetric)((s_hero + 2) % 3); // wrap backwards
+  s_hero = (HeroMetric)((s_hero + HERO_COUNT - 1) % HERO_COUNT); // wrap backwards
   persist_write_int(PKEY_HERO, (int)s_hero);
   render_all();
 }
@@ -895,11 +864,11 @@ static void win_load(Window *w) {
   make_label_and_value(&s_dist_label,    &s_dist_value);
   make_label_and_value(&s_power_label,   &s_power_value);
 
-  s_cells[0] = (MetricCellID){ .label=s_hr_label_grid,  .value=s_hr_value_grid,  .have_flag=&s_protocol.have_hr,   .id=CELL_HR   };
-  s_cells[1] = (MetricCellID){ .label=s_pace_label,     .value=s_pace_value,     .have_flag=&s_protocol.have_pace, .id=CELL_PACE };
-  s_cells[2] = (MetricCellID){ .label=s_cad_label,      .value=s_cad_value,      .have_flag=&s_protocol.have_cad,  .id=CELL_CAD  };
-  s_cells[3] = (MetricCellID){ .label=s_dist_label,     .value=s_dist_value,     .have_flag=&s_protocol.have_dist, .id=CELL_DIST };
-  s_cells[4] = (MetricCellID){ .label=s_power_label,    .value=s_power_value,    .have_flag=&s_protocol.have_power,.id=CELL_PWR  };
+  s_cells[0] = (MetricCellID){ .label=s_hr_label_grid,  .value=s_hr_value_grid,   .id=CELL_HR   };
+  s_cells[1] = (MetricCellID){ .label=s_pace_label,     .value=s_pace_value, .id=CELL_PACE };
+  s_cells[2] = (MetricCellID){ .label=s_cad_label,      .value=s_cad_value,  .id=CELL_CAD  };
+  s_cells[3] = (MetricCellID){ .label=s_dist_label,     .value=s_dist_value, .id=CELL_DIST };
+  s_cells[4] = (MetricCellID){ .label=s_power_label,    .value=s_power_value,.id=CELL_PWR  };
 
   TextLayer *all_grid[] = {
     s_hr_label_grid, s_hr_value_grid,
@@ -941,7 +910,7 @@ static void win_load(Window *w) {
   if (persist_exists(PKEY_UNITS)) s_protocol.units = (PebbleUnits)persist_read_int(PKEY_UNITS);
   if (persist_exists(PKEY_HERO)) {
     int hero = persist_read_int(PKEY_HERO);
-    s_hero = (HeroMetric)clamp_int(hero, HERO_HR, HERO_POWER);
+    s_hero = (HeroMetric)clamp_int(hero, HERO_HR, HERO_DIST);
   }
   if (persist_exists(PKEY_FOCUS)) {
     int focus = persist_read_int(PKEY_FOCUS);

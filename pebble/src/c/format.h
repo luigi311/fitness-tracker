@@ -25,8 +25,6 @@ typedef struct {
 
 void pebble_format_distance(char *out, size_t n, KEY_DISTANCE_C_TYPE meters,
                             PebbleUnits units);
-void pebble_format_pace(char *out, size_t n, KEY_PACE_C_TYPE speed_ms_x100,
-                        PebbleUnits units);
 void pebble_format_pace_value_only(char *out, size_t n,
                                    const PebbleProtocolState *state);
 void pebble_format_pace_from_ms_value_only(char *out, size_t n, float ms,
