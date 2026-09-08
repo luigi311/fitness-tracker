@@ -333,51 +333,81 @@ static void layout_status_bar(GRect b) {
   text_layer_set_text_alignment(s_link_value, GTextAlignmentRight);
 }
 
+// Places one row, reporting whether it fitted. A row that would cross the
+// bottom edge is hidden rather than drawn off screen.
+static bool place_info_row(TextLayer *layer, GRect content, int y, int h,
+                           int bottom) {
+  if (h <= 0 || y + h > bottom) {
+    layer_set_hidden(text_layer_get_layer(layer), true);
+    return false;
+  }
+  layer_set_frame(text_layer_get_layer(layer),
+                  GRect(content.origin.x + 2, y, content.size.w - 4, h));
+  layer_set_hidden(text_layer_get_layer(layer), false);
+  return true;
+}
+
 static void layout_workout(GRect content) {
   const int W = content.size.w;
+  const int CH = content.size.h;
   const bool wide = (W >= WIDE_SCREEN_W);
+  const int gap = 2;
 
-  const int bar_h = wide ? 20 : 16;
-  const int big_h = wide ? 56 : 44;
-  const int rem_h = wide ? 40 : 30;
-  const int line_h = wide ? 28 : 22;
+  // Preferred stack. A system overlay -- the timeline quick view -- can take
+  // part of the screen, and the window re-lays out against the unobstructed
+  // bounds when it does, so the rows have to be sized from the height that is
+  // actually available rather than from constants.
+  int bar_h = wide ? 20 : 16;
+  int big_h = wide ? 56 : 44;
+  int rem_h = wide ? 40 : 30;
+  int line_h = wide ? 28 : 22;
 
+  int needed = bar_h + gap + big_h + rem_h + 2 * line_h;
+  if (needed > CH && needed > 0 && CH > 0) {
+    // Shrink the whole stack by one factor so it keeps its proportions.
+    bar_h = bar_h * CH / needed;
+    big_h = big_h * CH / needed;
+    rem_h = rem_h * CH / needed;
+    line_h = line_h * CH / needed;
+  }
+
+  const int bottom = content.origin.y + CH;
   int y = content.origin.y;
 
-  layer_set_frame(s_zone_bar_layer, GRect(content.origin.x, y, W, bar_h));
-  layer_set_hidden(s_zone_bar_layer, false);
-  y += bar_h + 2;
+  if (bar_h > 0 && y + bar_h <= bottom) {
+    layer_set_frame(s_zone_bar_layer, GRect(content.origin.x, y, W, bar_h));
+    layer_set_hidden(s_zone_bar_layer, false);
+    y += bar_h + gap;
+  } else {
+    layer_set_hidden(s_zone_bar_layer, true);
+  }
 
-  layer_set_frame(text_layer_get_layer(s_info_big),
-                  GRect(content.origin.x + 2, y, W - 4, big_h));
-  text_layer_set_font(s_info_big, fonts_get_system_font(FONT_KEY_BITHAM_42_BOLD));
-  y += big_h;
+  // Fonts follow the row that survived the shrink, so glyphs stay inside it.
+  if (place_info_row(s_info_big, content, y, big_h, bottom)) {
+    text_layer_set_font(s_info_big,
+                        pick_font_value(big_h, /*is_hero=*/true, /*in_focus=*/false));
+    y += big_h;
+  }
 
   // How much of the step is left is the second thing worth reading at speed,
   // so it gets the largest type the system fonts allow after the value.
-  layer_set_frame(text_layer_get_layer(s_info_remaining),
-                  GRect(content.origin.x + 2, y, W - 4, rem_h));
-  text_layer_set_font(s_info_remaining,
-                      fonts_get_system_font(FONT_KEY_GOTHIC_28_BOLD));
-  y += rem_h;
+  if (place_info_row(s_info_remaining, content, y, rem_h, bottom)) {
+    text_layer_set_font(s_info_remaining,
+                        pick_font_value(rem_h, /*is_hero=*/false, /*in_focus=*/false));
+    y += rem_h;
+  }
 
-  layer_set_frame(text_layer_get_layer(s_info_band),
-                  GRect(content.origin.x + 2, y, W - 4, line_h));
   // The band is a number you check against the hero above it, so it is read
   // like a value rather than like a label.
-  text_layer_set_font(s_info_band,
-    fonts_get_system_font(wide ? FONT_KEY_GOTHIC_24_BOLD : FONT_KEY_GOTHIC_18_BOLD));
-  y += line_h;
+  if (place_info_row(s_info_band, content, y, line_h, bottom)) {
+    text_layer_set_font(s_info_band,
+                        pick_font_value(line_h, /*is_hero=*/false, /*in_focus=*/false));
+    y += line_h;
+  }
 
-  layer_set_frame(text_layer_get_layer(s_info_step_hr),
-                  GRect(content.origin.x + 2, y, W - 4, line_h));
-  text_layer_set_font(s_info_step_hr,
-    fonts_get_system_font(wide ? FONT_KEY_GOTHIC_24_BOLD : FONT_KEY_GOTHIC_18_BOLD));
-
-  TextLayer *shown[4] = { s_info_big, s_info_remaining, s_info_band, s_info_step_hr };
-  for (int i = 0; i < 4; ++i) {
-    text_layer_set_text_alignment(shown[i], GTextAlignmentCenter);
-    layer_set_hidden(text_layer_get_layer(shown[i]), false);
+  if (place_info_row(s_info_step_hr, content, y, line_h, bottom)) {
+    text_layer_set_font(s_info_step_hr,
+                        pick_font_value(line_h, /*is_hero=*/false, /*in_focus=*/false));
   }
 
   // Hide free-run UI
@@ -547,11 +577,21 @@ static void layout_layers(Window *w) {
     layer_set_hidden(text_layer_get_layer(s_cells[i].value), true);
   }
 
+  const int grid_bottom = content.origin.y + H;
+
   for (int i = 0; i < n; ++i) {
     int r = i / cols;
     int c = i % cols;
     int x = content.origin.x + pad_lr + c * (cell_w + pad_mid);
     int y = grid_top + r * (cell_h + pad_mid);
+
+    // cell_h carries a floor, so a shrunken content area can push a row past
+    // the bottom edge; drop the row rather than draw it off screen.
+    if (y + cell_h > grid_bottom) {
+      layer_set_hidden(text_layer_get_layer(active[i]->label), true);
+      layer_set_hidden(text_layer_get_layer(active[i]->value), true);
+      continue;
+    }
 
     layer_set_frame(text_layer_get_layer(active[i]->label),
                 GRect(x, y, cell_w, cell_label_h));
