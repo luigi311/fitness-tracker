@@ -36,31 +36,6 @@ void pebble_format_distance(char *out, size_t n, KEY_DISTANCE_C_TYPE meters,
   }
 }
 
-void pebble_format_pace(char *out, size_t n, KEY_PACE_C_TYPE speed_ms_x100,
-                        PebbleUnits units) {
-  if (speed_ms_x100 <= 1) {
-    snprintf(out, n, "-");
-    return;
-  }
-
-  float ms = speed_ms_x100 / (float)KEY_PACE_SCALE;
-  char value[16];
-  pebble_format_pace_from_ms_value_only(value, sizeof(value), ms, units);
-  if (value[0] == '-') {
-    snprintf(out, n, "-");
-    return;
-  }
-
-  char *separator = strchr(value, ':');
-  if (separator == NULL) {
-    snprintf(out, n, "-");
-    return;
-  }
-  *separator = '\0';
-  snprintf(out, n, "%s'%s\"/%s", value, separator + 1,
-           units == PEBBLE_UNITS_METRIC ? "km" : "mi");
-}
-
 void pebble_format_pace_value_only(char *out, size_t n,
                                    const PebbleProtocolState *state) {
   if (!state->have_pace) {
@@ -204,15 +179,24 @@ GColor pebble_zone_color(const PebbleProtocolState *state) {
 #endif
 }
 
+// What to do, not which side you are on. For a pace target the bar is held in
+// speed while the value is shown as pace, so the faster end is the one with the
+// smaller number and no arrow or edge label can say that without ambiguity; an
+// instruction can. It reads the same way for every target kind: below the band
+// always means do more, above it means do less.
 const char *pebble_zone_word(const PebbleProtocolState *state) {
-  switch (pebble_zone(state)) {
-    case PEBBLE_ZONE_IN:
-      return "IN";
-    case PEBBLE_ZONE_NEAR:
-      return "NEAR";
-    default:
-      return "OUT";
+  if (state->target_kind == TGT_NONE) {
+    return "";
   }
+
+  PebbleGaugeScale scale;
+  pebble_gauge_scale(state, &scale);
+  float current = pebble_current_value_for_kind(state);
+
+  if (current >= scale.low && current <= scale.high) {
+    return "IN";
+  }
+  return (current < scale.low) ? "PUSH" : "EASE";
 }
 
 // "150-160 bpm" — the zone word is gone from here; the screen colour and the
