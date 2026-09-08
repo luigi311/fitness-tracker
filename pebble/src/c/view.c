@@ -1,6 +1,7 @@
 #include <pebble.h>
 #include <math.h>
 #include <stdio.h>
+#include <string.h>
 
 #include "format.h"
 #include "protocol.h"
@@ -18,6 +19,9 @@ typedef enum { FOCUS_GRID = 0, FOCUS_HERO_ONLY = 1 } FocusMode;
 // View mode: free run vs workout gauge
 typedef enum { VIEW_FREE = 0, VIEW_WORKOUT = 1 } ViewMode;
 
+// Screens at least this wide can afford the larger type scale.
+#define WIDE_SCREEN_W 180
+
 // ---------- View state ----------
 static Window *s_win;
 static PebbleProtocolState s_protocol;
@@ -30,6 +34,12 @@ static int clamp_int(int value, int minimum, int maximum) {
   if (value > maximum) return maximum;
   return value;
 }
+
+// ---------- UI: status bar ----------
+static TextLayer *s_elapsed_value;
+static TextLayer *s_link_value;
+
+static char s_buf_elapsed[16];
 
 // ---------- UI: hero + grid ----------
 static TextLayer *s_hero_value;
@@ -52,24 +62,42 @@ static TextLayer *s_power_label,    *s_power_value;
 
 static MetricCellID s_cells[5];
 
-// ---------- UI: workout gauge ----------
-static Layer     *s_gauge_layer;
-static TextLayer *s_info_current;
-static TextLayer *s_info_target;
-static TextLayer *s_info_hr;
+// ---------- UI: workout ----------
+static Layer     *s_zone_bar_layer;
 static TextLayer *s_info_big;
-static Layer     *s_underbar_layer;
+static TextLayer *s_info_remaining;
+static TextLayer *s_info_band;
+static TextLayer *s_info_step_hr;
 
-static char s_buf_current[32];
-static char s_buf_target[48];
-static char s_buf_hr[24];
+static char s_buf_remaining[20];
+static char s_buf_band[32];
+static char s_buf_step_hr[32];
 static bool s_in_zone_prev = false;
+// False until a band has been evaluated for the current step, so entering a
+// new step never fires a zone alert on top of the step-change buzz.
+static bool s_have_zone_prev = false;
 
 // ---------- Forward declarations ----------
 static void render_all(void);
 static void layout_layers(Window *w);
 static void maybe_haptic_transition(void);
 static void view_protocol_updated(void *context);
+
+// ---------- Staleness ----------
+// A latched have_* flag only says a value once arrived. Once the link is stale
+// nothing on screen is current, so a number would be a claim we cannot back.
+static bool metric_live(bool have_flag) {
+  return have_flag && !s_protocol.stale;
+}
+
+static bool target_metric_live(void) {
+  switch (s_protocol.target_kind) {
+    case TGT_POWER:      return metric_live(s_protocol.have_power);
+    case TGT_PACE:       return metric_live(s_protocol.have_pace);
+    case TGT_HEART_RATE: return metric_live(s_protocol.have_hr);
+    default:             return false;
+  }
+}
 
 // ---------- Formatting adapters ----------
 static void view_format_distance(char *out, size_t n, KEY_DISTANCE_C_TYPE meters) {
@@ -84,27 +112,59 @@ static void view_format_pace_value_only(char *out, size_t n) {
   pebble_format_pace_value_only(out, n, &s_protocol);
 }
 
-static float view_current_value_for_kind(void) {
-  return pebble_current_value_for_kind(&s_protocol);
+// The zone is read from the whole screen rather than a shape you have to
+// focus on, which is the only thing that survives a moving wrist. Without a
+// live reading there is no zone to state, so the screen stays plain.
+static GColor zone_background(void) {
+  if (s_view != VIEW_WORKOUT || !target_metric_live()) {
+    return GColorBlack;
+  }
+#ifdef PBL_COLOR
+  switch (pebble_zone(&s_protocol)) {
+    case PEBBLE_ZONE_IN:   return GColorGreen;
+    case PEBBLE_ZONE_NEAR: return GColorYellow;
+    default:               return GColorRed;
+  }
+#else
+  // No colour to spend, so the whole screen inverts when you leave the band.
+  return (pebble_zone(&s_protocol) == PEBBLE_ZONE_IN) ? GColorBlack : GColorWhite;
+#endif
 }
 
-static float view_target_value(KEY_TGT_LO_C_TYPE value) {
-  return pebble_target_value(&s_protocol, value);
+static GColor zone_foreground(void) {
+  GColor bg = zone_background();
+#ifdef PBL_COLOR
+  // Green and yellow are bright enough to take black; red is not.
+  if (gcolor_equal(bg, GColorBlack) || gcolor_equal(bg, GColorRed)) {
+    return GColorWhite;
+  }
+  return GColorBlack;
+#else
+  return gcolor_equal(bg, GColorWhite) ? GColorBlack : GColorWhite;
+#endif
 }
 
-static void view_gauge_texts(char *current_line, size_t current_n,
-                             char *target_line, size_t target_n,
-                             char *hr_line, size_t hr_n) {
-  pebble_gauge_texts(current_line, current_n, target_line, target_n,
-                     hr_line, hr_n, &s_protocol);
+// ---------- Haptics ----------
+// Zone alerts own the short and double pulses, so a step change needs a shape
+// of its own: two long buzzes nobody will confuse with either.
+static void vibe_step_change(void) {
+  static const uint32_t segments[] = { 250, 120, 250 };
+  VibePattern pattern = {
+    .durations = segments,
+    .num_segments = ARRAY_LENGTH(segments),
+  };
+  vibes_enqueue_custom_pattern(pattern);
 }
 
-static GColor view_zone_color(void) {
-  return pebble_zone_color(&s_protocol);
-}
-
-static const char *view_zone_word(GColor color) {
-  return pebble_zone_word(&s_protocol, color);
+// Finishing the workout ends on a long buzz, so it reads as a finale rather
+// than one more step.
+static void vibe_workout_complete(void) {
+  static const uint32_t segments[] = { 120, 90, 120, 90, 450 };
+  VibePattern pattern = {
+    .durations = segments,
+    .num_segments = ARRAY_LENGTH(segments),
+  };
+  vibes_enqueue_custom_pattern(pattern);
 }
 
 static void view_protocol_updated(void *context) {
@@ -114,14 +174,30 @@ static void view_protocol_updated(void *context) {
     s_protocol.units_changed = false;
   }
   if (s_protocol.step_changed) {
-    vibes_short_pulse();
+    vibe_step_change();
+    // The new step has its own band; re-baseline so the next crossing alerts.
+    s_have_zone_prev = false;
     s_protocol.step_changed = false;
   }
-  s_view = (s_protocol.target_kind == TGT_NONE) ? VIEW_FREE : VIEW_WORKOUT;
+  if (s_protocol.workout_ended) {
+    vibe_workout_complete();
+    s_protocol.workout_ended = false;
+  }
+
+  ViewMode next_view = (s_protocol.target_kind == TGT_NONE) ? VIEW_FREE : VIEW_WORKOUT;
+  if (next_view != s_view) {
+    // Entering a workout no longer raises a step change, so the zone baseline
+    // has to be dropped here or the first reading would be compared against
+    // the previous workout's band.
+    s_have_zone_prev = false;
+  }
+  s_view = next_view;
   render_all();
 }
 
 // ---------- Font helpers ----------
+// Bold is reserved for readings that change; a fixed label reads fine at
+// regular weight and takes less width, which is what the grid cells need.
 static GFont pick_font_label(int h, bool is_hero) {
   if (is_hero) {
     if (h >= 22) return fonts_get_system_font(FONT_KEY_GOTHIC_24);
@@ -134,149 +210,104 @@ static GFont pick_font_label(int h, bool is_hero) {
   }
 }
 
+// Thresholds sit just above each font's own line height. They used to demand
+// far more room than the face needs, so a 39px hero box fell back to 34px type
+// and a 19px cell fell all the way to 14px.
 static GFont pick_font_value(int h, bool is_hero, bool in_focus) {
+  (void)in_focus;
   if (is_hero) {
-    // Hero value uses big numeric fonts; push harder in focus
-    if (in_focus) {
-      if (h >= 38) return fonts_get_system_font(FONT_KEY_BITHAM_42_BOLD);
-      return fonts_get_system_font(FONT_KEY_BITHAM_34_MEDIUM_NUMBERS);
-    } else {
-      if (h >= 56) return fonts_get_system_font(FONT_KEY_BITHAM_42_BOLD);
-      return fonts_get_system_font(FONT_KEY_BITHAM_34_MEDIUM_NUMBERS);
-    }
+    // BITHAM_42_BOLD rather than a MEDIUM_NUMBERS face: the hero shows "-"
+    // when a metric is missing, which a digits-only font cannot draw.
+    if (h >= 42) return fonts_get_system_font(FONT_KEY_BITHAM_42_BOLD);
+    if (h >= 30) return fonts_get_system_font(FONT_KEY_GOTHIC_28_BOLD);
+    return fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD);
   } else {
     // Grid values
-    if (h >= 34) return fonts_get_system_font(FONT_KEY_GOTHIC_28_BOLD);
-    if (h >= 26) return fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD);
-    if (h >= 20) return fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD);
+    if (h >= 30) return fonts_get_system_font(FONT_KEY_GOTHIC_28_BOLD);
+    if (h >= 24) return fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD);
+    if (h >= 18) return fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD);
     return fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD);
   }
 }
 
-
-// ---------- Workout gauge helpers ----------
-
-// Convert [0..1] to trig angle between [start..end]
-// Pebble angles: 0=12 o'clock, 90=3 o'clock, 180=6 o'clock, 270=9 o'clock (clockwise positive)
-static int32_t angle_of_frac(int32_t start, int32_t end, float t) {
-  if (t < 0) t = 0;
-  if (t > 1) t = 1;
-  return start + (int32_t)((end - start) * t);
+static GFont pick_font_status(int W, bool bold) {
+  if (W >= WIDE_SCREEN_W) {
+    return fonts_get_system_font(bold ? FONT_KEY_GOTHIC_24_BOLD : FONT_KEY_GOTHIC_24);
+  }
+  return fonts_get_system_font(bold ? FONT_KEY_GOTHIC_18_BOLD : FONT_KEY_GOTHIC_18);
 }
 
-static inline int32_t trig_from_clock(int32_t clock_ang) {
-  // convert Pebble "clock" angle (0°=12 o'clock) to trig (0°=3 o'clock)
-  int32_t a = clock_ang - TRIG_MAX_ANGLE * 90 / 360;
-  if (a < 0) a += TRIG_MAX_ANGLE;
-  return a;
-}
+static int status_bar_height(int W){ return (W >= WIDE_SCREEN_W) ? 28 : 22; }
 
-// Current numeric value in the target domain
+// ---------- Zone bar ----------
+// A flattened gauge: the arc told you the same thing but cost 38% of the
+// screen on the 144px watches, which is what forced every other line down to
+// 14px type.
+#define ZONE_BAR_MARKER_H 6
 
-static void gauge_update_proc(Layer *layer, GContext *ctx) {
+static void zone_bar_update_proc(Layer *layer, GContext *ctx) {
   if (s_protocol.target_kind == TGT_NONE) return;
 
   GRect b = layer_get_bounds(layer);
-  // Center and size: make it larger & centered
-  const int16_t cx = b.origin.x + b.size.w/2;
-  const int16_t cy = b.origin.y + (b.size.h*3)/5;   // slightly above center so text fits below
-  const int16_t radius = (b.size.w < b.size.h ? b.size.w : b.size.h) * 48 / 100; // bigger
-  const int16_t bar = radius * 18 / 100;  // thicker
+  const GColor fg = zone_foreground();
 
-  // Lower semi-circle from 180° to 360° to avoid “sideways” look
-  const int32_t A0 = TRIG_MAX_ANGLE * 270 / 360;  // 270° (9 o'clock)
-  const int32_t A1 = TRIG_MAX_ANGLE * 450 / 360;  // 450° (wraps to 90°, 3 o'clock)
+  int16_t track_h = b.size.h - ZONE_BAR_MARKER_H - 1;
+  if (track_h < 4) track_h = 4;
+  const GRect track = GRect(b.origin.x + 2, b.origin.y, b.size.w - 4, track_h);
 
-#ifndef PBL_COLOR
-  // On B/W, simplify: background arc only lightly, needle in white/black
-  graphics_context_set_fill_color(ctx, GColorDarkGray);
-  graphics_fill_radial(ctx, GRect(cx - radius, cy - radius, 2*radius, 2*radius),
-                       GOvalScaleModeFitCircle, bar, A0, A1);
-#else
-  // Background arc (dim)
-  graphics_context_set_fill_color(ctx, GColorDarkGray);
-  graphics_fill_radial(ctx, GRect(cx - radius, cy - radius, 2*radius, 2*radius),
-                       GOvalScaleModeFitCircle, bar, A0, A1);
-#endif
+  PebbleGaugeScale scale;
+  pebble_gauge_scale(&s_protocol, &scale);
 
-  // Domain mapping around target center ±50%
-  float lo = view_target_value(s_protocol.target_lo);
-  float hi = view_target_value(s_protocol.target_hi);
-  if (hi < lo) { float tmp = lo; lo = hi; hi = tmp; }
-  float ctr = 0.5f * (lo + hi);
-  float dmin = ctr * 0.5f;
-  float dmax = ctr * 1.5f;
-  if (dmax <= dmin) { dmax = dmin + 1.0f; }
+  // Everything is drawn in the foreground colour so the bar stays legible
+  // whichever way the zone colours the screen behind it.
+  graphics_context_set_stroke_color(ctx, fg);
+  graphics_context_set_stroke_width(ctx, 1);
+  graphics_draw_rect(ctx, track);
 
-#ifdef PBL_COLOR
-  // Target band arc (green)
-  float t0 = (lo - dmin) / (dmax - dmin);
-  float t1 = (hi - dmin) / (dmax - dmin);
-  if (t0 < 0) t0 = 0;
-  if (t0 > 1) t0 = 1;
-  if (t1 < 0) t1 = 0;
-  if (t1 > 1) t1 = 1;
-  int32_t ang0 = angle_of_frac(A0, A1, t0);
-  int32_t ang1 = angle_of_frac(A0, A1, t1);
-  graphics_context_set_fill_color(ctx, GColorIslamicGreen);
-  graphics_fill_radial(ctx, GRect(cx - radius, cy - radius, 2*radius, 2*radius),
-                       GOvalScaleModeFitCircle, bar, ang0, ang1);
-#endif
+  int16_t x0 = track.origin.x +
+    (int16_t)(track.size.w * pebble_gauge_fraction(&scale, scale.low));
+  int16_t x1 = track.origin.x +
+    (int16_t)(track.size.w * pebble_gauge_fraction(&scale, scale.high));
+  if (x1 <= x0) x1 = x0 + 1;
+  graphics_context_set_fill_color(ctx, fg);
+  graphics_fill_rect(ctx, GRect(x0, track.origin.y + 2,
+                                x1 - x0, track.size.h - 4), 0, GCornerNone);
 
-  // Tick at the midpoint of the target band
-  graphics_context_set_stroke_color(ctx, GColorLightGray);
-  graphics_context_set_stroke_width(ctx, 2);
-  int32_t ang_ctr_clock = angle_of_frac(A0, A1, 0.5f * ((lo - dmin) / (dmax - dmin) + (hi - dmin) / (dmax - dmin)));
-  int32_t ang_ctr = trig_from_clock(ang_ctr_clock);
+  // No reading means no position to point at.
+  if (!target_metric_live()) return;
 
-  int16_t tx0 = cx + (int16_t)(cos_lookup(ang_ctr) * (radius - bar*3/4) / TRIG_MAX_RATIO);
-  int16_t ty0 = cy + (int16_t)(sin_lookup(ang_ctr) * (radius - bar*3/4) / TRIG_MAX_RATIO);
-  int16_t tx1 = cx + (int16_t)(cos_lookup(ang_ctr) * (radius + bar/6)   / TRIG_MAX_RATIO);
-  int16_t ty1 = cy + (int16_t)(sin_lookup(ang_ctr) * (radius + bar/6)   / TRIG_MAX_RATIO);
-  graphics_draw_line(ctx, GPoint(tx0,ty0), GPoint(tx1,ty1));
+  float t = pebble_gauge_fraction(&scale,
+                                  pebble_current_value_for_kind(&s_protocol));
+  int16_t mx = track.origin.x + (int16_t)(track.size.w * t);
+  // Pinned inside the track: a reading past either end is exactly when the
+  // marker matters most, and half a triangle off-screen reads as nothing.
+  int16_t mx_min = track.origin.x + ZONE_BAR_MARKER_H;
+  int16_t mx_max = track.origin.x + track.size.w - ZONE_BAR_MARKER_H;
+  if (mx < mx_min) mx = mx_min;
+  if (mx > mx_max) mx = mx_max;
 
-  // Needle
-  float cur = view_current_value_for_kind();
-  float tv = (cur - dmin) / (dmax - dmin);
-  if (tv < 0) tv = 0;
-  if (tv > 1) tv = 1;
-  int32_t ang = trig_from_clock(angle_of_frac(A0, A1, tv));
-
-  // Needle color
-  GColor col = view_zone_color();
-
-  // Shadow
-  graphics_context_set_stroke_color(ctx, GColorBlack);
-  graphics_context_set_stroke_width(ctx, 6);
-  int16_t x0s = cx + (int16_t)(cos_lookup(ang) * (radius - bar*3/4) / TRIG_MAX_RATIO);
-  int16_t y0s = cy + (int16_t)(sin_lookup(ang) * (radius - bar*3/4) / TRIG_MAX_RATIO);
-  int16_t x1s = cx + (int16_t)(cos_lookup(ang) * (radius + bar/8) / TRIG_MAX_RATIO);
-  int16_t y1s = cy + (int16_t)(sin_lookup(ang) * (radius + bar/8) / TRIG_MAX_RATIO);
-  graphics_draw_line(ctx, GPoint(x0s,y0s), GPoint(x1s,y1s));
-
-  // Foreground needle
-  graphics_context_set_stroke_color(ctx, col);
-  graphics_context_set_stroke_width(ctx, 4);
-  int16_t x0 = cx + (int16_t)(cos_lookup(ang) * (radius - bar*3/4) / TRIG_MAX_RATIO);
-  int16_t y0 = cy + (int16_t)(sin_lookup(ang) * (radius - bar*3/4) / TRIG_MAX_RATIO);
-  int16_t x1 = cx + (int16_t)(cos_lookup(ang) * (radius + bar/8) / TRIG_MAX_RATIO);
-  int16_t y1 = cy + (int16_t)(sin_lookup(ang) * (radius + bar/8) / TRIG_MAX_RATIO);
-  graphics_draw_line(ctx, GPoint(x0,y0), GPoint(x1,y1));
-
-  // Hub
-  graphics_context_set_fill_color(ctx, GColorWhite);
-  graphics_fill_circle(ctx, GPoint(cx, cy), 5);
+  // The marker sits below the track pointing up at it, so it can never be lost
+  // inside the filled band.
+  const int16_t marker_top = track.origin.y + track.size.h + 1;
+  for (int i = 0; i < ZONE_BAR_MARKER_H; ++i) {
+    int half = i + 1;
+    graphics_fill_rect(ctx, GRect(mx - half, marker_top + i, 2 * half + 1, 1),
+                       0, GCornerNone);
+  }
 }
-
 
 static void maybe_haptic_transition(void) {
   if (s_protocol.target_kind == TGT_NONE || !s_protocol.workout_outdoor) return;
-  float lo = view_target_value(s_protocol.target_lo);
-  float hi = view_target_value(s_protocol.target_hi);
-  if (hi < lo) { float t=lo; lo=hi; hi=t; }
+  if (!target_metric_live()) return;
 
-  float cur = view_current_value_for_kind();
-  bool in_zone_now = (cur >= lo && cur <= hi);
+  bool in_zone_now = (pebble_zone(&s_protocol) == PEBBLE_ZONE_IN);
+
+  if (!s_have_zone_prev) {
+    // First band evaluation for this step: record it without alerting.
+    s_in_zone_prev = in_zone_now;
+    s_have_zone_prev = true;
+    return;
+  }
 
   if (in_zone_now != s_in_zone_prev) {
     if (in_zone_now) vibes_short_pulse(); else vibes_double_pulse();
@@ -284,95 +315,136 @@ static void maybe_haptic_transition(void) {
   }
 }
 
-
 // ---------- Layout ----------
+static void layout_status_bar(GRect b) {
+  const int W = b.size.w;
+  const int h = status_bar_height(W);
+  const int pad = 4;
+  const int half = (W - 2 * pad) / 2;
+
+  layer_set_frame(text_layer_get_layer(s_elapsed_value),
+                  GRect(b.origin.x + pad, b.origin.y, half, h));
+  text_layer_set_font(s_elapsed_value, pick_font_status(W, /*bold=*/true));
+  text_layer_set_text_alignment(s_elapsed_value, GTextAlignmentLeft);
+
+  layer_set_frame(text_layer_get_layer(s_link_value),
+                  GRect(b.origin.x + pad + half, b.origin.y, half, h));
+  text_layer_set_font(s_link_value, pick_font_status(W, /*bold=*/false));
+  text_layer_set_text_alignment(s_link_value, GTextAlignmentRight);
+}
+
+static void layout_workout(GRect content) {
+  const int W = content.size.w;
+  const bool wide = (W >= WIDE_SCREEN_W);
+
+  const int bar_h = wide ? 20 : 16;
+  const int big_h = wide ? 56 : 44;
+  const int rem_h = wide ? 40 : 30;
+  const int line_h = wide ? 28 : 22;
+
+  int y = content.origin.y;
+
+  layer_set_frame(s_zone_bar_layer, GRect(content.origin.x, y, W, bar_h));
+  layer_set_hidden(s_zone_bar_layer, false);
+  y += bar_h + 2;
+
+  layer_set_frame(text_layer_get_layer(s_info_big),
+                  GRect(content.origin.x + 2, y, W - 4, big_h));
+  text_layer_set_font(s_info_big, fonts_get_system_font(FONT_KEY_BITHAM_42_BOLD));
+  y += big_h;
+
+  // How much of the step is left is the second thing worth reading at speed,
+  // so it gets the largest type the system fonts allow after the value.
+  layer_set_frame(text_layer_get_layer(s_info_remaining),
+                  GRect(content.origin.x + 2, y, W - 4, rem_h));
+  text_layer_set_font(s_info_remaining,
+                      fonts_get_system_font(FONT_KEY_GOTHIC_28_BOLD));
+  y += rem_h;
+
+  layer_set_frame(text_layer_get_layer(s_info_band),
+                  GRect(content.origin.x + 2, y, W - 4, line_h));
+  // The band is a number you check against the hero above it, so it is read
+  // like a value rather than like a label.
+  text_layer_set_font(s_info_band,
+    fonts_get_system_font(wide ? FONT_KEY_GOTHIC_24_BOLD : FONT_KEY_GOTHIC_18_BOLD));
+  y += line_h;
+
+  layer_set_frame(text_layer_get_layer(s_info_step_hr),
+                  GRect(content.origin.x + 2, y, W - 4, line_h));
+  text_layer_set_font(s_info_step_hr,
+    fonts_get_system_font(wide ? FONT_KEY_GOTHIC_24_BOLD : FONT_KEY_GOTHIC_18_BOLD));
+
+  TextLayer *shown[4] = { s_info_big, s_info_remaining, s_info_band, s_info_step_hr };
+  for (int i = 0; i < 4; ++i) {
+    text_layer_set_text_alignment(shown[i], GTextAlignmentCenter);
+    layer_set_hidden(text_layer_get_layer(shown[i]), false);
+  }
+
+  // Hide free-run UI
+  for (int i = 0; i < 5; ++i) {
+    layer_set_hidden(text_layer_get_layer(s_cells[i].label), true);
+    layer_set_hidden(text_layer_get_layer(s_cells[i].value), true);
+  }
+  layer_set_hidden(text_layer_get_layer(s_hero_label), true);
+  layer_set_hidden(text_layer_get_layer(s_hero_value), true);
+}
+
+static void hide_workout_layers(void) {
+  layer_set_hidden(s_zone_bar_layer, true);
+  layer_set_hidden(text_layer_get_layer(s_info_big), true);
+  layer_set_hidden(text_layer_get_layer(s_info_remaining), true);
+  layer_set_hidden(text_layer_get_layer(s_info_band), true);
+  layer_set_hidden(text_layer_get_layer(s_info_step_hr), true);
+}
+
 static void layout_layers(Window *w) {
   Layer *root = window_get_root_layer(w);
   GRect b = layer_get_unobstructed_bounds(root);
-  const int W = b.size.w;
-  const int H = b.size.h;
+
+  layout_status_bar(b);
+
+  const int bar_h = status_bar_height(b.size.w);
+  GRect content = GRect(b.origin.x, b.origin.y + bar_h,
+                        b.size.w, b.size.h - bar_h);
+
+  const int W = content.size.w;
+  const int H = content.size.h;
 
 #if PBL_ROUND
   int pad_top = 8;
   int pad_lr  = 10;
 #else
-  int pad_top = 4;
+  int pad_top = 2;
   int pad_lr  = 6;
 #endif
+
   int pad_mid = (s_focus == FOCUS_GRID) ? 4 : 6;  // tighter spacing in stacked view
-  const int pad_bot = 4;
+  const int pad_bot = 2;
 
-  // --- Workout view layout (gauge + big value + lines + underbar) ---
   if (s_view == VIEW_WORKOUT) {
-    // Gauge occupies ~60% height for more presence
-    int gh = (H * 60) / 100;
-    layer_set_frame(s_gauge_layer, GRect(b.origin.x, b.origin.y + 2, W, gh));
-
-    // Big value sits just below the gauge
-    int big_h = 44;
-    int big_y = b.origin.y + gh - big_h - 4;
-    layer_set_frame(text_layer_get_layer(s_info_big),
-                    GRect(b.origin.x + 4, big_y, W - 8, big_h));
-    text_layer_set_font(s_info_big, fonts_get_system_font(FONT_KEY_BITHAM_42_BOLD));
-    text_layer_set_text_alignment(s_info_big, GTextAlignmentCenter);
-    layer_set_hidden(text_layer_get_layer(s_info_big), false);
-
-    // Underbar just under the big value
-    int bar_h = 2;
-    int bar_y = big_y + big_h + 0;
-    layer_set_frame(s_underbar_layer, GRect(b.origin.x + 12, bar_y, W - 24, bar_h));
-    layer_set_hidden(s_underbar_layer, false);
-
-    // Three small lines
-    int line_h = 18;
-    int y = bar_y + bar_h + 2;
-
-    layer_set_frame(text_layer_get_layer(s_info_current),
-                    GRect(b.origin.x + 4, y, W - 8, line_h));
-    text_layer_set_text_alignment(s_info_current, GTextAlignmentCenter);
-    text_layer_set_font(s_info_current, fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD));
-    y += line_h;
-
-    layer_set_frame(text_layer_get_layer(s_info_target),
-                    GRect(b.origin.x + 4, y, W - 8, line_h));
-    text_layer_set_text_alignment(s_info_target, GTextAlignmentCenter);
-    text_layer_set_font(s_info_target, fonts_get_system_font(FONT_KEY_GOTHIC_18));
-    y += line_h;
-
-    layer_set_frame(text_layer_get_layer(s_info_hr),
-                    GRect(b.origin.x + 4, y, W - 8, line_h));
-    text_layer_set_text_alignment(s_info_hr, GTextAlignmentCenter);
-    text_layer_set_font(s_info_hr, fonts_get_system_font(FONT_KEY_GOTHIC_18));
-
-    // Hide free-run UI
-    for (int i = 0; i < 5; ++i) {
-      layer_set_hidden(text_layer_get_layer(s_cells[i].label), true);
-      layer_set_hidden(text_layer_get_layer(s_cells[i].value), true);
-    }
-    layer_set_hidden(text_layer_get_layer(s_hero_label), true);
-    layer_set_hidden(text_layer_get_layer(s_hero_value), true);
-
-    // Show gauge + info
-    layer_set_hidden(s_gauge_layer, false);
-    layer_set_hidden(text_layer_get_layer(s_info_current), false);
-    layer_set_hidden(text_layer_get_layer(s_info_target), false);
-    layer_set_hidden(text_layer_get_layer(s_info_hr), false);
+    layout_workout(content);
     return;
   }
 
   // --- Free run layout (hero + grid) ---
-  int hero_h = (s_focus == FOCUS_HERO_ONLY) ? (H - pad_top - pad_bot) : (H * 42) / 100;
-  if (hero_h < 52) hero_h = 52;
+  const bool wide = (W >= WIDE_SCREEN_W);
+  // Sized to what the type needs rather than to a share of the screen: at 42%
+  // the hero took height the grid needed and still could not fit its own font.
+  const int hero_label_h = wide ? 18 : 14;
+  const int hero_value_h = 44;  // BITHAM_42_BOLD plus a little air
+  int hero_h = (s_focus == FOCUS_HERO_ONLY) ? (H - pad_top - pad_bot)
+                                            : (hero_label_h + 2 + hero_value_h);
 
   // On Focus, give the digits more horizontal room
   if (s_focus == FOCUS_HERO_ONLY) {
-    pad_lr = (W >= 180) ? 6 : 4; // tighter side padding for large digits
+    pad_lr = (W >= WIDE_SCREEN_W) ? 6 : 4; // tighter side padding for large digits
   }
 
   // ---- Hero area ----
-  GRect hero = GRect(b.origin.x + pad_lr, b.origin.y + pad_top, W - 2*pad_lr, hero_h);
+  GRect hero = GRect(content.origin.x + pad_lr, content.origin.y + pad_top,
+                     W - 2*pad_lr, hero_h);
 
-  int label_h = 18;
+  int label_h = hero_label_h;
 
   // Let value take the rest; add small gap
   int value_h = hero_h - label_h - 4;
@@ -407,17 +479,7 @@ static void layout_layers(Window *w) {
       layer_set_hidden(text_layer_get_layer(s_cells[i].label), true);
       layer_set_hidden(text_layer_get_layer(s_cells[i].value), true);
     }
-    // Hide workout bits
-    layer_set_hidden(s_gauge_layer, true);
-    layer_set_hidden(text_layer_get_layer(s_info_current), true);
-    layer_set_hidden(text_layer_get_layer(s_info_target), true);
-    layer_set_hidden(text_layer_get_layer(s_info_hr), true);
-    layer_set_hidden(text_layer_get_layer(s_info_big), true);
-    layer_set_hidden(s_underbar_layer, true);
-
-    // Ensure hero is shown in HERO_ONLY
-    layer_set_hidden(text_layer_get_layer(s_hero_label), false);
-    layer_set_hidden(text_layer_get_layer(s_hero_value), false);
+    hide_workout_layers();
     return;
   }
 
@@ -432,7 +494,7 @@ static void layout_layers(Window *w) {
       (s_hero == HERO_POWER && s_cells[i].id == CELL_PWR);
 
     if (is_hero_cell) {
-      // Hide the hero’s grid twin
+      // Hide the hero's grid twin
       layer_set_hidden(text_layer_get_layer(s_cells[i].label), true);
       layer_set_hidden(text_layer_get_layer(s_cells[i].value), true);
       continue;
@@ -461,7 +523,7 @@ static void layout_layers(Window *w) {
   // Grid geometry
   int gap_hg   = 1;
   int grid_top = hero.origin.y + hero.size.h + gap_hg;
-  int grid_h   = H - (grid_top + pad_bot);
+  int grid_h   = (content.origin.y + H) - (grid_top + pad_bot);
   if (grid_h < 24) grid_h = 24;
 
   int cols = 2;
@@ -471,7 +533,7 @@ static void layout_layers(Window *w) {
   int cell_h = (grid_h - (rows - 1)*pad_mid) / rows;
   if (cell_h < 26) cell_h = 26;
 
-  int cell_label_h = 16;
+  int cell_label_h = wide ? 18 : 14;
   int cell_value_h = cell_h - cell_label_h - 2;
 
   // Hide all non-hero grid cells first, then unhide the active ones.
@@ -479,7 +541,7 @@ static void layout_layers(Window *w) {
     if ( (s_hero == HERO_HR    && s_cells[i].id == CELL_HR) ||
          (s_hero == HERO_PACE  && s_cells[i].id == CELL_PACE) ||
          (s_hero == HERO_POWER && s_cells[i].id == CELL_PWR) ) {
-      continue; // hero’s grid twin already hidden above
+      continue; // hero's grid twin already hidden above
     }
     layer_set_hidden(text_layer_get_layer(s_cells[i].label), true);
     layer_set_hidden(text_layer_get_layer(s_cells[i].value), true);
@@ -488,7 +550,7 @@ static void layout_layers(Window *w) {
   for (int i = 0; i < n; ++i) {
     int r = i / cols;
     int c = i % cols;
-    int x = b.origin.x + pad_lr + c * (cell_w + pad_mid);
+    int x = content.origin.x + pad_lr + c * (cell_w + pad_mid);
     int y = grid_top + r * (cell_h + pad_mid);
 
     layer_set_frame(text_layer_get_layer(active[i]->label),
@@ -506,13 +568,7 @@ static void layout_layers(Window *w) {
     layer_set_hidden(text_layer_get_layer(active[i]->value), false);
   }
 
-  // hide workout bits in free view
-  layer_set_hidden(s_gauge_layer, true);
-  layer_set_hidden(text_layer_get_layer(s_info_current), true);
-  layer_set_hidden(text_layer_get_layer(s_info_target), true);
-  layer_set_hidden(text_layer_get_layer(s_info_hr), true);
-  layer_set_hidden(text_layer_get_layer(s_info_big), true);
-  layer_set_hidden(s_underbar_layer, true);
+  hide_workout_layers();
 }
 
 #if PBL_API_EXISTS(unobstructed_area_service_subscribe)
@@ -523,53 +579,86 @@ static void unobstructed_change(AnimationProgress progress, void *context) {
 #endif
 
 // ---------- Rendering ----------
+// Everything on screen takes its colour from the zone, so the text stays
+// readable whichever way the background went.
+static void apply_zone_colors(void) {
+  const GColor bg = zone_background();
+  const GColor fg = zone_foreground();
+
+  if (s_win) window_set_background_color(s_win, bg);
+
+  TextLayer *all[] = {
+    s_elapsed_value, s_link_value,
+    s_hero_label, s_hero_value,
+    s_hr_label_grid, s_hr_value_grid,
+    s_pace_label, s_pace_value,
+    s_cad_label, s_cad_value,
+    s_dist_label, s_dist_value,
+    s_power_label, s_power_value,
+    s_info_big, s_info_remaining, s_info_band, s_info_step_hr,
+  };
+  for (unsigned i = 0; i < sizeof(all)/sizeof(all[0]); ++i) {
+    if (all[i]) text_layer_set_text_color(all[i], fg);
+  }
+}
+
+static void render_status_bar(void) {
+  if (s_protocol.have_elapsed) {
+    pebble_format_elapsed(s_buf_elapsed, sizeof(s_buf_elapsed), s_protocol.elapsed_s);
+  } else {
+    snprintf(s_buf_elapsed, sizeof(s_buf_elapsed), "-:--");
+  }
+  text_layer_set_text(s_elapsed_value, s_buf_elapsed);
+
+  // Silence means healthy; the slot only speaks when it has something to say.
+  // In a workout it carries the zone word, which is what tells NEAR from OUT
+  // on a black and white watch where the screen can only invert.
+  if (s_protocol.stale) {
+    text_layer_set_text(s_link_value, "NO LINK");
+  } else if (s_view == VIEW_WORKOUT && target_metric_live()) {
+    text_layer_set_text(s_link_value, pebble_zone_word(&s_protocol));
+  } else {
+    text_layer_set_text(s_link_value, "");
+  }
+}
+
 static void render_all(void) {
+  render_status_bar();
+
   // If a target is active, always render the workout view
   if (s_protocol.target_kind != TGT_NONE && s_view != VIEW_WORKOUT) {
     s_view = VIEW_WORKOUT;
   }
 
   if (s_view == VIEW_WORKOUT) {
-    // Fill persistent info buffers
-    view_gauge_texts(s_buf_current, sizeof(s_buf_current),
-                s_buf_target,  sizeof(s_buf_target),
-                s_buf_hr,      sizeof(s_buf_hr));
-
     // Big value (numeric only)
     static char s_big[12];
-    if (s_protocol.target_kind == TGT_POWER) {
-      if (s_protocol.have_power) snprintf(s_big, sizeof(s_big), "%u", (unsigned)s_protocol.last_power);
-      else snprintf(s_big, sizeof(s_big), "—");
+    if (!target_metric_live()) {
+      snprintf(s_big, sizeof(s_big), "-");
+    } else if (s_protocol.target_kind == TGT_POWER) {
+      snprintf(s_big, sizeof(s_big), "%u", (unsigned)s_protocol.last_power);
     } else if (s_protocol.target_kind == TGT_PACE) {
       view_format_pace_value_only(s_big, sizeof(s_big)); // m:ss
     } else if (s_protocol.target_kind == TGT_HEART_RATE) {
-      if (s_protocol.have_hr) snprintf(s_big, sizeof(s_big), "%u", (unsigned)s_protocol.last_hr);
-      else snprintf(s_big, sizeof(s_big), "—");
+      snprintf(s_big, sizeof(s_big), "%u", (unsigned)s_protocol.last_hr);
     } else {
-      snprintf(s_big, sizeof(s_big), "—");
+      snprintf(s_big, sizeof(s_big), "-");
     }
     text_layer_set_text(s_info_big, s_big);
 
-    // Colorize by zone
-    GColor zc = view_zone_color();
-#ifdef PBL_COLOR
-    text_layer_set_text_color(s_info_big, zc);
-    text_layer_set_text_color(s_info_current, zc);
-    text_layer_set_text_color(s_info_target, GColorWhite);
-    text_layer_set_text_color(s_info_hr,     GColorWhite);
-#endif
+    pebble_format_remaining_line(s_buf_remaining, sizeof(s_buf_remaining), &s_protocol);
+    pebble_format_band_line(s_buf_band, sizeof(s_buf_band), &s_protocol);
+    pebble_format_step_hr_line(s_buf_step_hr, sizeof(s_buf_step_hr), &s_protocol);
 
-    // Short status word
-    text_layer_set_text(s_info_current, view_zone_word(zc));
+    text_layer_set_text(s_info_remaining, s_buf_remaining);
+    text_layer_set_text(s_info_band, s_buf_band);
+    text_layer_set_text(s_info_step_hr, s_buf_step_hr);
 
-    // Target / HR lines
-    text_layer_set_text(s_info_target, s_buf_target);
-    text_layer_set_text(s_info_hr,     s_buf_hr);
+    apply_zone_colors();
 
     if (s_win) {
       layout_layers(s_win);
-      layer_mark_dirty(s_gauge_layer);
-      layer_mark_dirty(s_underbar_layer);
+      layer_mark_dirty(s_zone_bar_layer);
     }
 
     // Haptic only when crossing the band
@@ -581,40 +670,34 @@ static void render_all(void) {
   // ----- Free-run rendering -----
   static char hr_buf[20], pace_buf[16], cad_buf[16], dist_buf[20], pwr_buf[16];
 
-  if (s_protocol.have_hr)      snprintf(hr_buf, sizeof(hr_buf), "%u", (unsigned)s_protocol.last_hr);
-  else                snprintf(hr_buf, sizeof(hr_buf), "-");
+  if (metric_live(s_protocol.have_hr)) snprintf(hr_buf, sizeof(hr_buf), "%u", (unsigned)s_protocol.last_hr);
+  else                                 snprintf(hr_buf, sizeof(hr_buf), "-");
 
-  if (s_protocol.have_pace)    view_format_pace(pace_buf, sizeof(pace_buf), s_protocol.last_pace_x100);
-  else                snprintf(pace_buf, sizeof(pace_buf), "-");
+  if (metric_live(s_protocol.have_pace)) view_format_pace(pace_buf, sizeof(pace_buf), s_protocol.last_pace_x100);
+  else                                   snprintf(pace_buf, sizeof(pace_buf), "-");
 
-  if (s_protocol.have_cad)     snprintf(cad_buf, sizeof(cad_buf), "%u spm", (unsigned)s_protocol.last_cad);
-  else                snprintf(cad_buf, sizeof(cad_buf), "-");
+  if (metric_live(s_protocol.have_cad)) snprintf(cad_buf, sizeof(cad_buf), "%u", (unsigned)s_protocol.last_cad);
+  else                                  snprintf(cad_buf, sizeof(cad_buf), "-");
 
-  if (s_protocol.have_dist)    view_format_distance(dist_buf, sizeof(dist_buf), s_protocol.last_dist_m);
-  else                snprintf(dist_buf, sizeof(dist_buf), "-");
+  if (metric_live(s_protocol.have_dist)) view_format_distance(dist_buf, sizeof(dist_buf), s_protocol.last_dist_m);
+  else                                   snprintf(dist_buf, sizeof(dist_buf), "-");
 
-  if (s_protocol.have_power)   snprintf(pwr_buf, sizeof(pwr_buf), "%u", (unsigned)s_protocol.last_power);
-  else                snprintf(pwr_buf, sizeof(pwr_buf), "-");
+  if (metric_live(s_protocol.have_power)) snprintf(pwr_buf, sizeof(pwr_buf), "%u", (unsigned)s_protocol.last_power);
+  else                                    snprintf(pwr_buf, sizeof(pwr_buf), "-");
 
   // Hero content
   switch (s_hero) {
     case HERO_HR: {
-      static char hero_val[20];
-      if (s_protocol.have_hr) snprintf(hero_val, sizeof(hero_val), "%u", (unsigned)s_protocol.last_hr);
-      else           snprintf(hero_val, sizeof(hero_val), "-");
       text_layer_set_text(s_hero_label, "HEART RATE");
-      text_layer_set_text(s_hero_value, hero_val);
+      text_layer_set_text(s_hero_value, hr_buf);
       int vh = layer_get_bounds(text_layer_get_layer(s_hero_value)).size.h;
       text_layer_set_font(s_hero_value,
         pick_font_value(vh, /*is_hero=*/true, /*in_focus=*/(s_focus == FOCUS_HERO_ONLY)));
       break;
     }
     case HERO_POWER: {
-      static char hero_val[12];
-      if (s_protocol.have_power) snprintf(hero_val, sizeof(hero_val), "%u", (unsigned)s_protocol.last_power);
-      else              snprintf(hero_val, sizeof(hero_val), "-");
-      text_layer_set_text(s_hero_label, "POWER");
-      text_layer_set_text(s_hero_value, hero_val);
+      text_layer_set_text(s_hero_label, "POWER/W");
+      text_layer_set_text(s_hero_value, pwr_buf);
       int vh = layer_get_bounds(text_layer_get_layer(s_hero_value)).size.h;
       text_layer_set_font(s_hero_value,
         pick_font_value(vh, /*is_hero=*/true, /*in_focus=*/(s_focus == FOCUS_HERO_ONLY)));
@@ -623,8 +706,9 @@ static void render_all(void) {
     case HERO_PACE: {
       // Big m:ss only; unit in the label
       static char pace_val[12];
-      view_format_pace_value_only(pace_val, sizeof(pace_val)); // m:ss only
-      text_layer_set_text(s_hero_label, (s_protocol.units == PEBBLE_UNITS_METRIC) ? "PACE / KM" : "PACE / MI");
+      if (metric_live(s_protocol.have_pace)) view_format_pace_value_only(pace_val, sizeof(pace_val));
+      else                                   snprintf(pace_val, sizeof(pace_val), "-");
+      text_layer_set_text(s_hero_label, (s_protocol.units == PEBBLE_UNITS_METRIC) ? "PACE/KM" : "PACE/MI");
       text_layer_set_text(s_hero_value, pace_val);
       int vh = layer_get_bounds(text_layer_get_layer(s_hero_value)).size.h;
       text_layer_set_font(s_hero_value,
@@ -633,90 +717,93 @@ static void render_all(void) {
     }
   }
 
-  // Grid labels/values (stacked view)
+  // Grid labels/values (stacked view). Units live in the labels so the values
+  // stay pure digits at the largest size the cell allows.
   if (s_focus == FOCUS_GRID) {
-    text_layer_set_text(s_hr_label_grid, "HR");
+    text_layer_set_text(s_hr_label_grid, "HR/BPM");
     text_layer_set_text(s_hr_value_grid, hr_buf);
 
-    // Pace grid: match hero style (value m:ss, unit in label)
     static char pace_val_grid[12];
-    view_format_pace_value_only(pace_val_grid, sizeof(pace_val_grid));
-    text_layer_set_text(s_pace_label, (s_protocol.units == PEBBLE_UNITS_METRIC) ? "PACE / KM" : "PACE / MI");
+    if (metric_live(s_protocol.have_pace)) view_format_pace_value_only(pace_val_grid, sizeof(pace_val_grid));
+    else                                   snprintf(pace_val_grid, sizeof(pace_val_grid), "-");
+    text_layer_set_text(s_pace_label, (s_protocol.units == PEBBLE_UNITS_METRIC) ? "PACE/KM" : "PACE/MI");
     text_layer_set_text(s_pace_value, pace_val_grid);
 
-    text_layer_set_text(s_cad_label, "CAD");
+    text_layer_set_text(s_cad_label, "CAD/SPM");
     text_layer_set_text(s_cad_value, cad_buf);
 
-    text_layer_set_text(s_dist_label, "DIST");
-    text_layer_set_text(s_dist_value, dist_buf);
+    static char dist_val_grid[20];
+    if (metric_live(s_protocol.have_dist)) {
+      // The unit is in the label, so trim it from the value.
+      view_format_distance(dist_val_grid, sizeof(dist_val_grid), s_protocol.last_dist_m);
+      char *space = strchr(dist_val_grid, ' ');
+      if (space) *space = '\0';
+    } else {
+      snprintf(dist_val_grid, sizeof(dist_val_grid), "-");
+    }
+    text_layer_set_text(s_dist_label,
+      (s_protocol.units == PEBBLE_UNITS_METRIC) ? "DIST/KM" : "DIST/MI");
+    text_layer_set_text(s_dist_value, dist_val_grid);
 
-    text_layer_set_text(s_power_label, "PWR");
+    text_layer_set_text(s_power_label, "PWR/W");
     text_layer_set_text(s_power_value, pwr_buf);
   }
+
+  apply_zone_colors();
 
   if (s_win) layout_layers(s_win);
 }
 
-// ---------- Underbar ----------
-static void underbar_update_proc(Layer *layer, GContext *ctx) {
-  if (s_protocol.target_kind == TGT_NONE) return;
-  GRect r = layer_get_bounds(layer);
-  float lo = view_target_value(s_protocol.target_lo);
-  float hi = view_target_value(s_protocol.target_hi);
-  if (hi < lo) { float t=lo; lo=hi; hi=t; }
-
-  float ctr = 0.5f*(lo+hi);
-  float dmin = ctr*0.5f, dmax = ctr*1.5f;
-  if (dmax <= dmin) return;
-
-  float cur = view_current_value_for_kind();
-  float t = (cur - dmin) / (dmax - dmin);
-  if (t < 0) t = 0;
-  if (t > 1) t = 1;
-
-#ifdef PBL_COLOR
-  graphics_context_set_fill_color(ctx, view_zone_color());
-#else
-  graphics_context_set_fill_color(ctx, GColorWhite);
-#endif
-  int w = (int)(r.size.w * t + 0.5f);
-  graphics_fill_rect(ctx, GRect(r.origin.x, r.origin.y, w, r.size.h), 0, GCornerNone);
-}
-
-
 // ---------- Buttons ----------
+// No button vibrates: the zone alerts own the haptic channel, and a buzz that
+// also means "you pressed something" makes both unreadable on the wrist. Every
+// press changes the screen, which is feedback enough.
 static void toggle_units(void) {
   s_protocol.units = (s_protocol.units == PEBBLE_UNITS_METRIC) ? PEBBLE_UNITS_IMPERIAL : PEBBLE_UNITS_METRIC;
   persist_write_int(PKEY_UNITS, (int)s_protocol.units);
-  vibes_short_pulse();
   render_all();
 }
 
 static void next_hero(void) {
   s_hero = (HeroMetric)((s_hero + 1) % 3);
   persist_write_int(PKEY_HERO, (int)s_hero);
-  vibes_short_pulse();
   render_all();
 }
 
 static void prev_hero(void) {
   s_hero = (HeroMetric)((s_hero + 2) % 3); // wrap backwards
   persist_write_int(PKEY_HERO, (int)s_hero);
-  vibes_short_pulse();
   render_all();
 }
 
-static void up_click_handler(ClickRecognizerRef _, void *ctx)     { (void)_; (void)ctx; next_hero(); }
-static void down_click_handler(ClickRecognizerRef _, void *ctx)   { (void)_; (void)ctx; prev_hero(); }
-static void select_click_handler(ClickRecognizerRef _, void *ctx) { (void)_; (void)ctx; toggle_units(); }
-
-// Long-press SELECT toggles focus mode (Grid <-> Hero-only) — only meaningful in Free Run
-static void select_long_click_handler(ClickRecognizerRef _, void *ctx) {
-  (void)_; (void)ctx;
+static void toggle_focus(void) {
   s_focus = (s_focus == FOCUS_GRID) ? FOCUS_HERO_ONLY : FOCUS_GRID;
   persist_write_int(PKEY_FOCUS, (int)s_focus);
-  vibes_double_pulse();
   render_all();
+}
+
+// The hero and the grid only exist in free run, so in a workout these would
+// persist a setting and redraw nothing. Doing nothing at least tells the truth.
+static void up_click_handler(ClickRecognizerRef _, void *ctx) {
+  (void)_; (void)ctx;
+  if (s_view == VIEW_FREE) next_hero();
+}
+
+static void down_click_handler(ClickRecognizerRef _, void *ctx) {
+  (void)_; (void)ctx;
+  if (s_view == VIEW_FREE) prev_hero();
+}
+
+static void select_click_handler(ClickRecognizerRef _, void *ctx) {
+  (void)_; (void)ctx;
+  if (s_view == VIEW_FREE) toggle_focus();
+}
+
+// Units are a settings change that silently reinterprets every number on the
+// screen, so they need a press you cannot make by brushing a sleeve.
+static void select_long_click_handler(ClickRecognizerRef _, void *ctx) {
+  (void)_; (void)ctx;
+  toggle_units();
 }
 
 static void click_config_provider(void *ctx) {
@@ -750,6 +837,12 @@ static void win_load(Window *w) {
   window_set_background_color(w, GColorBlack);
   Layer *root = window_get_root_layer(w);
 
+  // Status bar: elapsed time and link health, shown in both views.
+  make_label(&s_elapsed_value);
+  make_label(&s_link_value);
+  layer_add_child(root, text_layer_get_layer(s_elapsed_value));
+  layer_add_child(root, text_layer_get_layer(s_link_value));
+
   // Hero
   make_label_and_value(&s_hero_label, &s_hero_value);
   layer_add_child(root, text_layer_get_layer(s_hero_label));
@@ -779,53 +872,29 @@ static void win_load(Window *w) {
     layer_add_child(root, text_layer_get_layer(all_grid[i]));
   }
 
-  // --- Workout gauge bits
-  // Gauge layer
-  s_gauge_layer = layer_create(GRect(0,0,10,10));
-  layer_set_update_proc(s_gauge_layer, gauge_update_proc);
-  layer_add_child(root, s_gauge_layer);
+  // --- Workout bits
+  s_zone_bar_layer = layer_create(GRect(0,0,10,10));
+  layer_set_update_proc(s_zone_bar_layer, zone_bar_update_proc);
+  layer_add_child(root, s_zone_bar_layer);
 
-  // Info text layers (over gauge)
-  make_label(&s_info_current);
-  make_label(&s_info_target);
-  make_label(&s_info_hr);
-
-  text_layer_set_text_alignment(s_info_current, GTextAlignmentCenter);
-  text_layer_set_text_alignment(s_info_target,  GTextAlignmentCenter);
-  text_layer_set_text_alignment(s_info_hr,      GTextAlignmentCenter);
-
-  text_layer_set_overflow_mode(s_info_current, GTextOverflowModeWordWrap);
-  text_layer_set_overflow_mode(s_info_target,  GTextOverflowModeWordWrap);
-  text_layer_set_overflow_mode(s_info_hr,      GTextOverflowModeWordWrap);
-
-#ifdef PBL_COLOR
-  text_layer_set_text_color(s_info_current, GColorWhite);
-  text_layer_set_text_color(s_info_target,  GColorWhite);
-  text_layer_set_text_color(s_info_hr,      GColorWhite);
-#endif
-
-  layer_add_child(root, text_layer_get_layer(s_info_current));
-  layer_add_child(root, text_layer_get_layer(s_info_target));
-  layer_add_child(root, text_layer_get_layer(s_info_hr));
-
-  // Big current value
   make_label(&s_info_big);
-  text_layer_set_text_alignment(s_info_big, GTextAlignmentCenter);
-  text_layer_set_font(s_info_big, fonts_get_system_font(FONT_KEY_BITHAM_42_BOLD));
-  layer_add_child(root, text_layer_get_layer(s_info_big));
+  make_label(&s_info_remaining);
+  make_label(&s_info_band);
+  make_label(&s_info_step_hr);
 
-  // Underbar
-  s_underbar_layer = layer_create(GRect(0,0,10,2));
-  layer_set_update_proc(s_underbar_layer, underbar_update_proc);
-  layer_add_child(root, s_underbar_layer);
+  TextLayer *info_lines[4] = {
+    s_info_big, s_info_remaining, s_info_band, s_info_step_hr,
+  };
+  for (int i = 0; i < 4; ++i) {
+    text_layer_set_text_alignment(info_lines[i], GTextAlignmentCenter);
+    // One line each: an overflowing line must shorten, not wrap out of sight.
+    text_layer_set_overflow_mode(info_lines[i], GTextOverflowModeTrailingEllipsis);
+    layer_add_child(root, text_layer_get_layer(info_lines[i]));
+  }
+  text_layer_set_font(s_info_big, fonts_get_system_font(FONT_KEY_BITHAM_42_BOLD));
 
   // Start hidden; layout/render will show them in workout view
-  layer_set_hidden(s_gauge_layer, true);
-  layer_set_hidden(text_layer_get_layer(s_info_current), true);
-  layer_set_hidden(text_layer_get_layer(s_info_target), true);
-  layer_set_hidden(text_layer_get_layer(s_info_hr), true);
-  layer_set_hidden(text_layer_get_layer(s_info_big), true);
-  layer_set_hidden(s_underbar_layer, true);
+  hide_workout_layers();
 
   // Start protocol after all layers exist.
   pebble_protocol_init(&s_protocol);
@@ -862,23 +931,21 @@ static void win_unload(Window *w) {
 #endif
 
   TextLayer *all[] = {
-    s_hero_label,  s_hero_value,
+    s_elapsed_value,  s_link_value,
+    s_hero_label,     s_hero_value,
     s_hr_label_grid,  s_hr_value_grid,
     s_pace_label,     s_pace_value,
     s_cad_label,      s_cad_value,
     s_dist_label,     s_dist_value,
     s_power_label,    s_power_value,
-    s_info_current,   s_info_target, s_info_hr,
-    s_info_big
+    s_info_big,       s_info_remaining,
+    s_info_band,      s_info_step_hr
   };
   for (unsigned i = 0; i < sizeof(all)/sizeof(all[0]); ++i) {
     if (all[i]) text_layer_destroy(all[i]);
   }
-  if (s_gauge_layer) layer_destroy(s_gauge_layer);
-  if (s_underbar_layer) layer_destroy(s_underbar_layer);
+  if (s_zone_bar_layer) layer_destroy(s_zone_bar_layer);
 }
-
-
 
 // ---------- App init/deinit ----------
 void view_init(void) {
