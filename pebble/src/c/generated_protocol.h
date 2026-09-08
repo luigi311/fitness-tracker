@@ -19,6 +19,10 @@ enum {
   KEY_WORKOUT_OUTDOOR = 11,
   KEY_WORKOUT_STEP = 12,
   KEY_SYNC_REQUEST = 13,
+  KEY_ELAPSED = 14,
+  KEY_WORKOUT_STEP_COUNT = 15,
+  KEY_STEP_REMAINING = 16,
+  KEY_STEP_REMAINING_KIND = 17,
 };
 
 #define KEY_HR_WIDTH 16
@@ -92,6 +96,30 @@ enum {
 #define KEY_SYNC_REQUEST_SCALE 1
 #define KEY_SYNC_REQUEST_TUPLE_VALUE(tuple) ((tuple)->value->uint8)
 #define KEY_SYNC_REQUEST_WRITE(iter, value) dict_write_uint8((iter), KEY_SYNC_REQUEST, (value))
+
+#define KEY_ELAPSED_WIDTH 32
+#define KEY_ELAPSED_C_TYPE uint32_t
+#define KEY_ELAPSED_SCALE 1
+#define KEY_ELAPSED_TUPLE_VALUE(tuple) ((tuple)->value->uint32)
+#define KEY_ELAPSED_WRITE(iter, value) dict_write_uint32((iter), KEY_ELAPSED, (value))
+
+#define KEY_WORKOUT_STEP_COUNT_WIDTH 16
+#define KEY_WORKOUT_STEP_COUNT_C_TYPE uint16_t
+#define KEY_WORKOUT_STEP_COUNT_SCALE 1
+#define KEY_WORKOUT_STEP_COUNT_TUPLE_VALUE(tuple) ((tuple)->value->uint16)
+#define KEY_WORKOUT_STEP_COUNT_WRITE(iter, value) dict_write_uint16((iter), KEY_WORKOUT_STEP_COUNT, (value))
+
+#define KEY_STEP_REMAINING_WIDTH 32
+#define KEY_STEP_REMAINING_C_TYPE uint32_t
+#define KEY_STEP_REMAINING_SCALE 1
+#define KEY_STEP_REMAINING_TUPLE_VALUE(tuple) ((tuple)->value->uint32)
+#define KEY_STEP_REMAINING_WRITE(iter, value) dict_write_uint32((iter), KEY_STEP_REMAINING, (value))
+
+#define KEY_STEP_REMAINING_KIND_WIDTH 8
+#define KEY_STEP_REMAINING_KIND_C_TYPE uint8_t
+#define KEY_STEP_REMAINING_KIND_SCALE 1
+#define KEY_STEP_REMAINING_KIND_TUPLE_VALUE(tuple) ((tuple)->value->uint8)
+#define KEY_STEP_REMAINING_KIND_WRITE(iter, value) dict_write_uint8((iter), KEY_STEP_REMAINING_KIND, (value))
 
 typedef enum {
   TGT_NONE = 0,

@@ -38,7 +38,11 @@
       "KEY_TGT_HI",
       "KEY_WORKOUT_OUTDOOR",
       "KEY_WORKOUT_STEP",
-      "KEY_SYNC_REQUEST"
+      "KEY_SYNC_REQUEST",
+      "KEY_ELAPSED",
+      "KEY_WORKOUT_STEP_COUNT",
+      "KEY_STEP_REMAINING",
+      "KEY_STEP_REMAINING_KIND"
     ]
   }
 }

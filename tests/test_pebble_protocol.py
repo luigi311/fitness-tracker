@@ -4,6 +4,7 @@ import json
 import runpy
 import threading
 from pathlib import Path
+from typing import Any
 
 import pebble_bridge.pebble_bridge as pebble_module
 import pebble_bridge.protocol as protocol_module
@@ -25,6 +26,10 @@ EXPECTED_MESSAGE_KEY_IDS = {
     "KEY_WORKOUT_OUTDOOR": 11,
     "KEY_WORKOUT_STEP": 12,
     "KEY_SYNC_REQUEST": 13,
+    "KEY_ELAPSED": 14,
+    "KEY_WORKOUT_STEP_COUNT": 15,
+    "KEY_STEP_REMAINING": 16,
+    "KEY_STEP_REMAINING_KIND": 17,
 }
 EXPECTED_MESSAGE_KEY_NAMES = [
     "RESERVED_PROTOCOL_KEY_0",
@@ -41,6 +46,10 @@ EXPECTED_MESSAGE_KEY_NAMES = [
     "KEY_WORKOUT_OUTDOOR",
     "KEY_WORKOUT_STEP",
     "KEY_SYNC_REQUEST",
+    "KEY_ELAPSED",
+    "KEY_WORKOUT_STEP_COUNT",
+    "KEY_STEP_REMAINING",
+    "KEY_STEP_REMAINING_KIND",
 ]
 
 
@@ -180,7 +189,7 @@ def test_manifest_rejects_sparse_key_id_above_repository_limit() -> None:
     ],
 )
 def test_payload_values_are_clamped_to_watch_wire_widths(
-    updates: dict[str, int | float],
+    updates: dict[str, Any],
     key: int,
     expected: int,
 ) -> None:
