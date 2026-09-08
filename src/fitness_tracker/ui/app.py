@@ -368,7 +368,10 @@ class FitnessAppUI(Adw.Application):
     ) -> None:
         """Update step integrations and optionally announce a workout step change."""
         if self.pebble_bridge:
-            self.pebble_bridge.update(workout_step=step_number - 1)
+            self.pebble_bridge.update(
+                workout_step=step_number - 1,
+                workout_step_count=step_count,
+            )
         if not announce:
             return
 

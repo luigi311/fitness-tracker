@@ -84,6 +84,34 @@ width = 8
 unit = "watch launch state sync request"
 scale = 1
 
+[[keys]]
+name = "KEY_ELAPSED"
+id = 14
+width = 32
+unit = "s"
+scale = 1
+
+[[keys]]
+name = "KEY_WORKOUT_STEP_COUNT"
+id = 15
+width = 16
+unit = "expanded step count"
+scale = 1
+
+[[keys]]
+name = "KEY_STEP_REMAINING"
+id = 16
+width = 32
+unit = "s or m left in the active step"
+scale = 1
+
+[[keys]]
+name = "KEY_STEP_REMAINING_KIND"
+id = 17
+width = 8
+unit = "0=none, 1=seconds, 2=meters"
+scale = 1
+
 [[target_kinds]]
 name = "TGT_NONE"
 value = 0

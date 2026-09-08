@@ -254,6 +254,11 @@ class TrackerPageUI:
         self._elapsed_display_s = int(elapsed_s)
         display_elapsed_s = self._elapsed_display_s
 
+        # Sent every tick, not with the metrics delta: this doubles as the
+        # watch's link heartbeat, so a quiet sensor must not silence it.
+        if self.app.pebble_bridge:
+            self.app.pebble_bridge.update(elapsed_s=display_elapsed_s)
+
         if self.session_view and self._workout_session:
             # Elapsed always updates, even while paused
             self.session_view.set_elapsed_text(
@@ -368,7 +373,11 @@ class TrackerPageUI:
         self._location_error_notified = False
 
         if self.app.pebble_bridge:
-            self.app.pebble_bridge.update(tgt_kind=TGT_NONE)
+            self.app.pebble_bridge.update(
+                tgt_kind=TGT_NONE,
+                workout_step_count=0,
+                clear_step_remaining=True,
+            )
 
         # Build page but DO NOT start timers/recording yet
         self._session_state = SessionState.PREVIEW
@@ -964,7 +973,11 @@ class TrackerPageUI:
             self.app.show_workout_complete_notification()
 
             if self.app.pebble_bridge:
-                self.app.pebble_bridge.update(tgt_kind=TGT_NONE)
+                self.app.pebble_bridge.update(
+                    tgt_kind=TGT_NONE,
+                    workout_step_count=0,
+                    clear_step_remaining=True,
+                )
 
     def _skip_step(self, direction: int) -> None:
         session = self._workout_session
@@ -996,6 +1009,7 @@ class TrackerPageUI:
             if self._session_state not in (SessionState.RUNNING, SessionState.PAUSED):
                 self.session_view.set_progress(snapshot.progress)
             self.session_view.set_step_remaining_text(format_step_remaining(snapshot))
+            self._publish_pebble_step(snapshot)
 
     # ---- helpers
     def _set_cards(
@@ -1031,6 +1045,7 @@ class TrackerPageUI:
         snapshot = session.snapshot if session else None
         if snapshot and not snapshot.completed:
             self.session_view.set_step_remaining_text(format_step_remaining(snapshot))
+            self._publish_pebble_step(snapshot)
         elif session and session.steps:
             self.session_view.set_step_remaining_text(format_step_duration(session.steps[0]))
         else:
@@ -1041,6 +1056,20 @@ class TrackerPageUI:
             return
 
         self.session_view.set_step_remaining_text(format_step_remaining(snapshot))
+        self._publish_pebble_step(snapshot)
+
+    def _publish_pebble_step(self, snapshot: WorkoutExecutionSnapshot) -> None:
+        """Mirror the active step's remaining time or distance onto the watch."""
+        bridge = self.app.pebble_bridge
+        if bridge is None:
+            return
+        # An open-ended step reports neither amount; clear_step_remaining stops
+        # the watch from holding the previous step's countdown.
+        bridge.update(
+            step_remaining_s=snapshot.remaining_seconds,
+            step_remaining_m=snapshot.remaining_meters,
+            clear_step_remaining=True,
+        )
 
     def _new_test_simulator(self) -> SensorSimulator:
         """Build a simulator from the current personal settings and HR zones."""

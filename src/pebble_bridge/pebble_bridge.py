@@ -18,10 +18,13 @@ from loguru import logger
 from pebble_bridge.protocol import (
     KEY_CADENCE,
     KEY_DISTANCE,
+    KEY_ELAPSED,
     KEY_HR,
     KEY_PACE,
     KEY_PACE_SCALE,
     KEY_POWER,
+    KEY_STEP_REMAINING,
+    KEY_STEP_REMAINING_KIND,
     KEY_SYNC_REQUEST,
     KEY_TGT_HI,
     KEY_TGT_KIND,
@@ -30,6 +33,7 @@ from pebble_bridge.protocol import (
     KEY_WIDTHS,
     KEY_WORKOUT_OUTDOOR,
     KEY_WORKOUT_STEP,
+    KEY_WORKOUT_STEP_COUNT,
     TARGET_KIND_SCALE,
     TGT_NONE,
 )
@@ -52,6 +56,12 @@ try:
 except (ImportError, RuntimeError) as _e:  # pragma: no cover - platform dependent
     HAVE_COBBLE = False
     _COBBLE_UNAVAILABLE_REASON = repr(_e)
+
+
+# KEY_STEP_REMAINING_KIND wire values; mirrored by the watchapp.
+STEP_REMAINING_NONE = 0
+STEP_REMAINING_SECONDS = 1
+STEP_REMAINING_METERS = 2
 
 
 def _clamp_wire_value(value: int, width: int) -> int:
@@ -513,12 +523,29 @@ class PebbleBridge:
         *,
         workout_outdoor: bool | None,
         workout_step: int | None,
+        workout_step_count: int | None,
+        step_remaining_s: float | None,
+        step_remaining_m: float | None,
+        clear_step_remaining: bool,
     ) -> None:
         """Apply workout-state changes; caller must hold ``self._lock``."""
         if workout_outdoor is not None:
             self._set_state(KEY_WORKOUT_OUTDOOR, int(workout_outdoor))
         if workout_step is not None:
             self._set_state(KEY_WORKOUT_STEP, int(workout_step))
+        if workout_step_count is not None:
+            self._set_state(KEY_WORKOUT_STEP_COUNT, int(workout_step_count))
+        # The watch needs both the amount and its unit, so publish them as one
+        # decision rather than letting a stale kind describe a fresh amount.
+        if step_remaining_s is not None:
+            self._set_state(KEY_STEP_REMAINING_KIND, STEP_REMAINING_SECONDS)
+            self._set_state(KEY_STEP_REMAINING, max(0, round(step_remaining_s)))
+        elif step_remaining_m is not None:
+            self._set_state(KEY_STEP_REMAINING_KIND, STEP_REMAINING_METERS)
+            self._set_state(KEY_STEP_REMAINING, max(0, round(step_remaining_m)))
+        elif clear_step_remaining:
+            self._set_state(KEY_STEP_REMAINING_KIND, STEP_REMAINING_NONE)
+            self._set_state(KEY_STEP_REMAINING, 0)
 
     def update(
         self,
@@ -534,9 +561,16 @@ class PebbleBridge:
         tgt_hi: float | None = None,
         workout_outdoor: bool | None = None,
         workout_step: int | None = None,
+        workout_step_count: int | None = None,
+        step_remaining_s: float | None = None,
+        step_remaining_m: float | None = None,
+        clear_step_remaining: bool = False,
+        elapsed_s: float | None = None,
     ) -> None:
         """Update the latest metrics (None = no change)."""
         with self._lock:
+            if elapsed_s is not None:
+                self._set_state(KEY_ELAPSED, max(0, int(elapsed_s)))
             self._update_metrics(
                 hr=hr,
                 speed_mps=speed_mps,
@@ -549,6 +583,10 @@ class PebbleBridge:
             self._update_workout_state(
                 workout_outdoor=workout_outdoor,
                 workout_step=workout_step,
+                workout_step_count=workout_step_count,
+                step_remaining_s=step_remaining_s,
+                step_remaining_m=step_remaining_m,
+                clear_step_remaining=clear_step_remaining,
             )
 
     # --- internal ---
