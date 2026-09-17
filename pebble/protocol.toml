@@ -112,6 +112,41 @@ width = 8
 unit = "0=none, 1=seconds, 2=meters"
 scale = 1
 
+[[keys]]
+name = "KEY_AVG_HR"
+id = 18
+width = 16
+unit = "bpm"
+scale = 1
+
+[[keys]]
+name = "KEY_AVG_PACE"
+id = 19
+width = 16
+unit = "m/s"
+scale = 100
+
+[[keys]]
+name = "KEY_AVG_CADENCE"
+id = 20
+width = 16
+unit = "steps/min"
+scale = 1
+
+[[keys]]
+name = "KEY_AVG_POWER"
+id = 21
+width = 16
+unit = "W"
+scale = 1
+
+[[keys]]
+name = "KEY_AVG_VALID"
+id = 22
+width = 8
+unit = "bitmask: HR=1, pace=2, cadence=4, power=8"
+scale = 1
+
 [[target_kinds]]
 name = "TGT_NONE"
 value = 0

@@ -120,7 +120,7 @@ static void inbox_received(DictionaryIterator *iter, void *context) {
   // One message can carry both the new target and the new step index, and the
   // index may still hold a value from an earlier workout, so the suppression
   // has to span the whole message rather than a single key.
-  bool was_untargeted = (state->target_kind == TGT_NONE);
+  bool was_workout = state->workout_step_count > 0 || state->target_kind != TGT_NONE;
 
   if ((tuple = dict_find(iter, KEY_UNITS))) {
     state->units = (KEY_UNITS_TUPLE_VALUE(tuple) == 1)
@@ -149,6 +149,22 @@ static void inbox_received(DictionaryIterator *iter, void *context) {
     state->last_power = KEY_POWER_TUPLE_VALUE(tuple);
     state->have_power = true;
   }
+  if ((tuple = dict_find(iter, KEY_AVG_HR))) {
+    state->average_hr = KEY_AVG_HR_TUPLE_VALUE(tuple);
+  }
+  if ((tuple = dict_find(iter, KEY_AVG_PACE))) {
+    state->average_pace_x100 = KEY_AVG_PACE_TUPLE_VALUE(tuple);
+  }
+  if ((tuple = dict_find(iter, KEY_AVG_CADENCE))) {
+    state->average_cad = KEY_AVG_CADENCE_TUPLE_VALUE(tuple);
+  }
+  if ((tuple = dict_find(iter, KEY_AVG_POWER))) {
+    state->average_power = KEY_AVG_POWER_TUPLE_VALUE(tuple);
+  }
+  if ((tuple = dict_find(iter, KEY_AVG_VALID))) {
+    state->average_valid = KEY_AVG_VALID_TUPLE_VALUE(tuple);
+  }
+
   if ((tuple = dict_find(iter, KEY_ELAPSED))) {
     state->elapsed_s = KEY_ELAPSED_TUPLE_VALUE(tuple);
     state->have_elapsed = true;
@@ -168,7 +184,7 @@ static void inbox_received(DictionaryIterator *iter, void *context) {
   }
   if ((tuple = dict_find(iter, KEY_WORKOUT_STEP))) {
     KEY_WORKOUT_STEP_C_TYPE next_step = KEY_WORKOUT_STEP_TUPLE_VALUE(tuple);
-    if (state->target_kind != TGT_NONE && state->have_workout_step &&
+    if (was_workout && state->have_workout_step &&
         next_step != state->workout_step) {
       state->step_changed = true;
     }
@@ -188,12 +204,13 @@ static void inbox_received(DictionaryIterator *iter, void *context) {
 
   // Entering a workout is a mode switch the wearer just asked for on the
   // phone; it needs no alert of its own. Only moving between steps does.
-  if (was_untargeted && state->target_kind != TGT_NONE) {
+  bool is_workout = state->workout_step_count > 0 || state->target_kind != TGT_NONE;
+  if (!was_workout && is_workout) {
     state->step_changed = false;
   }
   // Leaving one is the opposite: the workout ran itself out and the wearer is
   // back on free run without having asked for it, so say so.
-  if (!was_untargeted && state->target_kind == TGT_NONE) {
+  if (was_workout && !is_workout) {
     state->workout_ended = true;
   }
 

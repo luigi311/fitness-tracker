@@ -26,6 +26,7 @@ from fitness_tracker.core.guidance import (
     resolve_target_values,
 )
 from fitness_tracker.core.live_metrics import LiveMetrics
+from fitness_tracker.core.metric_averages import MetricAverages
 from fitness_tracker.core.sensor_status import SensorStatus
 from fitness_tracker.core.session_capabilities import SessionCapabilities
 from fitness_tracker.core.session_state import SessionState
@@ -106,6 +107,8 @@ class TrackerPageUI:
 
         # live sensor cache
         self._live_metrics = LiveMetrics()
+        self._session_averages = MetricAverages()
+        self._step_averages = MetricAverages()
         self._metrics_dirty = False
 
         # status updater
@@ -277,6 +280,7 @@ class TrackerPageUI:
         elif self.session_view:
             self.session_view.set_timer(format_duration(display_elapsed_s, DurationStyle.CLOCK))
         self._render_live_metrics()
+        self._publish_pebble_averages()
 
         return True
 
@@ -749,6 +753,22 @@ class TrackerPageUI:
                 self._update_workout_execution(elapsed_s=0, render_guidance=False)
             return
 
+        if self._session_state is SessionState.RUNNING:
+            if isinstance(sample, HeartRateSample):
+                readings = {"hr": sample.heart_rate_bpm}
+            else:
+                readings = {
+                    "speed_mps": sample.speed_mps,
+                    "cadence": (
+                        sample.cadence_spm
+                        if isinstance(sample, RunningSample)
+                        else sample.cadence_rpm
+                    ),
+                    "power_w": sample.power_watts,
+                }
+            self._session_averages.observe(**readings)
+            self._step_averages.observe(**readings)
+
         self._append_chart_sample()
         if session is not None and self._session_state is SessionState.RUNNING and distance_changed:
             snapshot = self._update_workout_execution(
@@ -816,6 +836,7 @@ class TrackerPageUI:
                 units=int(self.app.unit_system == UnitSystem.IMPERIAL),
             )
 
+        self._publish_pebble_averages()
         self._metrics_dirty = False
 
     # ---- workout guidance
@@ -865,6 +886,9 @@ class TrackerPageUI:
             workout_elapsed_s,
             session.distance_accumulator.distance_m,
         )
+        if snapshot.step_changed:
+            self._step_averages = MetricAverages()
+            self._publish_pebble_averages()
         if snapshot.step_changed and not snapshot.completed and not render_guidance:
             session.defer_step_change()
         if not snapshot.completed and render_guidance:
@@ -962,6 +986,7 @@ class TrackerPageUI:
 
         if session.execution.completed:
             self._workout_session = None
+            self._publish_pebble_averages()
             title = "Free Ride" if session_view.sport_type == SportTypesEnum.biking else "Free Run"
             session_view.set_title(title)
             session_view.set_workout_visible(visible=False)
@@ -999,6 +1024,10 @@ class TrackerPageUI:
                 elapsed_s=current_elapsed_s,
                 distance_m=session.distance_accumulator.distance_m,
             )
+
+        if snapshot.step_changed:
+            self._step_averages = MetricAverages()
+            self._publish_pebble_averages()
 
         # Reset target throttling so the destination step applies immediately.
         self._trainer_target_throttle.reset()
@@ -1057,6 +1086,12 @@ class TrackerPageUI:
 
         self.session_view.set_step_remaining_text(format_step_remaining(snapshot))
         self._publish_pebble_step(snapshot)
+
+    def _publish_pebble_averages(self) -> None:
+        """Keep phone-owned averages available for watch reconnects and page changes."""
+        if self.app.pebble_bridge:
+            averages = self._step_averages if self._workout_session else self._session_averages
+            self.app.pebble_bridge.update(averages=averages.values())
 
     def _publish_pebble_step(self, snapshot: WorkoutExecutionSnapshot) -> None:
         """Mirror the active step's remaining time or distance onto the watch."""
@@ -1246,6 +1281,9 @@ class TrackerPageUI:
 
     # ---- resets & utils
     def _reset_buffers(self) -> None:
+        self._session_averages = MetricAverages()
+        self._step_averages = MetricAverages()
+        self._publish_pebble_averages()
         self._times.clear()
         self._bpms.clear()
         self._powers.clear()

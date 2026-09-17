@@ -33,6 +33,12 @@ typedef struct {
   KEY_POWER_C_TYPE last_power;
   KEY_DISTANCE_C_TYPE last_dist_m;
 
+  KEY_AVG_VALID_C_TYPE average_valid;
+  KEY_AVG_HR_C_TYPE average_hr;
+  KEY_AVG_PACE_C_TYPE average_pace_x100;
+  KEY_AVG_CADENCE_C_TYPE average_cad;
+  KEY_AVG_POWER_C_TYPE average_power;
+
   bool have_elapsed;
   KEY_ELAPSED_C_TYPE elapsed_s;
 

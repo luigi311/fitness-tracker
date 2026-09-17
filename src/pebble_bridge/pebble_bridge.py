@@ -16,6 +16,12 @@ from libpebble2.services.appmessage import AppMessageService, Uint8, Uint16, Uin
 from loguru import logger
 
 from pebble_bridge.protocol import (
+    KEY_AVG_CADENCE,
+    KEY_AVG_HR,
+    KEY_AVG_PACE,
+    KEY_AVG_PACE_SCALE,
+    KEY_AVG_POWER,
+    KEY_AVG_VALID,
     KEY_CADENCE,
     KEY_DISTANCE,
     KEY_ELAPSED,
@@ -566,9 +572,24 @@ class PebbleBridge:
         step_remaining_m: float | None = None,
         clear_step_remaining: bool = False,
         elapsed_s: float | None = None,
+        averages: dict[str, float] | None = None,
     ) -> None:
         """Update the latest metrics (None = no change)."""
         with self._lock:
+            if averages is not None:
+                # A complete snapshot: absent readings clear validity after a step reset.
+                valid = 0
+                for bit, name, key, scale in (
+                    (1, "hr", KEY_AVG_HR, 1),
+                    (2, "speed_mps", KEY_AVG_PACE, KEY_AVG_PACE_SCALE),
+                    (4, "cadence", KEY_AVG_CADENCE, 1),
+                    (8, "power_w", KEY_AVG_POWER, 1),
+                ):
+                    value = averages.get(name)
+                    if value is not None:
+                        valid |= bit
+                    self._set_state(key, round(value * scale) if value is not None else 0)
+                self._set_state(KEY_AVG_VALID, valid)
             if elapsed_s is not None:
                 self._set_state(KEY_ELAPSED, max(0, int(elapsed_s)))
             self._update_metrics(

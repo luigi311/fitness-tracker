@@ -42,7 +42,12 @@
       "KEY_ELAPSED",
       "KEY_WORKOUT_STEP_COUNT",
       "KEY_STEP_REMAINING",
-      "KEY_STEP_REMAINING_KIND"
+      "KEY_STEP_REMAINING_KIND",
+      "KEY_AVG_HR",
+      "KEY_AVG_PACE",
+      "KEY_AVG_CADENCE",
+      "KEY_AVG_POWER",
+      "KEY_AVG_VALID"
     ]
   }
 }
