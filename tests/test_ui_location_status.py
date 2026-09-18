@@ -626,3 +626,49 @@ def test_workout_list_summaries_refresh_when_units_change(monkeypatch, tmp_path)
     view.set_unit_system(UnitSystem.IMPERIAL)
 
     view._list[0].set_subtitle.assert_called_once_with("1.00 mi")
+
+
+def test_independent_gps_and_bluetooth_samples_preserve_live_values(headless_ui_classes):
+    from bleaksport import RunningSample  # noqa: PLC0415
+    from fitness_tracker.core.live_metrics import LiveMetrics  # noqa: PLC0415
+
+    tracker_type, _, _ = headless_ui_classes
+    page = tracker_type.__new__(tracker_type)
+    page._live_metrics = LiveMetrics()
+    page._update_live_motion_metrics(
+        RunningSample(timestamp_ms=0, cadence_spm=170, power_watts=250),
+    )
+    page._update_live_motion_metrics(
+        RunningSample(timestamp_ms=1000, speed_mps=3, distance_m=10),
+    )
+    page._update_live_motion_metrics(
+        RunningSample(timestamp_ms=1500, cadence_spm=175, power_watts=260),
+    )
+    assert page._live_metrics == LiveMetrics(
+        speed_mps=3,
+        distance_m=10,
+        cadence_spm=175,
+        power_watts=260,
+    )
+    page._update_live_motion_metrics(RunningSample(timestamp_ms=2000, speed_mps=0))
+    assert page._live_metrics.speed_mps == 0
+
+
+def test_gps_metrics_keep_location_status_visible_with_routes_disabled(headless_ui_classes):
+    from fitness_tracker.core.settings import (  # noqa: PLC0415
+        AppSettings,
+        LocationSettings,
+        SensorSettings,
+    )
+
+    tracker_type, _, _ = headless_ui_classes
+    page = tracker_type.__new__(tracker_type)
+    page.app = SimpleNamespace(
+        app_settings=AppSettings(
+            location=LocationSettings(record_outdoor_routes=False),
+            running_sensors=SensorSettings(speed_source="gps"),
+        ),
+    )
+    assert page._location_enabled_for_environment(Environment.OUTDOOR, SportTypesEnum.running)
+    assert not page._location_enabled_for_environment(Environment.OUTDOOR, SportTypesEnum.biking)
+    assert not page._location_enabled_for_environment(Environment.INDOOR, SportTypesEnum.running)

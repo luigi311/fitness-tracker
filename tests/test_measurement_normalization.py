@@ -76,7 +76,7 @@ def test_zero_altitude_is_preserved(
     assert row.incline_percent == 8.0
 
 
-def test_incomplete_required_metrics_are_not_queued() -> None:
+def test_independent_sensor_metrics_preserve_missing_values() -> None:
     db = _database()
     activity_id = db.start_activity(SportTypesEnum.running, Environment.INDOOR)
 
@@ -96,8 +96,13 @@ def test_incomplete_required_metrics_are_not_queued() -> None:
         incline_percent=None,
     )
 
-    assert db._pending_run == []  # noqa: SLF001
-    assert db._pending_cyc == []  # noqa: SLF001
+    db.stop_activity(activity_id)
+    with db.Session() as session:
+        runs = session.query(RunningMetrics).order_by(RunningMetrics.timestamp_ms).all()
+        cycle = session.query(CyclingMetrics).one()
+        assert [(row.speed_mps, row.cadence_spm) for row in runs] == [(None, 170), (3.0, None)]
+        assert cycle.speed_mps is None
+        assert cycle.cadence_rpm == 80
 
 
 def test_fractional_cycling_cadence_is_queued_as_an_integer() -> None:
@@ -746,3 +751,20 @@ def test_heart_rate_contract_uses_explicit_fields() -> None:
     assert sample.timestamp_ms == 1_000
     assert sample.bpm == 142
     assert sample.rr_interval_ms == 422.5
+
+
+@pytest.mark.parametrize(
+    ("table", "column"),
+    [
+        ("running_metrics", "speed_mps"),
+        ("running_metrics", "cadence_spm"),
+        ("cycling_metrics", "speed_mps"),
+    ],
+)
+def test_partial_sensor_columns_match_nullable_metadata(table, column):
+    db = _database()
+    database_column = next(
+        item for item in inspect(db.engine).get_columns(table) if item["name"] == column
+    )
+    model = RunningMetrics if table == "running_metrics" else CyclingMetrics
+    assert database_column["nullable"] is model.__table__.c[column].nullable is True

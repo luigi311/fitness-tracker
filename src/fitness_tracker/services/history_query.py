@@ -294,14 +294,14 @@ def _running_values(
 ) -> list[tuple[int, float | None]]:
     values: list[tuple[int, float | None]] = []
     for timestamp_ms, speed_mps, cadence_spm, power_watts in points:
-        if metric == "pace":
+        if metric == "pace" and speed_mps is not None:
             pace = pace_minutes_per_unit(speed_mps, unit_system)
             value = pace if isfinite(pace) else None
-        elif metric == "speed":
+        elif metric == "speed" and speed_mps is not None:
             value = speed_in_units(speed_mps, unit_system)
         elif metric == "power":
             value = None if power_watts is None else float(power_watts)
-        elif metric == "cadence":
+        elif metric == "cadence" and cadence_spm is not None:
             value = float(display_cadence(cadence_spm, SportTypesEnum.running))
         else:
             value = None
@@ -316,7 +316,7 @@ def _cycling_values(
 ) -> list[tuple[int, float | None]]:
     values: list[tuple[int, float | None]] = []
     for timestamp_ms, speed_mps, cadence_rpm, power_watts in points:
-        if metric == "speed":
+        if metric == "speed" and speed_mps is not None:
             value = speed_in_units(speed_mps, unit_system)
         elif metric == "power":
             value = None if power_watts is None else float(power_watts)

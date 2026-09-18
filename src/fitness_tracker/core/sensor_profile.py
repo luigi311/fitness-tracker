@@ -1,6 +1,6 @@
 """Validated sensor profiles shared by the UI and recorder."""
 
-from typing import Self
+from typing import Literal, Self
 
 from pydantic import BaseModel, ConfigDict
 
@@ -15,6 +15,7 @@ class SensorProfile(BaseModel):
     hr_name: str | None = None
     hr_address: str | None = None
     trainer_supplied_hr: bool = False
+    speed_source: Literal["ble", "gps"] = "ble"
     speed_name: str | None = None
     speed_address: str | None = None
     cadence_name: str | None = None
@@ -31,6 +32,7 @@ class SensorProfile(BaseModel):
         return cls(
             hr_name=section.hr_name,
             hr_address=section.hr_address,
+            speed_source=section.speed_source,
             speed_name=section.speed_name,
             speed_address=section.speed_address,
             cadence_name=section.cadence_name,

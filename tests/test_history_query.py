@@ -119,3 +119,56 @@ def test_compare_query_honors_pre_cancelled_token() -> None:
 
     with pytest.raises(JobCancelledError):
         build_compare_chart_data(request, db.repository, token)
+
+
+@pytest.mark.parametrize("sport", [SportTypesEnum.running, SportTypesEnum.biking])
+@pytest.mark.parametrize("metric", ["speed", "cadence", "power"])
+def test_history_accepts_independent_gps_and_bluetooth_readings(sport, metric):
+    from bleaksport import CyclingSample, RunningSample  # noqa: PLC0415
+
+    db = DatabaseManager("sqlite:///:memory:")
+    activity_id = db.start_activity(sport, Environment.OUTDOOR)
+    if sport == SportTypesEnum.running:
+        db.insert_running_metrics(
+            activity_id,
+            RunningSample(timestamp_ms=1000, speed_mps=3, distance_m=3),
+            None,
+        )
+        db.insert_running_metrics(
+            activity_id,
+            RunningSample(timestamp_ms=2000, cadence_spm=85, power_watts=250),
+            None,
+        )
+    else:
+        db.insert_cycling_metrics(
+            activity_id,
+            CyclingSample(timestamp_ms=1000, speed_mps=3, distance_m=3),
+            None,
+        )
+        db.insert_cycling_metrics(
+            activity_id,
+            CyclingSample(timestamp_ms=2000, cadence_rpm=90, power_watts=250),
+            None,
+        )
+    db.stop_activity(activity_id)
+    request = CompareChartRequest(
+        generation=GENERATION,
+        metric=metric,
+        unit_system=UnitSystem.METRIC,
+        activities=(
+            CompareActivity(
+                activity_id=activity_id,
+                sport=sport,
+                start_time=datetime(2026, 1, 1, tzinfo=UTC),
+            ),
+        ),
+    )
+    data = build_compare_chart_data(request, db.repository, CancellationToken())
+    assert len(data.series) == 1
+    expected = {
+        "speed": 10.8,
+        "cadence": 170 if sport == SportTypesEnum.running else 90,
+        "power": 250,
+    }
+    # The chart extends a lone observed reading to two drawable points.
+    assert data.series[0].ys == pytest.approx((expected[metric], expected[metric]))

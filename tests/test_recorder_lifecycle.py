@@ -977,6 +977,7 @@ class RecorderLifecycleTests(unittest.TestCase):
         recorder._recording = True
         recorder.activity_id = 1
         recorder._recording_origin_ns = time.monotonic_ns()
+        recorder._persist_locations = True
         recorder._location_filter = LocationFilter(
             LocationPolicy.outdoor(),
             max_speed_mps=12.0,

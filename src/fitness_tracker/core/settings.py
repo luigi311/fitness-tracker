@@ -27,6 +27,7 @@ from fitness_tracker.core.units import UnitSystem
 
 SETTINGS_SCHEMA_VERSION = 1
 TRAINER_SUPPLIED_HR_LABEL = "Trainer supplied"
+GPS_SOURCE_LABEL = "GPS"
 _SETTINGS_RECOVERY_PREFIX = "settings.json.rejected-"
 
 
@@ -88,8 +89,9 @@ class HeartRateSource(SettingsModel):
 
 
 class SensorSettings(HeartRateSource):
-    """BLE sensors used by a non-trainer profile."""
+    """Sensor sources used by a non-trainer profile."""
 
+    speed_source: Literal["ble", "gps"] = "ble"
     speed_name: str | None = None
     speed_address: str | None = None
     cadence_name: str | None = None
