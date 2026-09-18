@@ -31,6 +31,12 @@ static PebbleProtocolState s_protocol;
 static HeroMetric s_hero = HERO_HR;
 static FocusMode s_focus = FOCUS_GRID;
 static ViewMode s_view = VIEW_FREE;
+typedef enum { PAGE_WORKOUT = 0, PAGE_LIVE = 1, PAGE_AVERAGES = 2 } Page;
+static Page s_page = PAGE_LIVE;
+
+static bool workout_active(void) {
+  return s_protocol.workout_step_count > 0 || s_protocol.target_kind != TGT_NONE;
+}
 
 static int clamp_int(int value, int minimum, int maximum) {
   if (value < minimum) return minimum;
@@ -192,12 +198,13 @@ static void view_protocol_updated(void *context) {
     s_protocol.workout_ended = false;
   }
 
-  ViewMode next_view = (s_protocol.target_kind == TGT_NONE) ? VIEW_FREE : VIEW_WORKOUT;
+  ViewMode next_view = workout_active() ? VIEW_WORKOUT : VIEW_FREE;
   if (next_view != s_view) {
     // Entering a workout no longer raises a step change, so the zone baseline
     // has to be dropped here or the first reading would be compared against
     // the previous workout's band.
     s_have_zone_prev = false;
+    s_page = (next_view == VIEW_WORKOUT) ? PAGE_WORKOUT : PAGE_LIVE;
   }
   s_view = next_view;
   render_all();
@@ -445,6 +452,21 @@ static void layout_layers(Window *w) {
   GRect content = GRect(b.origin.x, b.origin.y + bar_h,
                         b.size.w, b.size.h - bar_h);
 
+  if (s_view == VIEW_WORKOUT && s_page == PAGE_WORKOUT) {
+    layout_workout(content);
+    return;
+  }
+
+  hide_workout_layers();
+  if (s_view == VIEW_WORKOUT) {
+    const int gauge_h = content.size.w >= WIDE_SCREEN_W ? 20 : 16;
+    layer_set_frame(s_zone_bar_layer,
+                    GRect(content.origin.x, content.origin.y, content.size.w, gauge_h));
+    layer_set_hidden(s_zone_bar_layer, false);
+    content.origin.y += gauge_h + 2;
+    content.size.h -= gauge_h + 2;
+  }
+
   const int W = content.size.w;
   const int H = content.size.h;
 
@@ -459,17 +481,13 @@ static void layout_layers(Window *w) {
   int pad_mid = (s_focus == FOCUS_GRID) ? 4 : 6;  // tighter spacing in stacked view
   const int pad_bot = 2;
 
-  if (s_view == VIEW_WORKOUT) {
-    layout_workout(content);
-    return;
-  }
-
-  // --- Free run layout (hero + grid) ---
+  // --- Sensor layout (hero + grid) ---
   const bool wide = (W >= WIDE_SCREEN_W);
   // Sized to what the type needs rather than to a share of the screen: at 42%
   // the hero took height the grid needed and still could not fit its own font.
   const int hero_label_h = wide ? 18 : 14;
-  const int hero_value_h = 44;  // BITHAM_42_BOLD plus a little air
+  // Reserve enough room for both grid rows below the workout gauge.
+  const int hero_value_h = (s_view == VIEW_WORKOUT && !wide) ? 30 : 44;
   int hero_h = (s_focus == FOCUS_HERO_ONLY) ? (H - pad_top - pad_bot)
                                             : (hero_label_h + 2 + hero_value_h);
 
@@ -511,13 +529,12 @@ static void layout_layers(Window *w) {
   layer_set_hidden(text_layer_get_layer(s_hero_label), false);
   layer_set_hidden(text_layer_get_layer(s_hero_value), false);
 
-  // Focus: HERO_ONLY => hide grid and workout bits
+  // Focus: HERO_ONLY hides the grid while retaining any workout gauge.
   if (s_focus == FOCUS_HERO_ONLY) {
     for (int i = 0; i < 5; ++i) {
       layer_set_hidden(text_layer_get_layer(s_cells[i].label), true);
       layer_set_hidden(text_layer_get_layer(s_cells[i].value), true);
     }
-    hide_workout_layers();
     return;
   }
 
@@ -595,8 +612,6 @@ static void layout_layers(Window *w) {
     text_layer_set_text_alignment(active[i]->value, GTextAlignmentCenter);
     layer_set_hidden(text_layer_get_layer(active[i]->value), false);
   }
-
-  hide_workout_layers();
 }
 
 #if PBL_API_EXISTS(unobstructed_area_service_subscribe)
@@ -638,27 +653,25 @@ static void render_status_bar(void) {
   }
   text_layer_set_text(s_elapsed_value, s_buf_elapsed);
 
-  // Silence means healthy; the slot only speaks when it has something to say.
-  // In a workout it carries the zone word, which is what tells NEAR from OUT
-  // on a black and white watch where the screen can only invert.
+  static char status[24];
+  const char *zone = (s_view == VIEW_WORKOUT && target_metric_live())
+    ? pebble_zone_word(&s_protocol) : "";
   if (s_protocol.stale) {
     text_layer_set_text(s_link_value, "NO LINK");
-  } else if (s_view == VIEW_WORKOUT && target_metric_live()) {
-    text_layer_set_text(s_link_value, pebble_zone_word(&s_protocol));
   } else {
-    text_layer_set_text(s_link_value, "");
+    unsigned page = s_view == VIEW_WORKOUT ? s_page + 1 : s_page;
+    snprintf(status, sizeof(status), "%u/%u %s", page,
+             s_view == VIEW_WORKOUT ? 3 : 2, zone);
+    text_layer_set_text(s_link_value, status);
   }
 }
 
 static void render_all(void) {
   render_status_bar();
 
-  // If a target is active, always render the workout view
-  if (s_protocol.target_kind != TGT_NONE && s_view != VIEW_WORKOUT) {
-    s_view = VIEW_WORKOUT;
-  }
-
-  if (s_view == VIEW_WORKOUT) {
+  // Guidance always follows the live reading, including on the averages page.
+  maybe_haptic_transition();
+  if (s_view == VIEW_WORKOUT && s_page == PAGE_WORKOUT) {
     // Big value (numeric only)
     static char s_big[12];
     if (!target_metric_live()) {
@@ -689,36 +702,44 @@ static void render_all(void) {
       layer_mark_dirty(s_zone_bar_layer);
     }
 
-    // Haptic only when crossing the band
-    maybe_haptic_transition();
-
     return;
   }
 
-  // ----- Free-run rendering -----
-  // Units live in the labels, so every value here is bare digits.
+  // Both sensor pages use the same layout. Distance is a session total,
+  // while the four instantaneous readings can be replaced by their averages.
+  const bool averages = s_page == PAGE_AVERAGES;
+  PebbleProtocolState readings = s_protocol;
+  if (averages) {
+    readings.have_hr = (s_protocol.average_valid & 1) != 0;
+    readings.have_pace = (s_protocol.average_valid & 2) != 0;
+    readings.have_cad = (s_protocol.average_valid & 4) != 0;
+    readings.have_power = (s_protocol.average_valid & 8) != 0;
+    readings.last_hr = s_protocol.average_hr;
+    readings.last_pace_x100 = s_protocol.average_pace_x100;
+    readings.last_cad = s_protocol.average_cad;
+    readings.last_power = s_protocol.average_power;
+  }
   static char hr_buf[20], pace_buf[16], cad_buf[16], dist_buf[20], pwr_buf[16];
 
-  if (metric_live(s_protocol.have_hr)) snprintf(hr_buf, sizeof(hr_buf), "%u", (unsigned)s_protocol.last_hr);
-  else                                 snprintf(hr_buf, sizeof(hr_buf), "-");
+  if (metric_live(readings.have_hr)) snprintf(hr_buf, sizeof(hr_buf), "%u", (unsigned)readings.last_hr);
+  else snprintf(hr_buf, sizeof(hr_buf), "-");
 
-  if (metric_live(s_protocol.have_pace)) view_format_pace_value_only(pace_buf, sizeof(pace_buf));
-  else                                   snprintf(pace_buf, sizeof(pace_buf), "-");
+  if (metric_live(readings.have_pace)) pebble_format_pace_value_only(pace_buf, sizeof(pace_buf), &readings);
+  else snprintf(pace_buf, sizeof(pace_buf), "-");
 
-  if (metric_live(s_protocol.have_cad)) snprintf(cad_buf, sizeof(cad_buf), "%u", (unsigned)s_protocol.last_cad);
-  else                                  snprintf(cad_buf, sizeof(cad_buf), "-");
+  if (metric_live(readings.have_cad)) snprintf(cad_buf, sizeof(cad_buf), "%u", (unsigned)readings.last_cad);
+  else snprintf(cad_buf, sizeof(cad_buf), "-");
 
-  if (metric_live(s_protocol.have_dist)) {
-    // The unit is in the label, so trim it from the value.
-    view_format_distance(dist_buf, sizeof(dist_buf), s_protocol.last_dist_m);
+  if (metric_live(readings.have_dist)) {
+    view_format_distance(dist_buf, sizeof(dist_buf), readings.last_dist_m);
     char *space = strchr(dist_buf, ' ');
     if (space) *space = '\0';
   } else {
     snprintf(dist_buf, sizeof(dist_buf), "-");
   }
 
-  if (metric_live(s_protocol.have_power)) snprintf(pwr_buf, sizeof(pwr_buf), "%u", (unsigned)s_protocol.last_power);
-  else                                    snprintf(pwr_buf, sizeof(pwr_buf), "-");
+  if (metric_live(readings.have_power)) snprintf(pwr_buf, sizeof(pwr_buf), "%u", (unsigned)readings.last_power);
+  else snprintf(pwr_buf, sizeof(pwr_buf), "-");
 
   const bool metric = (s_protocol.units == PEBBLE_UNITS_METRIC);
   const char *hero_label = "HEART RATE";
@@ -730,6 +751,24 @@ static void render_all(void) {
     case HERO_DIST:  hero_label = metric ? "DISTANCE/KM" : "DISTANCE/MI";
                      hero_value = dist_buf; break;
     default: break;
+  }
+  static char average_label[32];
+  if (averages) {
+    const char *metric_name = "HR/BPM";
+    switch (s_hero) {
+      case HERO_PACE: metric_name = metric ? "PACE/KM" : "PACE/MI"; break;
+      case HERO_POWER: metric_name = "PWR/W"; break;
+      case HERO_CAD: metric_name = "CAD/SPM"; break;
+      case HERO_DIST: metric_name = metric ? "DIST/KM" : "DIST/MI"; break;
+      default: break;
+    }
+    snprintf(average_label, sizeof(average_label), "%s %s",
+             s_view == VIEW_WORKOUT ? "STEP AVG" : "AVG", metric_name);
+    // Distance is cumulative, not an average of odometer readings.
+    if (s_hero == HERO_DIST) {
+      snprintf(average_label, sizeof(average_label), "TOTAL %s", metric_name);
+    }
+    hero_label = average_label;
   }
   text_layer_set_text(s_hero_label, hero_label);
   text_layer_set_text(s_hero_value, hero_value);
@@ -751,7 +790,9 @@ static void render_all(void) {
     text_layer_set_text(s_cad_label, "CAD/SPM");
     text_layer_set_text(s_cad_value, cad_buf);
 
-    text_layer_set_text(s_dist_label, metric ? "DIST/KM" : "DIST/MI");
+    text_layer_set_text(s_dist_label, averages
+                        ? (metric ? "TOTAL/KM" : "TOTAL/MI")
+                        : (metric ? "DIST/KM" : "DIST/MI"));
     text_layer_set_text(s_dist_value, dist_buf);
 
     text_layer_set_text(s_power_label, "PWR/W");
@@ -760,7 +801,10 @@ static void render_all(void) {
 
   apply_zone_colors();
 
-  if (s_win) layout_layers(s_win);
+  if (s_win) {
+    layout_layers(s_win);
+    layer_mark_dirty(s_zone_bar_layer);
+  }
 }
 
 // ---------- Buttons ----------
@@ -779,33 +823,37 @@ static void next_hero(void) {
   render_all();
 }
 
-static void prev_hero(void) {
-  s_hero = (HeroMetric)((s_hero + HERO_COUNT - 1) % HERO_COUNT); // wrap backwards
-  persist_write_int(PKEY_HERO, (int)s_hero);
-  render_all();
-}
-
 static void toggle_focus(void) {
   s_focus = (s_focus == FOCUS_GRID) ? FOCUS_HERO_ONLY : FOCUS_GRID;
   persist_write_int(PKEY_FOCUS, (int)s_focus);
   render_all();
 }
 
-// The hero and the grid only exist in free run, so in a workout these would
-// persist a setting and redraw nothing. Doing nothing at least tells the truth.
+static void change_page(int direction) {
+  int first = s_view == VIEW_WORKOUT ? PAGE_WORKOUT : PAGE_LIVE;
+  int count = s_view == VIEW_WORKOUT ? 3 : 2;
+  s_page = (Page)(first + (s_page - first + direction + count) % count);
+  render_all();
+}
+
 static void up_click_handler(ClickRecognizerRef _, void *ctx) {
   (void)_; (void)ctx;
-  if (s_view == VIEW_FREE) next_hero();
+  change_page(-1);
 }
 
 static void down_click_handler(ClickRecognizerRef _, void *ctx) {
   (void)_; (void)ctx;
-  if (s_view == VIEW_FREE) prev_hero();
+  change_page(1);
 }
 
 static void select_click_handler(ClickRecognizerRef _, void *ctx) {
   (void)_; (void)ctx;
-  if (s_view == VIEW_FREE) toggle_focus();
+  if (s_page != PAGE_WORKOUT) next_hero();
+}
+
+static void up_long_click_handler(ClickRecognizerRef _, void *ctx) {
+  (void)_; (void)ctx;
+  if (s_page != PAGE_WORKOUT) toggle_focus();
 }
 
 // Units are a settings change that silently reinterprets every number on the
@@ -820,6 +868,7 @@ static void click_config_provider(void *ctx) {
   window_single_click_subscribe(BUTTON_ID_UP,     up_click_handler);
   window_single_click_subscribe(BUTTON_ID_DOWN,   down_click_handler);
   window_single_click_subscribe(BUTTON_ID_SELECT, select_click_handler);
+  window_long_click_subscribe(BUTTON_ID_UP, 500 /*ms*/, up_long_click_handler, NULL);
   window_long_click_subscribe(BUTTON_ID_SELECT, 500 /*ms*/, select_long_click_handler, NULL);
 }
 
@@ -917,7 +966,7 @@ static void win_load(Window *w) {
     s_focus = (FocusMode)clamp_int(focus, FOCUS_GRID, FOCUS_HERO_ONLY);
   }
 
-  s_view = (s_protocol.target_kind == TGT_NONE) ? VIEW_FREE : VIEW_WORKOUT;
+  s_view = workout_active() ? VIEW_WORKOUT : VIEW_FREE;
   pebble_protocol_start(&s_protocol, view_protocol_updated, NULL);
 
   render_all();

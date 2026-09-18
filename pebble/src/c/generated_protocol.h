@@ -23,6 +23,11 @@ enum {
   KEY_WORKOUT_STEP_COUNT = 15,
   KEY_STEP_REMAINING = 16,
   KEY_STEP_REMAINING_KIND = 17,
+  KEY_AVG_HR = 18,
+  KEY_AVG_PACE = 19,
+  KEY_AVG_CADENCE = 20,
+  KEY_AVG_POWER = 21,
+  KEY_AVG_VALID = 22,
 };
 
 #define KEY_HR_WIDTH 16
@@ -120,6 +125,36 @@ enum {
 #define KEY_STEP_REMAINING_KIND_SCALE 1
 #define KEY_STEP_REMAINING_KIND_TUPLE_VALUE(tuple) ((tuple)->value->uint8)
 #define KEY_STEP_REMAINING_KIND_WRITE(iter, value) dict_write_uint8((iter), KEY_STEP_REMAINING_KIND, (value))
+
+#define KEY_AVG_HR_WIDTH 16
+#define KEY_AVG_HR_C_TYPE uint16_t
+#define KEY_AVG_HR_SCALE 1
+#define KEY_AVG_HR_TUPLE_VALUE(tuple) ((tuple)->value->uint16)
+#define KEY_AVG_HR_WRITE(iter, value) dict_write_uint16((iter), KEY_AVG_HR, (value))
+
+#define KEY_AVG_PACE_WIDTH 16
+#define KEY_AVG_PACE_C_TYPE uint16_t
+#define KEY_AVG_PACE_SCALE 100
+#define KEY_AVG_PACE_TUPLE_VALUE(tuple) ((tuple)->value->uint16)
+#define KEY_AVG_PACE_WRITE(iter, value) dict_write_uint16((iter), KEY_AVG_PACE, (value))
+
+#define KEY_AVG_CADENCE_WIDTH 16
+#define KEY_AVG_CADENCE_C_TYPE uint16_t
+#define KEY_AVG_CADENCE_SCALE 1
+#define KEY_AVG_CADENCE_TUPLE_VALUE(tuple) ((tuple)->value->uint16)
+#define KEY_AVG_CADENCE_WRITE(iter, value) dict_write_uint16((iter), KEY_AVG_CADENCE, (value))
+
+#define KEY_AVG_POWER_WIDTH 16
+#define KEY_AVG_POWER_C_TYPE uint16_t
+#define KEY_AVG_POWER_SCALE 1
+#define KEY_AVG_POWER_TUPLE_VALUE(tuple) ((tuple)->value->uint16)
+#define KEY_AVG_POWER_WRITE(iter, value) dict_write_uint16((iter), KEY_AVG_POWER, (value))
+
+#define KEY_AVG_VALID_WIDTH 8
+#define KEY_AVG_VALID_C_TYPE uint8_t
+#define KEY_AVG_VALID_SCALE 1
+#define KEY_AVG_VALID_TUPLE_VALUE(tuple) ((tuple)->value->uint8)
+#define KEY_AVG_VALID_WRITE(iter, value) dict_write_uint8((iter), KEY_AVG_VALID, (value))
 
 typedef enum {
   TGT_NONE = 0,

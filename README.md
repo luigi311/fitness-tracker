@@ -10,6 +10,7 @@ An open-source application for tracking sensor data from Bluetooth Low Energy (B
   *  **Bike Smart Trainers** 
 * **Workouts**: Add workout fit/json files and visualize the workout during your session.
 * **Session Recording**: Start and stop recording sessions; data is stored locally in SQLite.
+* **Pebble Companion**: Browse workout guidance, live sensors, and step or session averages. See [watch pages and controls](pebble/README.md).
 * **History & Visualization**: Browse past activities by day, week, month, or all time with summary stats and sparkline previews.
 * **Two-Way Sync**: Push local sessions to a remote database and pull remote sessions back to your local store.
 * **Intervals.ICU**: Upload history to intervals.icu and download workouts for the week.

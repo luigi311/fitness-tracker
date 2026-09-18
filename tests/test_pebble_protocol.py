@@ -30,6 +30,11 @@ EXPECTED_MESSAGE_KEY_IDS = {
     "KEY_WORKOUT_STEP_COUNT": 15,
     "KEY_STEP_REMAINING": 16,
     "KEY_STEP_REMAINING_KIND": 17,
+    "KEY_AVG_HR": 18,
+    "KEY_AVG_PACE": 19,
+    "KEY_AVG_CADENCE": 20,
+    "KEY_AVG_POWER": 21,
+    "KEY_AVG_VALID": 22,
 }
 EXPECTED_MESSAGE_KEY_NAMES = [
     "RESERVED_PROTOCOL_KEY_0",
@@ -50,6 +55,11 @@ EXPECTED_MESSAGE_KEY_NAMES = [
     "KEY_WORKOUT_STEP_COUNT",
     "KEY_STEP_REMAINING",
     "KEY_STEP_REMAINING_KIND",
+    "KEY_AVG_HR",
+    "KEY_AVG_PACE",
+    "KEY_AVG_CADENCE",
+    "KEY_AVG_POWER",
+    "KEY_AVG_VALID",
 ]
 
 
@@ -705,3 +715,26 @@ def test_cobble_uint8_watch_launch_request_is_normalized() -> None:
     )
 
     assert bridge._full_request_id == 1
+
+
+def test_average_snapshot_clears_missing_metrics_and_survives_resync() -> None:
+    bridge, backend = _bridge_with_backend()
+    bridge.update(averages={"hr": 151.6, "speed_mps": 3.25, "cadence": 170, "power_w": 0})
+    bridge._send_once()
+    values = _sent_values(backend)
+    assert values[pebble_module.KEY_AVG_HR] == 152
+    assert values[pebble_module.KEY_AVG_PACE] == 325
+    assert values[pebble_module.KEY_AVG_VALID] == 15
+    assert values[pebble_module.KEY_AVG_POWER] == 0
+
+    bridge.update(averages={})
+    bridge._send_once()
+    assert _sent_values(backend)[pebble_module.KEY_AVG_VALID] == 0
+
+    bridge.update(averages={"hr": 120})
+    bridge._send_once()
+    bridge._send_once(full=True)
+    values = _sent_values(backend)
+    assert values[pebble_module.KEY_AVG_VALID] == 1
+    assert values[pebble_module.KEY_AVG_HR] == 120
+    assert values[pebble_module.KEY_AVG_PACE] == 0

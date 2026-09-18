@@ -461,3 +461,66 @@ def test_stop_requires_configured_hold_duration_and_cancels_on_focus_loss(
     stop.assert_called_once_with()
     assert progress.set_fraction.call_args.args == (1.0,)
     assert button.set_sensitive.call_args.args == (False,)
+
+
+def test_tracker_averages_exclude_preview_pause_and_reset_each_step(headless_ui_classes) -> None:
+    from bleaksport import HeartRateSample  # noqa: PLC0415
+    from fitness_tracker.core.live_metrics import LiveMetrics  # noqa: PLC0415
+    from fitness_tracker.core.metric_averages import MetricAverages  # noqa: PLC0415
+    from fitness_tracker.core.workout_session import WorkoutSession  # noqa: PLC0415
+    from fitness_tracker.workout_execution import (  # noqa: PLC0415
+        WorkoutDistanceAccumulator,
+        WorkoutExecution,
+    )
+    from workout_parser import TimeDuration, WorkoutStep  # noqa: PLC0415
+
+    tracker_type, _, _ = headless_ui_classes
+    page, _, _, _ = _tracker_for_location_tests(tracker_type)
+    page.session_view = None
+    page._live_metrics = LiveMetrics()
+    page._session_averages = MetricAverages()
+    page._step_averages = MetricAverages()
+    page._append_chart_sample = Mock()
+    page.app.pebble_bridge = Mock()
+    steps = [WorkoutStep(duration=TimeDuration(seconds=10)) for _ in range(3)]
+    page._workout_session = WorkoutSession(
+        workout=None,
+        steps=steps,
+        execution=WorkoutExecution(steps),
+        distance_accumulator=WorkoutDistanceAccumulator(),
+    )
+    page._update_workout_execution(0, render_guidance=False)
+
+    def heart(bpm):
+        page.on_sample(HeartRateSample(timestamp_ms=1000, heart_rate_bpm=bpm))
+
+    heart(200)  # Preview readings do not belong to the session.
+    assert page._session_averages.values() == {}
+    page._session_state = SessionState.RUNNING
+    heart(120)
+    heart(160)
+    page._session_state = SessionState.PAUSED
+    heart(200)
+    page._session_state = SessionState.RUNNING
+    page._publish_pebble_averages()
+    page.app.pebble_bridge.update.assert_called_with(averages={"hr": 140})
+
+    page._update_workout_execution(10, render_guidance=False)
+    page.app.pebble_bridge.update.assert_called_with(averages={})
+    heart(180)
+    page._publish_pebble_averages()
+    page.app.pebble_bridge.update.assert_called_with(averages={"hr": 180})
+
+    # Manual navigation resets the averaging period even when revisiting a step.
+    page._elapsed_display_s = 10
+    page._update_workout_guidance = Mock()
+    page._skip_step(-1)
+    page.app.pebble_bridge.update.assert_called_with(averages={})
+    heart(100)
+    page._publish_pebble_averages()
+    page.app.pebble_bridge.update.assert_called_with(averages={"hr": 100})
+
+    # Finishing a workout reveals the average over the entire recording.
+    page._workout_session = None
+    page._publish_pebble_averages()
+    page.app.pebble_bridge.update.assert_called_with(averages={"hr": 140})
