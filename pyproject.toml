@@ -23,7 +23,7 @@ dependencies = [
     "requests>=2.32.5",
     "sqlalchemy>=2.0.48",
     "workout-parser>=0.2.0",
-    "xdg-base-dirs>=6.0.2",
+    "xdg-base-dirs>=6.0.3",
     "alembic>=1.17.0",
 ]
 
