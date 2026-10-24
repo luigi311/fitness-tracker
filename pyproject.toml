@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=82.0.1", "wheel"]
+requires = ["setuptools>=84.1.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -37,7 +37,7 @@ dev = [
 flatpak = [
     "flatpak-pip-generator>=26.4.13",
     "req2flatpak>=0.3.1",
-    "setuptools>=82.0.1",
+    "setuptools>=84.1.0",
 ]
 
 # Define a console script entry point
