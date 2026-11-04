@@ -35,6 +35,9 @@ class _PrimarySample(Protocol):
     @property
     def altitude_m(self) -> float | None: ...
 
+    @property
+    def source(self) -> str | None: ...
+
 
 class _RunningSample(_PrimarySample, Protocol):
     @property
@@ -301,7 +304,7 @@ def _append_primary_trackpoints(
             last_timestamp_ms=last_timestamp_ms,
             last_distance_m=last_distance_m,
         )
-        if include_sensor_altitude and sample.altitude_m is not None:
+        if (include_sensor_altitude or sample.source == "gps") and sample.altitude_m is not None:
             SubElement(trackpoint, "AltitudeMeters").text = f"{float(sample.altitude_m):.3f}"
         SubElement(trackpoint, "DistanceMeters").text = f"{distance_m:.3f}"
         last_timestamp_ms = timestamp_ms
@@ -474,6 +477,8 @@ def _append_timeline_altitude(
             altitude_m = indoor_base_altitude_m + sensor_altitude_m
     else:
         altitude_m = event.location.fix.altitude_m if event.location is not None else None
+        if altitude_m is None and event.sensor is not None and event.sensor.source == "gps":
+            altitude_m = event.sensor.altitude_m
     if altitude_m is not None:
         SubElement(trackpoint, "AltitudeMeters").text = f"{float(altitude_m):.3f}"
 

@@ -1,6 +1,6 @@
 """Persistence boundary used by hardware recording components."""
 
-from typing import Protocol
+from typing import Literal, Protocol
 
 from bleaksport.models import CyclingSample, RunningSample, TrainerSample
 
@@ -32,6 +32,8 @@ class RecordingStore(Protocol):
         activity_id: int,
         sample: RunningSample | TrainerSample,
         incline_percent: float | None,
+        *,
+        source: Literal["ble", "gps"] = "ble",
     ) -> None:
         """Persist one normalized running measurement."""
 
@@ -40,6 +42,8 @@ class RecordingStore(Protocol):
         activity_id: int,
         sample: CyclingSample | TrainerSample,
         incline_percent: float | None,
+        *,
+        source: Literal["ble", "gps"] = "ble",
     ) -> None:
         """Persist one normalized cycling measurement."""
 

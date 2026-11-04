@@ -573,6 +573,8 @@ class TrackerPageUI:
         if self._workout_session:
             self._workout_session.distance_accumulator.reset()
         self._session_state = SessionState.RUNNING
+        self._live_metrics = LiveMetrics()
+        self._metrics_dirty = True
         self._start_monotonic = time.monotonic()
         self._elapsed_display_s = 0
         self._last_ms = 0
@@ -1276,6 +1278,15 @@ class TrackerPageUI:
             dist_ok = bool(rec.distance_connected)
 
         self._sync_workout_distance_source(connected=dist_ok)
+        if not speed_ok and self._live_metrics.speed_mps:
+            self._live_metrics.speed_mps = 0.0
+            self._metrics_dirty = True
+        if not cad_ok and self._live_metrics.cadence_spm:
+            self._live_metrics.cadence_spm = 0
+            self._metrics_dirty = True
+        if not pow_ok and self._live_metrics.power_watts:
+            self._live_metrics.power_watts = 0
+            self._metrics_dirty = True
         status = SensorStatus(
             hr=hr_ok,
             speed=speed_ok,
@@ -1304,6 +1315,8 @@ class TrackerPageUI:
 
     # ---- resets & utils
     def _reset_buffers(self) -> None:
+        self._live_metrics = LiveMetrics()
+        self._metrics_dirty = True
         self._session_averages = MetricAverages()
         self._step_averages = MetricAverages()
         self._publish_pebble_averages()

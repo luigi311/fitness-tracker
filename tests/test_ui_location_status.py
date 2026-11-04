@@ -128,6 +128,13 @@ class _HeadlessCombo(_HeadlessWidget):
     def append_text(self, value: str) -> None:
         self.items.append(value)
 
+    def remove_all(self) -> None:
+        self.items.clear()
+        self.active_index = -1
+
+    def get_active_text(self) -> str | None:
+        return self.items[self.active_index] if self.active_index >= 0 else None
+
     def set_active(self, index: int) -> None:  # ty:ignore[invalid-method-override]
         self.active_index = index
 
@@ -672,3 +679,115 @@ def test_gps_metrics_keep_location_status_visible_with_routes_disabled(headless_
     assert page._location_enabled_for_environment(Environment.OUTDOOR, SportTypesEnum.running)
     assert not page._location_enabled_for_environment(Environment.OUTDOOR, SportTypesEnum.biking)
     assert not page._location_enabled_for_environment(Environment.INDOOR, SportTypesEnum.running)
+
+
+def test_new_session_drops_old_values_before_merging_gps_samples(headless_ui_classes):
+    from collections import deque  # noqa: PLC0415
+
+    from bleaksport import RunningSample  # noqa: PLC0415
+    from fitness_tracker.core.live_metrics import LiveMetrics  # noqa: PLC0415
+
+    tracker_type, _, _ = headless_ui_classes
+    page, _, _, _ = _tracker_for_location_tests(tracker_type)
+    page._live_metrics = LiveMetrics(
+        heart_rate_bpm=150,
+        speed_mps=3,
+        cadence_spm=90,
+        distance_m=5000,
+        power_watts=250,
+    )
+    page._times, page._bpms, page._powers = deque([1000]), deque([150]), deque([250])
+
+    page._reset_buffers()
+    page._update_live_motion_metrics(RunningSample(timestamp_ms=0, speed_mps=2, distance_m=0))
+
+    assert page._live_metrics == LiveMetrics(speed_mps=2)
+    assert page._metrics_dirty
+    assert not page._times
+
+
+def test_start_discards_preview_readings(headless_ui_classes):
+    from fitness_tracker.core.live_metrics import LiveMetrics  # noqa: PLC0415
+
+    tracker_type, _, _ = headless_ui_classes
+    page, _, _, _ = _tracker_for_location_tests(tracker_type)
+    page._live_metrics = LiveMetrics(speed_mps=3, cadence_spm=90, distance_m=5000, power_watts=250)
+
+    page._begin_run_now()
+
+    assert page._live_metrics == LiveMetrics()
+    assert page._metrics_dirty
+
+
+@pytest.mark.parametrize(
+    ("motion_connected", "expected_speed"),
+    [(False, 0), (True, 3)],
+)
+def test_sensor_disconnects_clear_values_but_retain_total_distance(
+    headless_ui_classes,
+    motion_connected,
+    expected_speed,
+):
+    from fitness_tracker.core.live_metrics import LiveMetrics  # noqa: PLC0415
+
+    tracker_type, _, _ = headless_ui_classes
+    page, _, _, _ = _tracker_for_location_tests(tracker_type)
+    page.app.test_mode = False
+    page.app.recorder = Mock(
+        hr_connected=False,
+        speed_connected=motion_connected,
+        cadence_connected=False,
+        power_connected=False,
+        distance_connected=motion_connected,
+    )
+    page.session_view = Mock()
+    page._live_metrics = LiveMetrics(speed_mps=3, cadence_spm=170, distance_m=10, power_watts=250)
+    page._metrics_dirty = False
+
+    page.update_metric_statuses()
+
+    assert page._live_metrics == LiveMetrics(speed_mps=expected_speed, distance_m=10)
+    assert page._metrics_dirty
+
+
+def test_gps_selector_keeps_selection_and_empty_scan_feedback(headless_ui_classes):
+    from fitness_tracker.core.settings import SensorSettings  # noqa: PLC0415
+
+    _, location_section, _ = headless_ui_classes
+    classes = location_section.__init__.__globals__
+    spec = classes["SensorRowSpec"](
+        key="speed",
+        title="Speed",
+        scan_label="Scan",
+        scanner=lambda: None,
+        scan_group="sensors",
+        settings_field="speed_name",
+    )
+    section = classes["SensorSection"](
+        title="Running",
+        subtitle="",
+        settings=SensorSettings(speed_source="gps"),
+        specs=(spec,),
+    )
+    combo, row = _HeadlessCombo(), _HeadlessWidget()
+    section.rows["speed"] = classes["SensorRowWidgets"](
+        row=row,
+        spinner=Mock(),
+        combo=combo,
+        scan_button=Mock(),
+    )
+    section.load()
+    assert combo.get_active_text() == "GPS"
+
+    section.apply_scan_result("sensors", {}, "No speed devices found")
+
+    assert row.subtitle == "No speed devices found"
+    assert combo.get_active_text() == "GPS"
+    assert section.settings_data()["speed_source"] == "gps"
+
+    section.apply_scan_result("sensors", {"Footpod": "AA"}, "No speed devices found")
+    combo.set_active(combo.items.index("Footpod"))
+
+    values = section.settings_data()
+    assert values["speed_source"] == "ble"
+    assert values["speed_address"] == "AA"

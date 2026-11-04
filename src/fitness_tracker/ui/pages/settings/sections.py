@@ -138,11 +138,11 @@ class SensorSection:
         """Return rows subscribed to one scanner group."""
         return tuple(self.rows[spec.key] for spec in self.specs if spec.scan_group == scan_group)
 
-    def _source_names(self, spec: SensorRowSpec, names: list[str]) -> list[str]:
+    def _source_names(self, spec: SensorRowSpec, names: list[str], status: str = "") -> list[str]:
         """Offer GPS only for the outdoor-capable speed selector."""
         if isinstance(self.settings, SensorSettings) and spec.settings_field == "speed_name":
             self.rows[spec.key].row.set_subtitle(
-                "GPS provides outdoor speed, pace, distance and altitude.",
+                status or "GPS provides outdoor speed, pace, distance and altitude.",
             )
             return [GPS_SOURCE_LABEL, *[name for name in names if name != GPS_SOURCE_LABEL]]
         return names
@@ -195,7 +195,7 @@ class SensorSection:
                 empty_message if isinstance(empty_message, str) else empty_message.get(spec.key, "")
             )
             row.row.set_subtitle("" if mapping else status)
-            names = self._source_names(spec, names)
+            names = self._source_names(spec, names, status if not mapping else "")
             active_name = row.combo.get_active_text() or self._active_name(spec)
             self._set_combo_items_with_none(row.combo, names, active_name)
             self.maps[spec.key] = mapping

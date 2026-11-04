@@ -768,3 +768,40 @@ def test_partial_sensor_columns_match_nullable_metadata(table, column):
     )
     model = RunningMetrics if table == "running_metrics" else CyclingMetrics
     assert database_column["nullable"] is model.__table__.c[column].nullable is True
+
+
+def test_metric_source_migration_preserves_legacy_rows_and_nullable_measurements(tmp_path):
+    database_url = f"sqlite:///{tmp_path / 'metric-sources.db'}"
+    db = DatabaseManager(database_url)
+    activity_id = db.start_activity(SportTypesEnum.running, Environment.OUTDOOR)
+    with db.Session() as session:
+        session.add(RunningMetrics(activity_id=activity_id, timestamp_ms=1000, altitude_m=0.0))
+        session.commit()
+    db.engine.dispose()
+
+    engine = create_engine(database_url)
+    with engine.connect() as connection:
+        connection.exec_driver_sql("PRAGMA foreign_keys=OFF")
+        connection.commit()
+        config = database_module._build_alembic_config()  # noqa: SLF001
+        config.attributes["connection"] = connection
+        with connection.begin():
+            command.downgrade(config, "0007")
+            assert "source" not in {
+                column["name"] for column in inspect(connection).get_columns("running_metrics")
+            }
+            command.upgrade(config, "head")
+    engine.dispose()
+
+    migrated = DatabaseManager(database_url)
+    with migrated.Session() as session:
+        row = session.query(RunningMetrics).one()
+        assert row.source is None
+        assert row.speed_mps is None
+        assert row.cadence_spm is None
+        assert row.altitude_m == 0.0
+    for table in ("running_metrics", "cycling_metrics"):
+        column = next(
+            item for item in inspect(migrated.engine).get_columns(table) if item["name"] == "source"
+        )
+        assert column["nullable"]

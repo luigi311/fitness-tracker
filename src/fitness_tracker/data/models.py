@@ -133,6 +133,7 @@ class RunningMetrics(Base):
     power_watts: Mapped[float | None] = mapped_column(Float)
     incline_percent: Mapped[float | None] = mapped_column(Float)
     altitude_m: Mapped[float | None] = mapped_column(Float)
+    source: Mapped[str | None] = mapped_column(String(16))
 
     activity: Mapped[Activity] = relationship(back_populates="running_metrics")
 
@@ -161,6 +162,7 @@ class CyclingMetrics(Base):
     power_watts: Mapped[float | None] = mapped_column(Float)
     incline_percent: Mapped[float | None] = mapped_column(Float)
     altitude_m: Mapped[float | None] = mapped_column(Float)
+    source: Mapped[str | None] = mapped_column(String(16))
 
     activity: Mapped[Activity] = relationship(back_populates="cycling_metrics")
 

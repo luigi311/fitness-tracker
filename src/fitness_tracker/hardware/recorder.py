@@ -11,6 +11,7 @@ from enum import StrEnum
 from typing import TYPE_CHECKING
 
 from bleak import BleakScanner
+from bleak.exc import BleakError
 from bleaksport import (
     CyclingMux,
     HeartRateMux,
@@ -229,6 +230,7 @@ class Recorder:
         self._sample_processor = SampleProcessor(weight_kg=weight_kg)
 
         # Connection status
+        self._link_roles: dict[str, dict[str, bool]] = {}
         self.hr_connected = False
         self._sensor_speed_connected = False
         self._sensor_cadence_connected = False
@@ -388,6 +390,7 @@ class Recorder:
             self._gps_metrics = (
                 GpsMetricProcessor(max_speed_mps_for_sport(self.sport_type)) if use_gps else None
             )
+            self._refresh_metric_connection_state()
             self._persist_locations = persist_locations
             self._recording_origin_ns = time.monotonic_ns()
             self._cancel_location_timeout_locked()
@@ -440,6 +443,7 @@ class Recorder:
                 self.location_policy = None
                 self._clear_gps_signal_locked()
                 self._gps_metrics = None
+                self._refresh_metric_connection_state()
                 stop_location = True
                 self._finalizing_activity_id = self.activity_id
 
@@ -886,7 +890,7 @@ class Recorder:
                 timestamp_ms = relative_timestamp_ms(self._recording_origin_ns)
                 accepted = self._location_filter.accept(fix, timestamp_ms)
                 if accepted is None:
-                    logger.bind(data={"timestamp_ms": timestamp_ms, "fix": fix}).trace(
+                    logger.bind(data={"timestamp_ms": timestamp_ms}).trace(
                         "Rejected location fix by policy",
                     )
                     return
@@ -962,7 +966,8 @@ class Recorder:
         metrics = self._gps_metrics.process(fix, timestamp_ms)
         if metrics is None:
             return None
-        self._gps_speed_connected = metrics.speed_mps is not None
+        if metrics.speed_mps is not None:
+            self._gps_speed_connected = True
         self._gps_distance_connected = True
         self._refresh_metric_connection_state()
         if self._gps_timeout_handle is not None:
@@ -984,9 +989,19 @@ class Recorder:
     def _persist_gps_sample(self, activity_id: int, sample: RunningSample | CyclingSample) -> None:
         """Store GPS metrics without applying BLE distance or incline normalization."""
         if isinstance(sample, RunningSample):
-            self.store.insert_running_metrics(activity_id, sample, incline_percent=None)
+            self.store.insert_running_metrics(
+                activity_id,
+                sample,
+                incline_percent=None,
+                source="gps",
+            )
         else:
-            self.store.insert_cycling_metrics(activity_id, sample, incline_percent=None)
+            self.store.insert_cycling_metrics(
+                activity_id,
+                sample,
+                incline_percent=None,
+                source="gps",
+            )
 
     def _wait_for_location_stop(self, deadline: float) -> bool:
         """Wait for a scheduled source stop without blocking its own event loop."""
@@ -1073,6 +1088,17 @@ class Recorder:
             else:
                 return
 
+    def _on_recording_clock[T: HeartRateSample | RunningSample | CyclingSample | TrainerSample](
+        self,
+        sample: T,
+    ) -> T:
+        """Use one monotonic recording origin for all sources while holding the lock."""
+        if self._recording_origin_ns is None:
+            return sample
+        return sample.model_copy(
+            update={"timestamp_ms": relative_timestamp_ms(self._recording_origin_ns)},
+        )
+
     # --- HR handling ---
     def _handle_hr_sample(
         self,
@@ -1090,6 +1116,7 @@ class Recorder:
             if expected_generation is not None and expected_generation != generation:
                 return
             cleaned_sample, normalized = self._sample_processor.clean_heart_rate(sample)
+            cleaned_sample = self._on_recording_clock(cleaned_sample)
         self._dispatch_sample(cleaned_sample)
 
         logger.bind(data=cleaned_sample).trace("Processed heart rate sample")
@@ -1114,7 +1141,8 @@ class Recorder:
                 sample,
                 trainer_connected=self.trainer_connected,
             )
-            if self.profile.speed_source == "gps":
+            cleaned_sample = self._on_recording_clock(cleaned_sample)
+            if self._gps_metrics is not None:
                 cleaned_sample = cleaned_sample.model_copy(
                     update={"speed_mps": None, "distance_m": None, "altitude_m": None},
                 )
@@ -1138,7 +1166,8 @@ class Recorder:
         with self._recording_lock:
             generation = self._recording_generation
             cleaned_sample = self._sample_processor.process_cycling(sample)
-            if self.profile.speed_source == "gps":
+            cleaned_sample = self._on_recording_clock(cleaned_sample)
+            if self._gps_metrics is not None:
                 cleaned_sample = cleaned_sample.model_copy(
                     update={"speed_mps": None, "distance_m": None, "altitude_m": None},
                 )
@@ -1162,6 +1191,7 @@ class Recorder:
         with self._recording_lock:
             generation = self._recording_generation
             cleaned_sample = self._sample_processor.process_trainer(sample)
+            cleaned_sample = self._on_recording_clock(cleaned_sample)
             self.trainer.handle_sample(sample)
             has_embedded_heart_rate = self.trainer.handle_embedded_heart_rate(
                 sample.heart_rate_bpm,
@@ -1297,7 +1327,14 @@ class Recorder:
 
         # Scan for BLE devices upfront, call bleaksport with found devices to speed up connection
         if any(sensor.configured for sensor in self._configured_sensors.values()):
-            self.devices = await BleakScanner.discover(timeout=5.0)
+            try:
+                self.devices = await BleakScanner.discover(timeout=5.0)
+            except BleakError as error:
+                logger.warning(
+                    "Bluetooth scan failed; continuing recorder without results: {}",
+                    error,
+                )
+                self.devices = []
 
         logger.debug(f"BLE scan complete, found {len(self.devices)} devices")
         logger.bind(data=self.devices).trace("Discovered BLE devices")
@@ -1360,25 +1397,37 @@ class Recorder:
             await mux.start()
         finally:
             logger.debug("Cleaning up speed connections")
-            await mux.stop()
-            self._speed_mux = None
-            self._sensor_speed_connected = False
-            self._sensor_cadence_connected = False
-            self._sensor_power_connected = False
-            self._sensor_distance_connected = False
-            self._refresh_metric_connection_state()
+            try:
+                await mux.stop()
+            finally:
+                self._speed_mux = None
+                self._link_roles.clear()
+                self._sensor_speed_connected = False
+                self._sensor_cadence_connected = False
+                self._sensor_power_connected = False
+                self._sensor_distance_connected = False
+                self._refresh_metric_connection_state()
 
     def _on_running_link(
         self,
-        _addr: str,
+        addr: str,
         connected: bool,  # noqa: FBT001 - BLE link callback supplies positional state
         roles: dict[str, bool],
     ) -> None:
-        # RSCS drives both speed & cadence cards.
-        self._sensor_speed_connected = connected and roles.get("rsc", False)
-        self._sensor_cadence_connected = connected and roles.get("rsc", False)
-        self._sensor_distance_connected = connected and roles.get("rsc", False)
-        self._sensor_power_connected = connected and roles.get("cps", False)
+        if connected:
+            self._link_roles[addr] = dict(roles)
+        else:
+            self._link_roles.pop(addr, None)
+        motion = any(
+            active.get("rsc", False) or active.get("csc", False)
+            for active in self._link_roles.values()
+        )
+        self._sensor_speed_connected = motion
+        self._sensor_cadence_connected = motion
+        self._sensor_distance_connected = motion
+        self._sensor_power_connected = any(
+            active.get("cps", False) for active in self._link_roles.values()
+        )
         self._refresh_metric_connection_state()
 
     async def _trainer_loop(self) -> None:
@@ -1427,7 +1476,7 @@ class Recorder:
         self.cadence_connected = self._sensor_cadence_connected or self._trainer_link_connected
         self.power_connected = self._sensor_power_connected or self._trainer_link_connected
         self.distance_connected = self._sensor_distance_connected or self._trainer_link_connected
-        if self.profile.speed_source == "gps":
+        if self._gps_metrics is not None:
             self.speed_connected = self._gps_speed_connected
             self.distance_connected = self._gps_distance_connected
 

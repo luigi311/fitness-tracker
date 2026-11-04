@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from functools import cache, partial
 from pathlib import Path
 from threading import Lock
-from typing import Any, TypedDict
+from typing import Any, Literal, TypedDict
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
@@ -112,6 +112,7 @@ class _RunningMetricsValues(TypedDict):
     power_watts: float | None
     incline_percent: float | None
     altitude_m: float | None
+    source: str
 
 
 class _CyclingMetricsValues(TypedDict):
@@ -125,6 +126,7 @@ class _CyclingMetricsValues(TypedDict):
     power_watts: float | None
     incline_percent: float | None
     altitude_m: float | None
+    source: str
 
 
 def _build_alembic_config() -> Config:
@@ -308,6 +310,8 @@ class DatabaseManager:
         activity_id: int,
         sample: RunningSample | TrainerSample,
         incline_percent: float | None,
+        *,
+        source: Literal["ble", "gps"] = "ble",
     ) -> None:
         """Queue a running or trainer sample for batched persistence."""
         if all(
@@ -333,6 +337,7 @@ class DatabaseManager:
             "power_watts": sample.power_watts,
             "incline_percent": incline_percent,
             "altitude_m": sample.altitude_m,
+            "source": source,
         }
         with self._pending_lock:
             self._pending_run.append(rm)
@@ -344,6 +349,8 @@ class DatabaseManager:
         activity_id: int,
         sample: CyclingSample | TrainerSample,
         incline_percent: float | None,
+        *,
+        source: Literal["ble", "gps"] = "ble",
     ) -> None:
         """Queue a cycling or trainer sample for batched persistence."""
         if all(
@@ -367,6 +374,7 @@ class DatabaseManager:
             "power_watts": sample.power_watts,
             "incline_percent": incline_percent,
             "altitude_m": sample.altitude_m,
+            "source": source,
         }
         with self._pending_lock:
             self._pending_cyc.append(cm)
