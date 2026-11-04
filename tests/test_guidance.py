@@ -1,3 +1,4 @@
+import pytest
 from fitness_tracker.core.guidance import (
     PebbleTargetKind,
     TargetDomain,
@@ -101,6 +102,30 @@ def test_ramp_pace_guidance_uses_progress_and_metric_pace() -> None:
     assert (guidance.low, guidance.mid, guidance.high) == (2.5, 2.5, 2.5)
     assert guidance.target_text == "Target: 6:40 - 6:40 /km"
     assert guidance.next_text == "Next: —"
+
+
+@pytest.mark.parametrize(
+    ("unit_system", "expected_next"),
+    [
+        (UnitSystem.METRIC, "Next: 6:40 - 6:40 /km for 1.61 km"),
+        (UnitSystem.IMPERIAL, "Next: 10:44 - 10:44 /mi for 1.00 mi"),
+    ],
+)
+def test_next_step_pace_and_distance_use_the_same_units(unit_system, expected_next) -> None:
+    step = WorkoutStep(
+        duration=DistanceDuration(meters=1609.344),
+        speed_mps=PointTarget(value=2.5),
+    )
+
+    guidance = resolve_step_guidance(
+        step,
+        step,
+        personal=_personal(),
+        zones=_zones(),
+        unit_system=unit_system,
+    )
+
+    assert guidance.next_text == expected_next
 
 
 def test_guidance_without_a_target_has_neutral_values_and_text() -> None:

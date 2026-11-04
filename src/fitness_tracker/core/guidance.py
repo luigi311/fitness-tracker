@@ -254,7 +254,7 @@ def resolve_step_guidance(
     )
     next_suffix = ""
     if next_step is not None:
-        next_suffix = f" for {format_step_duration(next_step)}"
+        next_suffix = f" for {format_step_duration(next_step, unit_system)}"
 
     return StepGuidance(
         domain=domain,
@@ -377,15 +377,15 @@ def _pebble_kind(domain: TargetDomain) -> PebbleTargetKind:
             return PebbleTargetKind.HEART_RATE
 
 
-def format_step_duration(step: _WorkoutStep) -> str:
-    """Return a workout step duration in compact display form."""
+def format_step_duration(step: _WorkoutStep, unit_system: UnitSystem) -> str:
+    """Return a workout step duration in the selected display units."""
     duration = step.duration
     if isinstance(duration, _TimeDuration):
         result = format_human_duration(duration.seconds)
     elif isinstance(duration, _DistanceDuration):
         result = format_distance(
             float(duration.meters),
-            UnitSystem.METRIC,
+            unit_system,
             include_whole_km_decimal=False,
         )
     elif isinstance(duration, _OpenDuration):

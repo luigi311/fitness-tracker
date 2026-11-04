@@ -21,6 +21,8 @@ if TYPE_CHECKING:
 
     from workout_parser.models import Workout
 
+    from fitness_tracker.core.units import UnitSystem
+
 
 _ENV_SPECS: dict[Environment, EnvironmentSpec] = {
     Environment.INDOOR: EnvironmentSpec(
@@ -233,6 +235,8 @@ class ModeSelectView(Gtk.Box):
         workouts_cycling_dir: Path,
         on_start_free: Callable[..., None],
         on_start_workout: Callable[..., None],
+        *,
+        unit_system: UnitSystem,
     ) -> None:
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=12)
         _ensure_css()
@@ -244,6 +248,7 @@ class ModeSelectView(Gtk.Box):
 
         self._workouts_running_dir = workouts_running_dir
         self._workouts_cycling_dir = workouts_cycling_dir
+        self._unit_system = unit_system
 
         self._on_start_free = on_start_free
         self._on_start_workout = on_start_workout
@@ -333,6 +338,13 @@ class ModeSelectView(Gtk.Box):
         self._update_start_button_label()
         self._rebuild_workout_list()
 
+    def set_unit_system(self, unit_system: UnitSystem) -> None:
+        """Refresh workout summaries after the display units change."""
+        if unit_system == self._unit_system:
+            return
+        self._unit_system = unit_system
+        self._rebuild_workout_list()
+
     # -----------------------------------------------------------------------
     # Private helpers
     # -----------------------------------------------------------------------
@@ -392,7 +404,7 @@ class ModeSelectView(Gtk.Box):
             subtitle_parts: list[str] = []
             if workout.workout_date:
                 subtitle_parts.append(workout.workout_date.isoformat())
-            summary = format_workout_summary(workout)
+            summary = format_workout_summary(workout, self._unit_system)
             if summary:
                 subtitle_parts.append(summary)
             row.set_subtitle(" · ".join(subtitle_parts))
