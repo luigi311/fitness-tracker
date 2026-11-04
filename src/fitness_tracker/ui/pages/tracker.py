@@ -149,6 +149,7 @@ class TrackerPageUI:
             workouts_cycling_dir=self.app.workouts_cycling_dir,
             on_start_free=self._show_free_from_mode,
             on_start_workout=self._start_workout,
+            unit_system=self.app.unit_system,
         )
         self.mode_page = Adw.NavigationPage.new(self.mode_view, "Choose Activity")
         nav.add(self.mode_page)
@@ -1037,7 +1038,9 @@ class TrackerPageUI:
         if self.session_view and not snapshot.completed:
             if self._session_state not in (SessionState.RUNNING, SessionState.PAUSED):
                 self.session_view.set_progress(snapshot.progress)
-            self.session_view.set_step_remaining_text(format_step_remaining(snapshot))
+            self.session_view.set_step_remaining_text(
+                format_step_remaining(snapshot, self.app.unit_system),
+            )
             self._publish_pebble_step(snapshot)
 
     # ---- helpers
@@ -1073,10 +1076,14 @@ class TrackerPageUI:
         session = self._workout_session
         snapshot = session.snapshot if session else None
         if snapshot and not snapshot.completed:
-            self.session_view.set_step_remaining_text(format_step_remaining(snapshot))
+            self.session_view.set_step_remaining_text(
+                format_step_remaining(snapshot, self.app.unit_system),
+            )
             self._publish_pebble_step(snapshot)
         elif session and session.steps:
-            self.session_view.set_step_remaining_text(format_step_duration(session.steps[0]))
+            self.session_view.set_step_remaining_text(
+                format_step_duration(session.steps[0], self.app.unit_system),
+            )
         else:
             self.session_view.set_step_remaining_text("—")
 
@@ -1084,7 +1091,9 @@ class TrackerPageUI:
         if not (self.session_view and self._workout_session):
             return
 
-        self.session_view.set_step_remaining_text(format_step_remaining(snapshot))
+        self.session_view.set_step_remaining_text(
+            format_step_remaining(snapshot, self.app.unit_system),
+        )
         self._publish_pebble_step(snapshot)
 
     def _publish_pebble_averages(self) -> None:
@@ -1307,6 +1316,8 @@ class TrackerPageUI:
 
     def refresh_units(self) -> None:
         """Refresh active metric values and labels after a unit preference change."""
+        if self.mode_view:
+            self.mode_view.set_unit_system(self.app.unit_system)
         if self.session_view:
             metrics = self._live_metrics
             self._set_cards(
@@ -1318,6 +1329,9 @@ class TrackerPageUI:
             )
             session = self._workout_session
             if self.session_view and session and session.snapshot:
+                self.session_view.set_step_remaining_text(
+                    format_step_remaining(session.snapshot, self.app.unit_system),
+                )
                 self._update_workout_guidance(
                     session.snapshot.model_copy(update={"step_changed": False}),
                 )

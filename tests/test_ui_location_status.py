@@ -524,3 +524,105 @@ def test_tracker_averages_exclude_preview_pause_and_reset_each_step(headless_ui_
     page._workout_session = None
     page._publish_pebble_averages()
     page.app.pebble_bridge.update.assert_called_with(averages={"hr": 140})
+
+
+@pytest.mark.parametrize(
+    "session_state",
+    [SessionState.PREVIEW, SessionState.RUNNING, SessionState.PAUSED],
+)
+def test_workout_unit_changes_refresh_remaining_and_next_without_advancing(
+    headless_ui_classes,
+    session_state,
+) -> None:
+    from fitness_tracker.core.live_metrics import LiveMetrics  # noqa: PLC0415
+    from fitness_tracker.core.settings import PersonalSettings  # noqa: PLC0415
+    from fitness_tracker.core.units import UnitSystem  # noqa: PLC0415
+    from fitness_tracker.core.workout_session import WorkoutSession  # noqa: PLC0415
+    from fitness_tracker.workout_execution import (  # noqa: PLC0415
+        WorkoutDistanceAccumulator,
+        WorkoutExecution,
+    )
+    from workout_parser import DistanceDuration, PointTarget, WorkoutStep  # noqa: PLC0415
+
+    tracker_type, _, _ = headless_ui_classes
+    page, _, _, _ = _tracker_for_location_tests(tracker_type)
+    page.app.recorder = None
+    page.app.app_settings = SimpleNamespace(personal=PersonalSettings())
+    page.app.calculate_hr_zones = dict
+    page.mode_view = Mock()
+    page.session_view = Mock(sport_type=SportTypesEnum.running)
+    page._session_state = session_state
+    page._live_metrics = LiveMetrics()
+    mile_m = 1609.344
+    steps = [
+        WorkoutStep(duration=DistanceDuration(meters=meters), speed_mps=PointTarget(value=2.5))
+        for meters in (2 * mile_m, mile_m)
+    ]
+    session = WorkoutSession(
+        workout=None,
+        steps=steps,
+        execution=WorkoutExecution(steps),
+        distance_accumulator=WorkoutDistanceAccumulator(),
+    )
+    snapshot = session.execution.update(0, mile_m)
+    session.snapshot = snapshot
+    page._workout_session = session
+
+    for unit_system, remaining, next_text in (
+        (UnitSystem.IMPERIAL, "1.00 mi", "Next: 10:44 - 10:44 /mi for 1.00 mi"),
+        (UnitSystem.METRIC, "1.61 km", "Next: 6:40 - 6:40 /km for 1.61 km"),
+        (UnitSystem.IMPERIAL, "1.00 mi", "Next: 10:44 - 10:44 /mi for 1.00 mi"),
+    ):
+        page.app.unit_system = unit_system
+
+        page.refresh_units()
+
+        page.mode_view.set_unit_system.assert_called_with(unit_system)
+        page.session_view.set_step_remaining_text.assert_called_with(remaining)
+        guidance = page.session_view.apply_guidance.call_args.args[0]
+        assert guidance.next_text == next_text
+        assert session.snapshot is snapshot
+        assert session.execution.snapshot().remaining_meters == mile_m
+        assert page._session_state is session_state
+
+
+@pytest.mark.usefixtures("headless_ui_classes")
+def test_workout_list_summaries_refresh_when_units_change(monkeypatch, tmp_path) -> None:
+    from fitness_tracker.core.units import UnitSystem  # noqa: PLC0415
+    from workout_parser import DistanceDuration, Workout, WorkoutStep  # noqa: PLC0415
+
+    module_name = "_headless_workout_mode"
+    mode_path = Path(__file__).parents[1] / "src" / "fitness_tracker" / "ui" / "pages" / "mode.py"
+    spec = importlib.util.spec_from_file_location(module_name, mode_path)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    monkeypatch.setitem(sys.modules, module_name, module)
+    spec.loader.exec_module(module)
+    monkeypatch.setattr(gi.repository.Adw, "ActionRow", Mock(side_effect=Mock))
+    monkeypatch.setattr(gi.repository.Gtk, "Button", Mock(), raising=False)
+    monkeypatch.setattr(gi.repository.Gtk.Align, "CENTER", "center", raising=False)
+    workout = Workout(
+        name="One mile",
+        instructions=(WorkoutStep(duration=DistanceDuration(meters=1609.344)),),
+    )
+    monkeypatch.setattr(module, "discover_workouts", lambda _directory: [tmp_path / "workout.json"])
+    monkeypatch.setattr(module, "load_workout", lambda _path: workout)
+    view = module.ModeSelectView.__new__(module.ModeSelectView)
+    view._workouts_running_dir = tmp_path
+    view._unit_system = UnitSystem.IMPERIAL
+    view.sport_type = SportTypesEnum.running
+    view._selected_env = Environment.INDOOR
+    view._list = []
+
+    view._rebuild_workout_list()
+
+    view._list[0].set_subtitle.assert_called_once_with("1.00 mi")
+
+    view.set_unit_system(UnitSystem.METRIC)
+
+    view._list[0].set_subtitle.assert_called_once_with("1.61 km")
+
+    view.set_unit_system(UnitSystem.IMPERIAL)
+
+    view._list[0].set_subtitle.assert_called_once_with("1.00 mi")

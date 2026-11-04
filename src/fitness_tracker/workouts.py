@@ -25,21 +25,21 @@ AUTO_SUBDIRS = ("intervals_icu",)
 _WORKOUT_LOOKAHEAD_DAYS = 6
 
 
-def format_step_remaining(snapshot: WorkoutExecutionSnapshot) -> str:
-    """Return the active step's remaining amount with its unit."""
+def format_step_remaining(snapshot: WorkoutExecutionSnapshot, unit_system: UnitSystem) -> str:
+    """Return the active step's remaining amount in the selected display units."""
     if snapshot.remaining_seconds is not None:
         return format_duration(snapshot.remaining_seconds, DurationStyle.COUNTDOWN)
     if snapshot.remaining_meters is not None:
         return format_distance(
             snapshot.remaining_meters,
-            UnitSystem.METRIC,
+            unit_system,
             include_whole_km_decimal=False,
         )
     return "—"
 
 
-def format_workout_summary(workout: Workout) -> str:
-    """Return the known time and distance totals for a workout."""
+def format_workout_summary(workout: Workout, unit_system: UnitSystem) -> str:
+    """Return the known workout totals in the selected display units."""
     total_seconds = 0.0
     total_meters = 0.0
     has_open_duration = False
@@ -58,7 +58,7 @@ def format_workout_summary(workout: Workout) -> str:
         parts.append(
             format_distance(
                 total_meters,
-                UnitSystem.METRIC,
+                unit_system,
                 include_whole_km_decimal=True,
             ),
         )
