@@ -126,13 +126,14 @@ class RunningMetrics(Base):
     timestamp_ms: Mapped[int] = mapped_column(BigInteger, nullable=False)
 
     # core metrics
-    speed_mps: Mapped[float] = mapped_column(Float, nullable=False)  # speed (m/s)
-    cadence_spm: Mapped[int] = mapped_column(Integer, nullable=False)  # steps per minute
+    speed_mps: Mapped[float | None] = mapped_column(Float)  # speed (m/s)
+    cadence_spm: Mapped[int | None] = mapped_column(Integer)  # steps per minute
     stride_length_m: Mapped[float | None] = mapped_column(Float)
     total_distance_m: Mapped[float | None] = mapped_column(Float)
     power_watts: Mapped[float | None] = mapped_column(Float)
     incline_percent: Mapped[float | None] = mapped_column(Float)
     altitude_m: Mapped[float | None] = mapped_column(Float)
+    source: Mapped[str | None] = mapped_column(String(16))
 
     activity: Mapped[Activity] = relationship(back_populates="running_metrics")
 
@@ -155,12 +156,13 @@ class CyclingMetrics(Base):
     )
     timestamp_ms: Mapped[int] = mapped_column(BigInteger, nullable=False)
 
-    speed_mps: Mapped[float] = mapped_column(Float, nullable=False)  # speed (m/s)
+    speed_mps: Mapped[float | None] = mapped_column(Float)  # speed (m/s)
     cadence_rpm: Mapped[int | None] = mapped_column(Integer)  # revolutions per minute
     total_distance_m: Mapped[float | None] = mapped_column(Float)
     power_watts: Mapped[float | None] = mapped_column(Float)
     incline_percent: Mapped[float | None] = mapped_column(Float)
     altitude_m: Mapped[float | None] = mapped_column(Float)
+    source: Mapped[str | None] = mapped_column(String(16))
 
     activity: Mapped[Activity] = relationship(back_populates="cycling_metrics")
 

@@ -234,21 +234,8 @@ def test_portal_source_uses_session_bus_options_and_delivers_fixes(monkeypatch) 
             source_time_utc=datetime(2023, 11, 14, 22, 13, 20, 123_456, tzinfo=UTC),
         ),
     ]
-    trace_logger.bind.assert_any_call(
-        data={
-            "raw": {
-                "Latitude": 39.7392,
-                "Longitude": -104.9903,
-                "Accuracy": 5.0,
-                "Altitude": 1_600.0,
-                "Speed": 2.5,
-                "Heading": 90.0,
-                "Timestamp": (1_700_000_000, 123_456),
-            },
-            "normalized": fixes[0],
-        },
-    )
-    trace_logger.bind.return_value.trace.assert_any_call("Received location portal fix")
+    trace_logger.trace.assert_any_call("Received location portal fix")
+    trace_logger.bind.assert_not_called()
 
     asyncio.run(source.stop())
     assert states[-1] == (LocationState.STOPPED, None)

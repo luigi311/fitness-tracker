@@ -344,3 +344,57 @@ def test_idle_once_callback_explicitly_removes_source(monkeypatch) -> None:
 def test_incline_clamp_applies_to_initial_values() -> None:
     assert InclineControl._clamp_value(25) == InclineControl.MAX_PCT
     assert InclineControl._clamp_value(-25) == InclineControl.MIN_PCT
+
+
+def test_gps_speed_option_survives_scans_and_switches_back_to_bluetooth():
+    """Preserve GPS through scans and reloads while allowing BLE or no speed source."""
+    from fitness_tracker.core.settings import SensorSettings  # noqa: PLC0415
+
+    specs = tuple(
+        SensorRowSpec(
+            key=key,
+            title=key,
+            scan_label="Scan",
+            scanner=lambda: None,
+            scan_group="sensors",
+            settings_field=f"{key}_name",
+        )
+        for key in ("speed", "cadence", "power", "hr")
+    )
+    section = SensorSection(title="Running", subtitle="", settings=SensorSettings(), specs=specs)
+    for spec in specs:
+        section.rows[spec.key] = SensorRowWidgets(
+            row=Mock(),
+            spinner=Mock(),
+            combo=_Combo(),
+            scan_button=Mock(),
+        )
+    section.load()
+    speed = section.rows["speed"].combo
+    assert speed.items == ["None", "GPS"]
+    assert all("GPS" not in section.rows[key].combo.items for key in ("cadence", "power", "hr"))
+
+    speed.active_text = "GPS"
+    section.apply_scan_result("sensors", {"Footpod": "AA"}, "No sensors found")
+    assert speed.items[speed.active_index] == "GPS"
+    values = section.settings_data()
+    assert values["speed_source"] == "gps"
+    assert values["speed_name"] is None
+    assert values["speed_address"] is None
+
+    section.settings = SensorSettings(**values)
+    section.load()
+    assert speed.items[speed.active_index] == "GPS"
+    section.apply_scan_result("sensors", {}, "No sensors found")
+    assert speed.items[speed.active_index] == "GPS"
+
+    section.apply_scan_result("sensors", {"Footpod": "AA"}, "No sensors found")
+    speed.active_text = "Footpod"
+    values = section.settings_data()
+    assert values["speed_source"] == "ble"
+    assert values["speed_name"] == "Footpod"
+    assert values["speed_address"] == "AA"
+    speed.active_text = "None"
+    values = section.settings_data()
+    assert values["speed_source"] == "ble"
+    assert values["speed_name"] is None

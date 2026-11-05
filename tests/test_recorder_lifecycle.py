@@ -977,6 +977,7 @@ class RecorderLifecycleTests(unittest.TestCase):
         recorder._recording = True
         recorder.activity_id = 1
         recorder._recording_origin_ns = time.monotonic_ns()
+        recorder._persist_locations = True
         recorder._location_filter = LocationFilter(
             LocationPolicy.outdoor(),
             max_speed_mps=12.0,
@@ -998,7 +999,7 @@ class RecorderLifecycleTests(unittest.TestCase):
             )
 
         self.assertTrue(lock_available.is_set())
-        trace_logger.bind.assert_any_call(data={"timestamp_ms": ANY, "fix": fix})
+        trace_logger.bind.assert_any_call(data={"timestamp_ms": ANY})
         trace_logger.bind.return_value.trace.assert_any_call("Persisted location fix")
         recorder._recording = False
         recorder.shutdown()

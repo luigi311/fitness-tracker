@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from functools import cache, partial
 from pathlib import Path
 from threading import Lock
-from typing import Any, TypedDict
+from typing import Any, Literal, TypedDict
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
@@ -105,13 +105,14 @@ class _RunningMetricsValues(TypedDict):
 
     activity_id: int
     timestamp_ms: int
-    speed_mps: float
-    cadence_spm: int
+    speed_mps: float | None
+    cadence_spm: int | None
     stride_length_m: float | None
     total_distance_m: float | None
     power_watts: float | None
     incline_percent: float | None
     altitude_m: float | None
+    source: str
 
 
 class _CyclingMetricsValues(TypedDict):
@@ -119,12 +120,13 @@ class _CyclingMetricsValues(TypedDict):
 
     activity_id: int
     timestamp_ms: int
-    speed_mps: float
+    speed_mps: float | None
     cadence_rpm: int | None
     total_distance_m: float | None
     power_watts: float | None
     incline_percent: float | None
     altitude_m: float | None
+    source: str
 
 
 def _build_alembic_config() -> Config:
@@ -301,16 +303,27 @@ class DatabaseManager:
 
             # flush in batches
             if len(self._pending_hr) >= self.BATCH_SIZE:
-                self._flush_pending_locked()
+                self._flush_pending_metrics_locked()
 
     def insert_running_metrics(
         self,
         activity_id: int,
         sample: RunningSample | TrainerSample,
         incline_percent: float | None,
+        *,
+        source: Literal["ble", "gps"] = "ble",
     ) -> None:
         """Queue a running or trainer sample for batched persistence."""
-        if sample.speed_mps is None or sample.cadence_spm is None:
+        if all(
+            value is None
+            for value in (
+                sample.speed_mps,
+                sample.cadence_spm,
+                sample.distance_m,
+                sample.power_watts,
+                sample.altitude_m,
+            )
+        ):
             return
         rm: _RunningMetricsValues = {
             "activity_id": activity_id,
@@ -324,20 +337,32 @@ class DatabaseManager:
             "power_watts": sample.power_watts,
             "incline_percent": incline_percent,
             "altitude_m": sample.altitude_m,
+            "source": source,
         }
         with self._pending_lock:
             self._pending_run.append(rm)
             if len(self._pending_run) >= self.BATCH_SIZE:
-                self._flush_pending_locked()
+                self._flush_pending_metrics_locked()
 
     def insert_cycling_metrics(
         self,
         activity_id: int,
         sample: CyclingSample | TrainerSample,
         incline_percent: float | None,
+        *,
+        source: Literal["ble", "gps"] = "ble",
     ) -> None:
         """Queue a cycling or trainer sample for batched persistence."""
-        if sample.speed_mps is None:
+        if all(
+            value is None
+            for value in (
+                sample.speed_mps,
+                sample.cadence_rpm,
+                sample.distance_m,
+                sample.power_watts,
+                sample.altitude_m,
+            )
+        ):
             return
         cadence_rpm = None if sample.cadence_rpm is None else round(sample.cadence_rpm)
         cm: _CyclingMetricsValues = {
@@ -349,11 +374,12 @@ class DatabaseManager:
             "power_watts": sample.power_watts,
             "incline_percent": incline_percent,
             "altitude_m": sample.altitude_m,
+            "source": source,
         }
         with self._pending_lock:
             self._pending_cyc.append(cm)
             if len(self._pending_cyc) >= self.BATCH_SIZE:
-                self._flush_pending_locked()
+                self._flush_pending_metrics_locked()
 
     def insert_location_point(
         self,
@@ -379,20 +405,37 @@ class DatabaseManager:
                 self._flush_pending_locked()
 
     def _flush_pending(self) -> None:
+        """Flush metric and route batches while excluding concurrent queue updates."""
         with self._pending_lock:
             self._flush_pending_locked()
 
     def _flush_pending_locked(self) -> None:
+        """Commit metrics before attempting a separate, retryable route transaction."""
+        self._flush_pending_metrics_locked()
+        if not self._pending_location:
+            return
+        with self.Session() as session:
+            session.add_all([LocationPoint(**location) for location in self._pending_location])
+            self._invalidate_successful_uploads(
+                session,
+                {item["activity_id"] for item in self._pending_location},
+            )
+            session.commit()
+        self._pending_location.clear()
+
+    def _flush_pending_metrics_locked(self) -> None:
+        """Commit sensor rows independently, retaining them only if their commit fails."""
         activity_ids = {
             item["activity_id"]
             for pending_items in (
                 self._pending_hr,
                 self._pending_run,
                 self._pending_cyc,
-                self._pending_location,
             )
             for item in pending_items
         }
+        if not activity_ids:
+            return
         with self.Session() as session:
             if self._pending_hr:
                 session.add_all([HeartRate(**values) for values in self._pending_hr])
@@ -400,17 +443,12 @@ class DatabaseManager:
                 session.add_all([RunningMetrics(**values) for values in self._pending_run])
             if self._pending_cyc:
                 session.add_all([CyclingMetrics(**values) for values in self._pending_cyc])
-            if self._pending_location:
-                session.add_all(
-                    [LocationPoint(**location) for location in self._pending_location],
-                )
             self._invalidate_successful_uploads(session, activity_ids)
             session.commit()
 
         self._pending_hr.clear()
         self._pending_run.clear()
         self._pending_cyc.clear()
-        self._pending_location.clear()
 
     @staticmethod
     def _invalidate_successful_uploads(session: Session, activity_ids: set[int]) -> None:

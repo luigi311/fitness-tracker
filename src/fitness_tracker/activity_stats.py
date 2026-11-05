@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import deque
 from datetime import datetime
 from typing import TYPE_CHECKING
 from zoneinfo import ZoneInfo
@@ -23,6 +24,9 @@ if TYPE_CHECKING:
 
     from fitness_tracker.database import DatabaseManager
 
+_GPS_ALTITUDE_WINDOW = 15
+_GPS_ELEVATION_THRESHOLD_M = 5.0
+
 
 def _safe_avg(values: list[float]) -> float | None:
     clean = [v for v in values if v is not None]
@@ -34,13 +38,22 @@ def _calc_elevation(samples: list) -> tuple[float, float]:
     ascent = 0.0
     descent = 0.0
     prev_alt: float | None = None
+    gps_altitudes: deque[float] = deque(maxlen=_GPS_ALTITUDE_WINDOW)
     for s in samples:
         alt = getattr(s, "altitude_m", None)
         if alt is None:
             continue
         alt = float(alt)
+        gps = getattr(s, "source", None) == "gps"
+        if gps:
+            gps_altitudes.append(alt)
+            alt = sum(gps_altitudes) / len(gps_altitudes)
+        else:
+            gps_altitudes.clear()
         if prev_alt is not None:
             diff = alt - prev_alt
+            if gps and abs(diff) < _GPS_ELEVATION_THRESHOLD_M:
+                continue
             if diff > 0:
                 ascent += diff
             else:

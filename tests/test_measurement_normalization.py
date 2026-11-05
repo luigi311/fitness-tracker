@@ -76,7 +76,8 @@ def test_zero_altitude_is_preserved(
     assert row.incline_percent == 8.0
 
 
-def test_incomplete_required_metrics_are_not_queued() -> None:
+def test_independent_sensor_metrics_preserve_missing_values() -> None:
+    """Store absent movement readings as NULL alongside independent sensor values."""
     db = _database()
     activity_id = db.start_activity(SportTypesEnum.running, Environment.INDOOR)
 
@@ -96,8 +97,13 @@ def test_incomplete_required_metrics_are_not_queued() -> None:
         incline_percent=None,
     )
 
-    assert db._pending_run == []  # noqa: SLF001
-    assert db._pending_cyc == []  # noqa: SLF001
+    db.stop_activity(activity_id)
+    with db.Session() as session:
+        runs = session.query(RunningMetrics).order_by(RunningMetrics.timestamp_ms).all()
+        cycle = session.query(CyclingMetrics).one()
+        assert [(row.speed_mps, row.cadence_spm) for row in runs] == [(None, 170), (3.0, None)]
+        assert cycle.speed_mps is None
+        assert cycle.cadence_rpm == 80
 
 
 def test_fractional_cycling_cadence_is_queued_as_an_integer() -> None:
@@ -324,6 +330,68 @@ def test_failed_mixed_measurement_flush_keeps_rows_retryable(
         assert session.query(HeartRate).filter_by(activity_id=activity_id).count() == 1
         assert session.query(LocationPoint).filter_by(activity_id=activity_id).count() == 1
     assert len(db.repository.list_location_points(activity_id)) == 1
+
+
+def test_route_flush_failure_preserves_metrics_and_retries_only_route_rows(monkeypatch):
+    """Commit all metric types despite route rollback, then retry without duplicates."""
+    db = _database()
+    activity_id = db.start_activity(SportTypesEnum.running, Environment.OUTDOOR)
+    db.repository.mark_upload_ok(activity_id, "test", payload_hash="old-hash")
+    db.insert_heart_rate(activity_id, 1_000, 140, None)
+    db.insert_running_metrics(
+        activity_id,
+        RunningSample(timestamp_ms=1_000, speed_mps=3.0, distance_m=3.0),
+        None,
+        source="gps",
+    )
+    db.insert_cycling_metrics(
+        activity_id,
+        CyclingSample(timestamp_ms=1_000, speed_mps=3.0, distance_m=3.0),
+        None,
+        source="gps",
+    )
+    db.insert_location_point(activity_id, 1_000, LocationFix(39.7392, -104.9903))
+    original_flush = Session.flush
+    fail_once = True
+
+    def flush_once(session, objects=None):
+        """Roll back a route transaction after its rows have reached the database."""
+        nonlocal fail_once
+        has_route_rows = any(isinstance(row, LocationPoint) for row in session.new)
+        original_flush(session, objects)
+        if fail_once and has_route_rows:
+            fail_once = False
+            message = "temporary route flush failure"
+            raise RuntimeError(message)
+
+    monkeypatch.setattr(Session, "flush", flush_once)
+
+    with pytest.raises(RuntimeError, match="temporary route flush failure"):
+        db.finalize_activity(activity_id)
+
+    assert db._pending_hr == []  # noqa: SLF001
+    assert db._pending_run == []  # noqa: SLF001
+    assert db._pending_cyc == []  # noqa: SLF001
+    assert len(db._pending_location) == 1  # noqa: SLF001
+    with db.Session() as session:
+        assert session.query(HeartRate).count() == 1
+        assert session.query(RunningMetrics).count() == 1
+        assert session.query(CyclingMetrics).count() == 1
+        assert session.query(LocationPoint).count() == 0
+        assert session.query(ActivityUpload).one().status == "pending"
+
+    db.repository.mark_upload_ok(activity_id, "test", payload_hash="metrics-only-hash")
+    db.finalize_activity(activity_id)
+
+    assert db._pending_location == []  # noqa: SLF001
+    with db.Session() as session:
+        assert session.query(HeartRate).count() == 1
+        assert session.query(RunningMetrics).count() == 1
+        assert session.query(CyclingMetrics).count() == 1
+        assert session.query(LocationPoint).count() == 1
+        upload = session.query(ActivityUpload).one()
+        assert upload.status == "pending"
+        assert upload.payload_hash is None
 
 
 def test_migration_secures_sqlite_database_sidecars_and_backup(tmp_path: Path) -> None:
@@ -746,3 +814,59 @@ def test_heart_rate_contract_uses_explicit_fields() -> None:
     assert sample.timestamp_ms == 1_000
     assert sample.bpm == 142
     assert sample.rr_interval_ms == 422.5
+
+
+@pytest.mark.parametrize(
+    ("table", "column"),
+    [
+        ("running_metrics", "speed_mps"),
+        ("running_metrics", "cadence_spm"),
+        ("cycling_metrics", "speed_mps"),
+    ],
+)
+def test_partial_sensor_columns_match_nullable_metadata(table, column):
+    """Keep migrated partial sensor columns nullable in both the schema and ORM."""
+    db = _database()
+    database_column = next(
+        item for item in inspect(db.engine).get_columns(table) if item["name"] == column
+    )
+    model = RunningMetrics if table == "running_metrics" else CyclingMetrics
+    assert database_column["nullable"] is model.__table__.c[column].nullable is True
+
+
+def test_metric_source_migration_preserves_legacy_rows_and_nullable_measurements(tmp_path):
+    """Upgrade legacy metrics without guessing their source or filling missing values."""
+    database_url = f"sqlite:///{tmp_path / 'metric-sources.db'}"
+    db = DatabaseManager(database_url)
+    activity_id = db.start_activity(SportTypesEnum.running, Environment.OUTDOOR)
+    with db.Session() as session:
+        session.add(RunningMetrics(activity_id=activity_id, timestamp_ms=1000, altitude_m=0.0))
+        session.commit()
+    db.engine.dispose()
+
+    engine = create_engine(database_url)
+    with engine.connect() as connection:
+        connection.exec_driver_sql("PRAGMA foreign_keys=OFF")
+        connection.commit()
+        config = database_module._build_alembic_config()  # noqa: SLF001
+        config.attributes["connection"] = connection
+        with connection.begin():
+            command.downgrade(config, "0007")
+            assert "source" not in {
+                column["name"] for column in inspect(connection).get_columns("running_metrics")
+            }
+            command.upgrade(config, "head")
+    engine.dispose()
+
+    migrated = DatabaseManager(database_url)
+    with migrated.Session() as session:
+        row = session.query(RunningMetrics).one()
+        assert row.source is None
+        assert row.speed_mps is None
+        assert row.cadence_spm is None
+        assert row.altitude_m == 0.0
+    for table in ("running_metrics", "cycling_metrics"):
+        column = next(
+            item for item in inspect(migrated.engine).get_columns(table) if item["name"] == "source"
+        )
+        assert column["nullable"]

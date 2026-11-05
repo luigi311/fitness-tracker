@@ -30,8 +30,8 @@ if TYPE_CHECKING:
     from sqlalchemy.orm import Session, sessionmaker
 
 
-RunningSeriesPoint = tuple[int, float, int, float | None]
-CyclingSeriesPoint = tuple[int, float, int | None, float | None]
+RunningSeriesPoint = tuple[int, float | None, int | None, float | None]
+CyclingSeriesPoint = tuple[int, float | None, int | None, float | None]
 
 
 class ActivityStatsRow(Protocol):
@@ -249,7 +249,7 @@ class SqlAlchemyActivityRepository:
                 statement,
             ):
                 series[int(activity_id)].append(
-                    (int(timestamp_ms), float(speed_mps), int(cadence_spm), power_watts),
+                    (int(timestamp_ms), speed_mps, cadence_spm, power_watts),
                 )
         return dict(series)
 
@@ -277,7 +277,7 @@ class SqlAlchemyActivityRepository:
                 statement,
             ):
                 series[int(activity_id)].append(
-                    (int(timestamp_ms), float(speed_mps), cadence_rpm, power_watts),
+                    (int(timestamp_ms), speed_mps, cadence_rpm, power_watts),
                 )
         return dict(series)
 

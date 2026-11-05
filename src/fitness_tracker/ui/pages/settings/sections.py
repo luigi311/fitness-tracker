@@ -9,6 +9,7 @@ import gi
 from bleaksport import MachineType
 
 from fitness_tracker.core.settings import (
+    GPS_SOURCE_LABEL,
     TRAINER_SUPPLIED_HR_LABEL,
     DatabaseSettings,
     DisplaySettings,
@@ -137,13 +138,27 @@ class SensorSection:
         """Return rows subscribed to one scanner group."""
         return tuple(self.rows[spec.key] for spec in self.specs if spec.scan_group == scan_group)
 
+    def _source_names(self, spec: SensorRowSpec, names: list[str], status: str = "") -> list[str]:
+        """Offer GPS only for the outdoor-capable speed selector."""
+        if isinstance(self.settings, SensorSettings) and spec.settings_field == "speed_name":
+            self.rows[spec.key].row.set_subtitle(
+                status or "GPS provides outdoor speed, pace, distance and altitude.",
+            )
+            return [GPS_SOURCE_LABEL, *[name for name in names if name != GPS_SOURCE_LABEL]]
+        return names
+
     def _active_name(self, spec: SensorRowSpec) -> str | None:
+        """Resolve a sensor selection, including GPS and trainer-supplied heart rate."""
         if isinstance(self.settings, SensorSettings):
             match spec.settings_field:
                 case "hr_name":
                     return self.settings.hr_name
                 case "speed_name":
-                    return self.settings.speed_name
+                    return (
+                        GPS_SOURCE_LABEL
+                        if self.settings.speed_source == "gps"
+                        else self.settings.speed_name
+                    )
                 case "cadence_name":
                     return self.settings.cadence_name
                 case "power_name":
@@ -181,7 +196,9 @@ class SensorSection:
                 empty_message if isinstance(empty_message, str) else empty_message.get(spec.key, "")
             )
             row.row.set_subtitle("" if mapping else status)
-            self._set_combo_items_with_none(row.combo, names, self._active_name(spec))
+            names = self._source_names(spec, names, status if not mapping else "")
+            active_name = row.combo.get_active_text() or self._active_name(spec)
+            self._set_combo_items_with_none(row.combo, names, active_name)
             self.maps[spec.key] = mapping
 
     @staticmethod
@@ -214,7 +231,8 @@ class SensorSection:
                     case _:
                         message = f"Unsupported sensor settings field: {spec.settings_field}"
                         raise ValueError(message)
-                self._set_combo_items_with_none(row.combo, [name] if name else [], name)
+                names = self._source_names(spec, [name] if name else [])
+                self._set_combo_items_with_none(row.combo, names, self._active_name(spec))
                 maps[spec.key] = {name: cast("str", address)} if name else {}
                 continue
 
@@ -280,7 +298,12 @@ class SensorSection:
                     case "hr_name":
                         values.update(hr_name=selected_name, hr_address=address)
                     case "speed_name":
-                        values.update(speed_name=selected_name, speed_address=address)
+                        gps = selected_name == GPS_SOURCE_LABEL
+                        values.update(
+                            speed_source="gps" if gps else "ble",
+                            speed_name=None if gps else selected_name,
+                            speed_address=None if gps else address,
+                        )
                     case "cadence_name":
                         values.update(cadence_name=selected_name, cadence_address=address)
                     case "power_name":

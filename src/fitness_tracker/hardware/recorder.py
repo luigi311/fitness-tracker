@@ -11,6 +11,7 @@ from enum import StrEnum
 from typing import TYPE_CHECKING
 
 from bleak import BleakScanner
+from bleak.exc import BleakError
 from bleaksport import (
     CyclingMux,
     HeartRateMux,
@@ -26,6 +27,7 @@ from loguru import logger
 
 from fitness_tracker.core.environment import Environment
 from fitness_tracker.core.sports import SportTypesEnum
+from fitness_tracker.hardware.gps_metrics import GPS_FIX_TIMEOUT_S, GpsMetricProcessor
 from fitness_tracker.hardware.location import (
     LocationFilter,
     LocationFix,
@@ -144,6 +146,7 @@ class Recorder:
         record_indoor_anchor: bool = False,
         indoor_accuracy: PortalAccuracy = PortalAccuracy.NEIGHBORHOOD,
     ) -> None:
+        """Configure sensor roles, location policy, callbacks, and session state."""
         logger.debug(f"Initializing Recorder with sport_type {sport_type}")
         logger.debug(f"HR sensor: name={profile.hr_name}, address={profile.hr_address}")
         logger.debug(f"Speed sensor: name={profile.speed_name}, address={profile.speed_address}")
@@ -199,8 +202,8 @@ class Recorder:
                 address=profile.hr_address,
             ),
             RecorderSensorKind.SPEED: _ConfiguredSensor(
-                name=profile.speed_name,
-                address=profile.speed_address,
+                name=profile.speed_name if profile.speed_source == "ble" else None,
+                address=profile.speed_address if profile.speed_source == "ble" else None,
             ),
             RecorderSensorKind.CADENCE: _ConfiguredSensor(
                 name=profile.cadence_name,
@@ -228,6 +231,7 @@ class Recorder:
         self._sample_processor = SampleProcessor(weight_kg=weight_kg)
 
         # Connection status
+        self._link_roles: dict[str, dict[str, bool]] = {}
         self.hr_connected = False
         self._sensor_speed_connected = False
         self._sensor_cadence_connected = False
@@ -256,6 +260,11 @@ class Recorder:
         indoor_accuracy: PortalAccuracy,
     ) -> None:
         """Initialize location policy, source, and lifecycle state."""
+        self._gps_metrics: GpsMetricProcessor | None = None
+        self._gps_speed_connected = False
+        self._gps_distance_connected = False
+        self._gps_timeout_handle: asyncio.TimerHandle | None = None
+        self._persist_locations = False
         self.on_location_state = on_location_state
         self.record_outdoor_routes = bool(record_outdoor_routes)
         self.record_indoor_anchor = bool(record_indoor_anchor)
@@ -352,6 +361,14 @@ class Recorder:
             record_indoor_anchor=self.record_indoor_anchor,
             indoor_accuracy=self.indoor_accuracy,
         )
+        persist_locations = policy is not None
+        use_gps = self.profile.speed_source == "gps" and environment is Environment.OUTDOOR
+        if use_gps:
+            policy = LocationPolicy(
+                accuracy=PortalAccuracy.EXACT,
+                time_threshold_s=1,
+                distance_threshold_m=0,
+            )
         with self._recording_lock:
             if self._recording:
                 return
@@ -370,6 +387,12 @@ class Recorder:
             self._recording = True
             self._recording_generation += 1
             self._sample_processor.reset()
+            self._clear_gps_signal_locked()
+            self._gps_metrics = (
+                GpsMetricProcessor(max_speed_mps_for_sport(self.sport_type)) if use_gps else None
+            )
+            self._refresh_metric_connection_state()
+            self._persist_locations = persist_locations
             self._recording_origin_ns = time.monotonic_ns()
             self._cancel_location_timeout_locked()
             self._location_points_accepted = 0
@@ -419,6 +442,9 @@ class Recorder:
                 self._recording_origin_ns = None
                 self._location_filter = None
                 self.location_policy = None
+                self._clear_gps_signal_locked()
+                self._gps_metrics = None
+                self._refresh_metric_connection_state()
                 stop_location = True
                 self._finalizing_activity_id = self.activity_id
 
@@ -527,7 +553,29 @@ class Recorder:
             return False
         self.location_state = state
         self.location_state_detail = detail
+        if state is not LocationState.TRACKING:
+            self._clear_gps_signal_locked()
         return True
+
+    def _clear_gps_signal_locked(self) -> None:
+        """Drop GPS connectivity and stop joining positions across a signal gap."""
+        if self._gps_timeout_handle is not None:
+            self._gps_timeout_handle.cancel()
+            self._gps_timeout_handle = None
+        self._gps_speed_connected = False
+        self._gps_distance_connected = False
+        if self._gps_metrics is not None:
+            self._gps_metrics.break_segment()
+        self._refresh_metric_connection_state()
+
+    def _expire_gps_signal(self, generation: int, operation: int) -> None:
+        """Mark a selected GPS sensor unavailable when usable fixes stop arriving."""
+        self._handle_location_state(
+            generation,
+            operation,
+            LocationState.UNAVAILABLE,
+            "No recent usable GPS fix",
+        )
 
     def _dispatch_location_state_if_changed(self) -> None:
         """Dispatch the already-updated location state to the UI callback."""
@@ -843,26 +891,29 @@ class Recorder:
                 timestamp_ms = relative_timestamp_ms(self._recording_origin_ns)
                 accepted = self._location_filter.accept(fix, timestamp_ms)
                 if accepted is None:
-                    logger.bind(data={"timestamp_ms": timestamp_ms, "fix": fix}).trace(
+                    logger.bind(data={"timestamp_ms": timestamp_ms}).trace(
                         "Rejected location fix by policy",
                     )
                     return
                 self._cancel_location_timeout_locked()
                 max_points = self._location_filter.policy.max_points
+                gps_sample = self._gps_sample_locked(accepted, timestamp_ms, generation, operation)
+                persist_locations = self._persist_locations
 
-            persisted = self._persist_if_recording(
+            if gps_sample is not None:
+                self._dispatch_sample(gps_sample)
+                self._persist_if_recording(
+                    generation,
+                    lambda activity_id: self._persist_gps_sample(activity_id, gps_sample),
+                )
+
+            persisted = not persist_locations or self._persist_location_fix(
                 generation,
-                lambda activity_id: self.store.insert_location_point(
-                    activity_id,
-                    timestamp_ms,
-                    accepted,
-                ),
+                timestamp_ms,
+                accepted,
             )
-            if not persisted:
+            if not persisted and gps_sample is None and not self.test_mode:
                 return
-            logger.bind(data={"timestamp_ms": timestamp_ms, "fix": accepted}).trace(
-                "Persisted location fix",
-            )
 
             with self._recording_lock:
                 if (
@@ -873,8 +924,10 @@ class Recorder:
                     return
                 self._location_points_accepted += 1
                 one_shot = max_points == 1
+                gps_ready = self._gps_metrics is None or gps_sample is not None
 
-            self._handle_location_state(generation, operation, LocationState.TRACKING, None)
+            if gps_ready:
+                self._handle_location_state(generation, operation, LocationState.TRACKING, None)
             if one_shot:
                 with self._recording_lock:
                     if (
@@ -888,6 +941,78 @@ class Recorder:
         except Exception as error:
             logger.exception("Location fix handling failed")
             self._handle_location_state(generation, operation, LocationState.ERROR, str(error))
+
+    def _persist_location_fix(self, generation: int, timestamp_ms: int, fix: LocationFix) -> bool:
+        """Store route coordinates without interrupting an active GPS metric stream."""
+        try:
+            persisted = self._persist_if_recording(
+                generation,
+                lambda activity_id: self.store.insert_location_point(
+                    activity_id,
+                    timestamp_ms,
+                    fix,
+                ),
+            )
+        except Exception:
+            if self._gps_metrics is None:
+                raise
+            logger.exception("Route persistence failed; GPS metrics recording continues")
+            return False
+        if persisted:
+            logger.bind(data={"timestamp_ms": timestamp_ms}).trace(
+                "Persisted location fix",
+            )
+        return persisted
+
+    def _gps_sample_locked(
+        self,
+        fix: LocationFix,
+        timestamp_ms: int,
+        generation: int,
+        operation: int,
+    ) -> RunningSample | CyclingSample | None:
+        """Build a GPS-only sample on the recording clock while holding the lock."""
+        if self._gps_metrics is None:
+            return None
+        metrics = self._gps_metrics.process(fix, timestamp_ms)
+        if metrics is None:
+            return None
+        if metrics.speed_mps is not None:
+            self._gps_speed_connected = True
+        self._gps_distance_connected = True
+        self._refresh_metric_connection_state()
+        if self._gps_timeout_handle is not None:
+            self._gps_timeout_handle.cancel()
+        self._gps_timeout_handle = self.loop.call_later(
+            GPS_FIX_TIMEOUT_S,
+            self._expire_gps_signal,
+            generation,
+            operation,
+        )
+        sample_type = RunningSample if self.sport_type == SportTypesEnum.running else CyclingSample
+        return sample_type(
+            timestamp_ms=timestamp_ms,
+            speed_mps=metrics.speed_mps,
+            distance_m=metrics.distance_m,
+            altitude_m=metrics.altitude_m,
+        )
+
+    def _persist_gps_sample(self, activity_id: int, sample: RunningSample | CyclingSample) -> None:
+        """Store GPS metrics without applying BLE distance or incline normalization."""
+        if isinstance(sample, RunningSample):
+            self.store.insert_running_metrics(
+                activity_id,
+                sample,
+                incline_percent=None,
+                source="gps",
+            )
+        else:
+            self.store.insert_cycling_metrics(
+                activity_id,
+                sample,
+                incline_percent=None,
+                source="gps",
+            )
 
     def _wait_for_location_stop(self, deadline: float) -> bool:
         """Wait for a scheduled source stop without blocking its own event loop."""
@@ -974,6 +1099,17 @@ class Recorder:
             else:
                 return
 
+    def _on_recording_clock[T: HeartRateSample | RunningSample | CyclingSample | TrainerSample](
+        self,
+        sample: T,
+    ) -> T:
+        """Use one monotonic recording origin for all sources while holding the lock."""
+        if self._recording_origin_ns is None:
+            return sample
+        return sample.model_copy(
+            update={"timestamp_ms": relative_timestamp_ms(self._recording_origin_ns)},
+        )
+
     # --- HR handling ---
     def _handle_hr_sample(
         self,
@@ -991,6 +1127,7 @@ class Recorder:
             if expected_generation is not None and expected_generation != generation:
                 return
             cleaned_sample, normalized = self._sample_processor.clean_heart_rate(sample)
+            cleaned_sample = self._on_recording_clock(cleaned_sample)
         self._dispatch_sample(cleaned_sample)
 
         logger.bind(data=cleaned_sample).trace("Processed heart rate sample")
@@ -1008,6 +1145,7 @@ class Recorder:
 
     # --- Running handling ---
     def _handle_running_sample(self, sample: RunningSample) -> None:
+        """Normalize, dispatch, and store BLE readings while preserving GPS ownership."""
         logger.bind(data=sample).trace("Handling running sample")
         with self._recording_lock:
             generation = self._recording_generation
@@ -1015,6 +1153,11 @@ class Recorder:
                 sample,
                 trainer_connected=self.trainer_connected,
             )
+            cleaned_sample = self._on_recording_clock(cleaned_sample)
+            if self._gps_metrics is not None:
+                cleaned_sample = cleaned_sample.model_copy(
+                    update={"speed_mps": None, "distance_m": None, "altitude_m": None},
+                )
 
         self._dispatch_sample(cleaned_sample)
 
@@ -1031,10 +1174,16 @@ class Recorder:
         )
 
     def _handle_cycling_sample(self, sample: CyclingSample) -> None:
+        """Normalize, dispatch, and store cycling readings without replacing GPS metrics."""
         logger.bind(data=sample).trace("Handling cycling sample")
         with self._recording_lock:
             generation = self._recording_generation
             cleaned_sample = self._sample_processor.process_cycling(sample)
+            cleaned_sample = self._on_recording_clock(cleaned_sample)
+            if self._gps_metrics is not None:
+                cleaned_sample = cleaned_sample.model_copy(
+                    update={"speed_mps": None, "distance_m": None, "altitude_m": None},
+                )
 
         self._dispatch_sample(cleaned_sample)
 
@@ -1051,10 +1200,12 @@ class Recorder:
         )
 
     def _handle_trainer_sample(self, sample: TrainerSample) -> None:
+        """Process trainer measurements and embedded heart rate on the recording clock."""
         logger.bind(data=sample).trace("Handling trainer sample")
         with self._recording_lock:
             generation = self._recording_generation
             cleaned_sample = self._sample_processor.process_trainer(sample)
+            cleaned_sample = self._on_recording_clock(cleaned_sample)
             self.trainer.handle_sample(sample)
             has_embedded_heart_rate = self.trainer.handle_embedded_heart_rate(
                 sample.heart_rate_bpm,
@@ -1182,6 +1333,7 @@ class Recorder:
                 logger.warning(f"Task {task.get_name()} raised on shutdown: {error}")
 
     async def _workflow(self) -> None:
+        """Discover configured BLE sensors and run their loops until shutdown."""
         logger.debug("Starting Recorder workflow")
         # Bind the stop event to the Recorder's worker loop.
         self._stop_event = asyncio.Event()
@@ -1189,9 +1341,15 @@ class Recorder:
             self._stop_event.set()
 
         # Scan for BLE devices upfront, call bleaksport with found devices to speed up connection
-        self.devices = await BleakScanner.discover(
-            timeout=5.0,
-        )
+        if any(sensor.configured for sensor in self._configured_sensors.values()):
+            try:
+                self.devices = await BleakScanner.discover(timeout=5.0)
+            except BleakError as error:
+                logger.warning(
+                    "Bluetooth scan failed; continuing recorder without results: {}",
+                    error,
+                )
+                self.devices = []
 
         logger.debug(f"BLE scan complete, found {len(self.devices)} devices")
         logger.bind(data=self.devices).trace("Discovered BLE devices")
@@ -1223,6 +1381,7 @@ class Recorder:
         logger.debug("Workflow exiting")
 
     async def _speed_loop(self) -> None:
+        """Run the sport's movement mux and clear its link roles during cleanup."""
         speed = self._configured_sensors[RecorderSensorKind.SPEED]
         cadence = self._configured_sensors[RecorderSensorKind.CADENCE]
         power = self._configured_sensors[RecorderSensorKind.POWER]
@@ -1254,25 +1413,38 @@ class Recorder:
             await mux.start()
         finally:
             logger.debug("Cleaning up speed connections")
-            await mux.stop()
-            self._speed_mux = None
-            self._sensor_speed_connected = False
-            self._sensor_cadence_connected = False
-            self._sensor_power_connected = False
-            self._sensor_distance_connected = False
-            self._refresh_metric_connection_state()
+            try:
+                await mux.stop()
+            finally:
+                self._speed_mux = None
+                self._link_roles.clear()
+                self._sensor_speed_connected = False
+                self._sensor_cadence_connected = False
+                self._sensor_power_connected = False
+                self._sensor_distance_connected = False
+                self._refresh_metric_connection_state()
 
     def _on_running_link(
         self,
-        _addr: str,
+        addr: str,
         connected: bool,  # noqa: FBT001 - BLE link callback supplies positional state
         roles: dict[str, bool],
     ) -> None:
-        # RSCS drives both speed & cadence cards.
-        self._sensor_speed_connected = connected and roles.get("rsc", False)
-        self._sensor_cadence_connected = connected and roles.get("rsc", False)
-        self._sensor_distance_connected = connected and roles.get("rsc", False)
-        self._sensor_power_connected = connected and roles.get("cps", False)
+        """Aggregate movement and power availability across active BLE device roles."""
+        if connected:
+            self._link_roles[addr] = dict(roles)
+        else:
+            self._link_roles.pop(addr, None)
+        motion = any(
+            active.get("rsc", False) or active.get("csc", False)
+            for active in self._link_roles.values()
+        )
+        self._sensor_speed_connected = motion
+        self._sensor_cadence_connected = motion
+        self._sensor_distance_connected = motion
+        self._sensor_power_connected = any(
+            active.get("cps", False) for active in self._link_roles.values()
+        )
         self._refresh_metric_connection_state()
 
     async def _trainer_loop(self) -> None:
@@ -1321,6 +1493,9 @@ class Recorder:
         self.cadence_connected = self._sensor_cadence_connected or self._trainer_link_connected
         self.power_connected = self._sensor_power_connected or self._trainer_link_connected
         self.distance_connected = self._sensor_distance_connected or self._trainer_link_connected
+        if self._gps_metrics is not None:
+            self.speed_connected = self._gps_speed_connected
+            self.distance_connected = self._gps_distance_connected
 
     async def _hr_loop(self) -> None:
         """Connect to the HR monitor via HeartRateMux and stream samples."""

@@ -350,12 +350,26 @@ class TrackerPageUI:
             on_trainer_target=self._on_trainer_target_changed,
             capabilities=capabilities,
             workout=workout,
-            location_enabled=self._location_enabled_for_environment(environment),
+            location_enabled=self._location_enabled_for_environment(environment, sport_type),
         )
 
-    def _location_enabled_for_environment(self, environment: Environment) -> bool:
-        """Return whether the configured session environment records a location."""
+    def _location_enabled_for_environment(
+        self,
+        environment: Environment,
+        sport_type: SportTypesEnum = SportTypesEnum.running,
+    ) -> bool:
+        """Return whether this session uses location for a route or GPS metrics."""
         location_settings = self.app.app_settings.location
+        sensor_settings = getattr(
+            self.app.app_settings,
+            "running_sensors" if sport_type == SportTypesEnum.running else "cycling_sensors",
+            None,
+        )
+        if (
+            environment is Environment.OUTDOOR
+            and getattr(sensor_settings, "speed_source", None) == "gps"
+        ):
+            return True
         return (
             location_policy_for_environment(
                 environment,
@@ -559,6 +573,8 @@ class TrackerPageUI:
         if self._workout_session:
             self._workout_session.distance_accumulator.reset()
         self._session_state = SessionState.RUNNING
+        self._live_metrics = LiveMetrics()
+        self._metrics_dirty = True
         self._start_monotonic = time.monotonic()
         self._elapsed_display_s = 0
         self._last_ms = 0
@@ -705,6 +721,21 @@ class TrackerPageUI:
             status = "Location tracking"
         return status
 
+    def _update_live_motion_metrics(
+        self,
+        sample: RunningSample | CyclingSample | TrainerSample,
+    ) -> None:
+        """Merge independent sensors without clearing values absent from a sample."""
+        if sample.speed_mps is not None:
+            self._live_metrics.speed_mps = sample.speed_mps
+        cadence = sample.cadence_spm if isinstance(sample, RunningSample) else sample.cadence_rpm
+        if cadence is not None:
+            self._live_metrics.cadence_spm = int(cadence)
+        if sample.distance_m is not None:
+            self._live_metrics.distance_m = sample.distance_m
+        if sample.power_watts is not None:
+            self._live_metrics.power_watts = int(sample.power_watts)
+
     def on_sample(
         self,
         sample: HeartRateSample | RunningSample | CyclingSample | TrainerSample,
@@ -719,21 +750,7 @@ class TrackerPageUI:
             self._last_ms = sample.timestamp_ms
         else:
             self._last_ms = sample.timestamp_ms
-            self._live_metrics.speed_mps = sample.speed_mps if sample.speed_mps is not None else 0.0
-            cadence_spm = (
-                sample.cadence_spm
-                if isinstance(sample, RunningSample) and sample.cadence_spm is not None
-                else 0
-            )
-            cadence_rpm = (
-                sample.cadence_rpm
-                if isinstance(sample, (CyclingSample, TrainerSample))
-                and sample.cadence_rpm is not None
-                else 0
-            )
-            cadence = cadence_spm or cadence_rpm
-            self._live_metrics.cadence_spm = int(cadence)
-            self._live_metrics.distance_m = float(sample.distance_m or 0.0)
+            self._update_live_motion_metrics(sample)
             if session is not None:
                 self._sync_workout_distance_source(
                     connected=self._distance_source_is_connected(),
@@ -745,7 +762,6 @@ class TrackerPageUI:
                     paused=self._session_state is SessionState.PAUSED,
                 )
                 distance_changed = session.distance_accumulator.distance_m != previous_distance_m
-            self._live_metrics.power_watts = int(sample.power_watts or 0)
 
         self._metrics_dirty = True
 
@@ -1262,6 +1278,15 @@ class TrackerPageUI:
             dist_ok = bool(rec.distance_connected)
 
         self._sync_workout_distance_source(connected=dist_ok)
+        if not speed_ok and self._live_metrics.speed_mps:
+            self._live_metrics.speed_mps = 0.0
+            self._metrics_dirty = True
+        if not cad_ok and self._live_metrics.cadence_spm:
+            self._live_metrics.cadence_spm = 0
+            self._metrics_dirty = True
+        if not pow_ok and self._live_metrics.power_watts:
+            self._live_metrics.power_watts = 0
+            self._metrics_dirty = True
         status = SensorStatus(
             hr=hr_ok,
             speed=speed_ok,
@@ -1290,6 +1315,9 @@ class TrackerPageUI:
 
     # ---- resets & utils
     def _reset_buffers(self) -> None:
+        """Clear live readings, averages, chart buffers, and workout distance state."""
+        self._live_metrics = LiveMetrics()
+        self._metrics_dirty = True
         self._session_averages = MetricAverages()
         self._step_averages = MetricAverages()
         self._publish_pebble_averages()

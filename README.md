@@ -29,6 +29,12 @@ https://fitness-tracker.luigi311.com/devices/
 
 1. **Set Personal information**: Set your weight, heart rate, ftp values so it can be used to calculate your zones for zone targeting
 2. **Select Devices**: Expand the sport sensors and scan/select the sensors for each given category
+   Select **GPS** as the speed device under Running Sensors or Cycling Sensors to use
+   outdoor location fixes for speed, pace, distance, and available altitude. Cadence,
+   heart rate, and power can still come from Bluetooth sensors. GPS metrics require
+   location permission and begin after Start; they remain available when **Record
+   outdoor routes** is off, without saving coordinates. Indoor and trainer sessions
+   do not use GPS for movement metrics.
 3. **Set data providers**: Expand the data providers you wish to enable and input information to pull/push your sessions externally
 4. **Actions**: Save settings once everything is configured and fetch/upload when needed
 
