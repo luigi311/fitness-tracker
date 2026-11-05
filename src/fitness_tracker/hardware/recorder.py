@@ -912,7 +912,7 @@ class Recorder:
                 timestamp_ms,
                 accepted,
             )
-            if not persisted and not self.test_mode:
+            if not persisted and gps_sample is None and not self.test_mode:
                 return
 
             with self._recording_lock:
@@ -943,11 +943,21 @@ class Recorder:
             self._handle_location_state(generation, operation, LocationState.ERROR, str(error))
 
     def _persist_location_fix(self, generation: int, timestamp_ms: int, fix: LocationFix) -> bool:
-        """Store route coordinates only when location recording is enabled."""
-        persisted = self._persist_if_recording(
-            generation,
-            lambda activity_id: self.store.insert_location_point(activity_id, timestamp_ms, fix),
-        )
+        """Store route coordinates without interrupting an active GPS metric stream."""
+        try:
+            persisted = self._persist_if_recording(
+                generation,
+                lambda activity_id: self.store.insert_location_point(
+                    activity_id,
+                    timestamp_ms,
+                    fix,
+                ),
+            )
+        except Exception:
+            if self._gps_metrics is None:
+                raise
+            logger.exception("Route persistence failed; GPS metrics recording continues")
+            return False
         if persisted:
             logger.bind(data={"timestamp_ms": timestamp_ms}).trace(
                 "Persisted location fix",

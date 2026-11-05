@@ -37,6 +37,7 @@ from fitness_tracker.hardware.location import (
     haversine_distance_m,
 )
 from fitness_tracker.hardware.recorder import Recorder, RecorderSensorKind
+from sqlalchemy.orm import Session
 
 
 def _fix(latitude=0.0, **kwargs):
@@ -397,6 +398,64 @@ def test_gps_records_metrics_without_bluetooth_and_respects_route_privacy(
         assert stats.avg_cadence is None
     assert not recorder.speed_connected
     assert not recorder.distance_connected
+
+
+@pytest.mark.parametrize("sport", [SportTypesEnum.running, SportTypesEnum.biking])
+@pytest.mark.parametrize(
+    ("failure_stage", "batch_size"),
+    [("queue", 1), ("flush", 1), ("flush", 2)],
+)
+def test_route_storage_failures_do_not_interrupt_gps(
+    gps_recorder,
+    monkeypatch,
+    sport,
+    failure_stage,
+    batch_size,
+):
+    """Keep GPS metrics durable and continuous while route storage repeatedly fails."""
+    recorder, source, samples, now = gps_recorder(sport, route=True)
+    recorder.store.BATCH_SIZE = batch_size
+    original_flush = Session.flush
+
+    def flush(session, objects=None):
+        """Fail route flushes while allowing independent metric commits to succeed."""
+        has_route_rows = any(isinstance(row, LocationPoint) for row in session.new)
+        original_flush(session, objects)
+        if has_route_rows:
+            message = "route storage unavailable"
+            raise RuntimeError(message)
+
+    with monkeypatch.context() as failure:
+        if failure_stage == "queue":
+            failure.setattr(
+                recorder.store,
+                "insert_location_point",
+                Mock(side_effect=RuntimeError("route storage unavailable")),
+            )
+        else:
+            failure.setattr(Session, "flush", flush)
+        for index in range(5):
+            now[0] = (index + 1) * 1000
+            source.on_fix(_fix(index * 0.00002, speed_mps=3.0))
+            assert recorder.location_state is LocationState.TRACKING
+            assert recorder.speed_connected
+            assert recorder.distance_connected
+        assert len(samples) == 5
+        assert samples[-1].distance_m == pytest.approx(haversine_distance_m(_fix(), _fix(0.00008)))
+        model = RunningMetrics if sport == SportTypesEnum.running else CyclingMetrics
+        with recorder.store.Session() as session:
+            rows = session.query(model).order_by(model.timestamp_ms).all()
+            assert len(rows) == 5
+            assert rows[-1].total_distance_m == samples[-1].distance_m
+            assert session.query(LocationPoint).count() == 0
+        expected_route_rows = 5 if failure_stage == "flush" else 0
+        assert len(recorder.store._pending_location) == expected_route_rows
+
+    assert recorder.stop_recording() is not None
+    with recorder.store.Session() as session:
+        assert session.query(model).count() == 5
+        assert session.query(LocationPoint).count() == expected_route_rows
+        assert session.query(ActivityStats).one().distance_m == samples[-1].distance_m
 
 
 @pytest.mark.parametrize("sport", [SportTypesEnum.running, SportTypesEnum.biking])

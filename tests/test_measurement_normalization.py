@@ -332,6 +332,68 @@ def test_failed_mixed_measurement_flush_keeps_rows_retryable(
     assert len(db.repository.list_location_points(activity_id)) == 1
 
 
+def test_route_flush_failure_preserves_metrics_and_retries_only_route_rows(monkeypatch):
+    """Commit all metric types despite route rollback, then retry without duplicates."""
+    db = _database()
+    activity_id = db.start_activity(SportTypesEnum.running, Environment.OUTDOOR)
+    db.repository.mark_upload_ok(activity_id, "test", payload_hash="old-hash")
+    db.insert_heart_rate(activity_id, 1_000, 140, None)
+    db.insert_running_metrics(
+        activity_id,
+        RunningSample(timestamp_ms=1_000, speed_mps=3.0, distance_m=3.0),
+        None,
+        source="gps",
+    )
+    db.insert_cycling_metrics(
+        activity_id,
+        CyclingSample(timestamp_ms=1_000, speed_mps=3.0, distance_m=3.0),
+        None,
+        source="gps",
+    )
+    db.insert_location_point(activity_id, 1_000, LocationFix(39.7392, -104.9903))
+    original_flush = Session.flush
+    fail_once = True
+
+    def flush_once(session, objects=None):
+        """Roll back a route transaction after its rows have reached the database."""
+        nonlocal fail_once
+        has_route_rows = any(isinstance(row, LocationPoint) for row in session.new)
+        original_flush(session, objects)
+        if fail_once and has_route_rows:
+            fail_once = False
+            message = "temporary route flush failure"
+            raise RuntimeError(message)
+
+    monkeypatch.setattr(Session, "flush", flush_once)
+
+    with pytest.raises(RuntimeError, match="temporary route flush failure"):
+        db.finalize_activity(activity_id)
+
+    assert db._pending_hr == []  # noqa: SLF001
+    assert db._pending_run == []  # noqa: SLF001
+    assert db._pending_cyc == []  # noqa: SLF001
+    assert len(db._pending_location) == 1  # noqa: SLF001
+    with db.Session() as session:
+        assert session.query(HeartRate).count() == 1
+        assert session.query(RunningMetrics).count() == 1
+        assert session.query(CyclingMetrics).count() == 1
+        assert session.query(LocationPoint).count() == 0
+        assert session.query(ActivityUpload).one().status == "pending"
+
+    db.repository.mark_upload_ok(activity_id, "test", payload_hash="metrics-only-hash")
+    db.finalize_activity(activity_id)
+
+    assert db._pending_location == []  # noqa: SLF001
+    with db.Session() as session:
+        assert session.query(HeartRate).count() == 1
+        assert session.query(RunningMetrics).count() == 1
+        assert session.query(CyclingMetrics).count() == 1
+        assert session.query(LocationPoint).count() == 1
+        upload = session.query(ActivityUpload).one()
+        assert upload.status == "pending"
+        assert upload.payload_hash is None
+
+
 def test_migration_secures_sqlite_database_sidecars_and_backup(tmp_path: Path) -> None:
     database_path = tmp_path / "released-v4.db"
     fixture_path = _DATABASE_FIXTURE_DIR / "v4.sql"

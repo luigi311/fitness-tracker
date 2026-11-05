@@ -303,7 +303,7 @@ class DatabaseManager:
 
             # flush in batches
             if len(self._pending_hr) >= self.BATCH_SIZE:
-                self._flush_pending_locked()
+                self._flush_pending_metrics_locked()
 
     def insert_running_metrics(
         self,
@@ -342,7 +342,7 @@ class DatabaseManager:
         with self._pending_lock:
             self._pending_run.append(rm)
             if len(self._pending_run) >= self.BATCH_SIZE:
-                self._flush_pending_locked()
+                self._flush_pending_metrics_locked()
 
     def insert_cycling_metrics(
         self,
@@ -379,7 +379,7 @@ class DatabaseManager:
         with self._pending_lock:
             self._pending_cyc.append(cm)
             if len(self._pending_cyc) >= self.BATCH_SIZE:
-                self._flush_pending_locked()
+                self._flush_pending_metrics_locked()
 
     def insert_location_point(
         self,
@@ -405,20 +405,37 @@ class DatabaseManager:
                 self._flush_pending_locked()
 
     def _flush_pending(self) -> None:
+        """Flush metric and route batches while excluding concurrent queue updates."""
         with self._pending_lock:
             self._flush_pending_locked()
 
     def _flush_pending_locked(self) -> None:
+        """Commit metrics before attempting a separate, retryable route transaction."""
+        self._flush_pending_metrics_locked()
+        if not self._pending_location:
+            return
+        with self.Session() as session:
+            session.add_all([LocationPoint(**location) for location in self._pending_location])
+            self._invalidate_successful_uploads(
+                session,
+                {item["activity_id"] for item in self._pending_location},
+            )
+            session.commit()
+        self._pending_location.clear()
+
+    def _flush_pending_metrics_locked(self) -> None:
+        """Commit sensor rows independently, retaining them only if their commit fails."""
         activity_ids = {
             item["activity_id"]
             for pending_items in (
                 self._pending_hr,
                 self._pending_run,
                 self._pending_cyc,
-                self._pending_location,
             )
             for item in pending_items
         }
+        if not activity_ids:
+            return
         with self.Session() as session:
             if self._pending_hr:
                 session.add_all([HeartRate(**values) for values in self._pending_hr])
@@ -426,17 +443,12 @@ class DatabaseManager:
                 session.add_all([RunningMetrics(**values) for values in self._pending_run])
             if self._pending_cyc:
                 session.add_all([CyclingMetrics(**values) for values in self._pending_cyc])
-            if self._pending_location:
-                session.add_all(
-                    [LocationPoint(**location) for location in self._pending_location],
-                )
             self._invalidate_successful_uploads(session, activity_ids)
             session.commit()
 
         self._pending_hr.clear()
         self._pending_run.clear()
         self._pending_cyc.clear()
-        self._pending_location.clear()
 
     @staticmethod
     def _invalidate_successful_uploads(session: Session, activity_ids: set[int]) -> None:
