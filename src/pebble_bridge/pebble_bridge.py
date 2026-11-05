@@ -154,12 +154,23 @@ class _CobbleBackend:
 
     async def _async_connect(self) -> None:
         client = _CobbleClient()
+        # Retain partially connected clients so connect() can close their bus
+        # before falling back to another transport.
+        self._client = client
         # require_daemon=True makes connect() raise DaemonNotRunningError
         # immediately if the daemon's bus name has no owner, instead of
         # blocking — that exception is our signal to fall through to the next
         # backend.
-        await client.connect(require_daemon=True)
-        self._client = client
+        try:
+            await client.connect(require_daemon=True)
+        except AttributeError as error:
+            if error.name not in {"on_install_pbw_progress", "on_installed_apps_changed"}:
+                raise
+            message = (
+                "The Pebble daemon lacks signals required by cobble-client. "
+                "Upgrade and restart cobbled to match the installed cobble-client version."
+            )
+            raise RuntimeError(message) from error
         client.on_app_message(self._handle_app_message)
 
     async def _async_launch_app(self) -> None:

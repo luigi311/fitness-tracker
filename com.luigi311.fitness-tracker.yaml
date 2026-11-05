@@ -72,7 +72,7 @@ modules:
     sources:
       - type: git
         url: https://github.com/luigi311/cobble
-        commit: 2993f645a3b532ac58a4f5f8ec0ac5a64a9d18f2
+        commit: 5a0b0dea902f765d6b46b232a08bb440c05c2b7d
 
   - name: python3-workout-parser
     buildsystem: simple

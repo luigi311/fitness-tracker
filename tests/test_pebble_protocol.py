@@ -4,7 +4,9 @@ import json
 import runpy
 import threading
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock, Mock
 
 import pebble_bridge.pebble_bridge as pebble_module
 import pebble_bridge.protocol as protocol_module
@@ -702,6 +704,76 @@ def test_watch_launch_requests_a_full_state_resend(
         pebble_module.KEY_UNITS,
         pebble_module.KEY_WORKOUT_STEP,
     }
+
+
+@pytest.mark.parametrize("missing_signal", ["on_install_pbw_progress", "on_installed_apps_changed"])
+def test_cobble_incompatible_daemon_closes_partial_connection(
+    monkeypatch: pytest.MonkeyPatch,
+    missing_signal: str,
+) -> None:
+    pytest.importorskip("cobble_client")
+    client = SimpleNamespace(
+        connect=AsyncMock(side_effect=AttributeError("Missing signal", name=missing_signal)),
+        close=AsyncMock(),
+        on_app_message=Mock(),
+    )
+    monkeypatch.setattr(pebble_module, "_CobbleClient", lambda: client)
+    backend = pebble_module._CobbleBackend("00000000-0000-0000-0000-000000000000", Mock())
+
+    with pytest.raises(RuntimeError, match="Upgrade and restart cobbled"):
+        backend.connect()
+
+    client.connect.assert_awaited_once_with(require_daemon=True)
+    client.close.assert_awaited_once_with()
+    client.on_app_message.assert_not_called()
+    assert backend._client is None
+    assert backend._loop is None
+    assert backend._thread is None
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        RuntimeError("Connection failed"),
+        AttributeError("Unrelated client failure", name="unexpected_attribute"),
+    ],
+)
+def test_cobble_failed_connection_preserves_error_and_closes_client(
+    monkeypatch: pytest.MonkeyPatch,
+    error: Exception,
+) -> None:
+    pytest.importorskip("cobble_client")
+    client = SimpleNamespace(connect=AsyncMock(side_effect=error), close=AsyncMock())
+    monkeypatch.setattr(pebble_module, "_CobbleClient", lambda: client)
+    backend = pebble_module._CobbleBackend("00000000-0000-0000-0000-000000000000", Mock())
+
+    with pytest.raises(type(error)) as caught:
+        backend.connect()
+
+    assert caught.value is error
+    client.close.assert_awaited_once_with()
+    assert backend._client is None
+    assert backend._loop is None
+    assert backend._thread is None
+
+
+def test_cobble_connected_client_registers_handler_and_closes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pytest.importorskip("cobble_client")
+    client = SimpleNamespace(connect=AsyncMock(), close=AsyncMock(), on_app_message=Mock())
+    monkeypatch.setattr(pebble_module, "_CobbleClient", lambda: client)
+    backend = pebble_module._CobbleBackend("00000000-0000-0000-0000-000000000000", Mock())
+
+    try:
+        backend.connect()
+        client.connect.assert_awaited_once_with(require_daemon=True)
+        client.on_app_message.assert_called_once_with(backend._handle_app_message)
+        assert backend._client is client
+    finally:
+        backend.close()
+
+    client.close.assert_awaited_once_with()
 
 
 def test_cobble_uint8_watch_launch_request_is_normalized() -> None:
