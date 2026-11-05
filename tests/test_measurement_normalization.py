@@ -77,6 +77,7 @@ def test_zero_altitude_is_preserved(
 
 
 def test_independent_sensor_metrics_preserve_missing_values() -> None:
+    """Store absent movement readings as NULL alongside independent sensor values."""
     db = _database()
     activity_id = db.start_activity(SportTypesEnum.running, Environment.INDOOR)
 
@@ -762,6 +763,7 @@ def test_heart_rate_contract_uses_explicit_fields() -> None:
     ],
 )
 def test_partial_sensor_columns_match_nullable_metadata(table, column):
+    """Keep migrated partial sensor columns nullable in both the schema and ORM."""
     db = _database()
     database_column = next(
         item for item in inspect(db.engine).get_columns(table) if item["name"] == column
@@ -771,6 +773,7 @@ def test_partial_sensor_columns_match_nullable_metadata(table, column):
 
 
 def test_metric_source_migration_preserves_legacy_rows_and_nullable_measurements(tmp_path):
+    """Upgrade legacy metrics without guessing their source or filling missing values."""
     database_url = f"sqlite:///{tmp_path / 'metric-sources.db'}"
     db = DatabaseManager(database_url)
     activity_id = db.start_activity(SportTypesEnum.running, Environment.OUTDOOR)

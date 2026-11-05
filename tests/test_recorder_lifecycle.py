@@ -999,7 +999,7 @@ class RecorderLifecycleTests(unittest.TestCase):
             )
 
         self.assertTrue(lock_available.is_set())
-        trace_logger.bind.assert_any_call(data={"timestamp_ms": ANY, "fix": fix})
+        trace_logger.bind.assert_any_call(data={"timestamp_ms": ANY})
         trace_logger.bind.return_value.trace.assert_any_call("Persisted location fix")
         recorder._recording = False
         recorder.shutdown()

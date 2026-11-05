@@ -59,6 +59,7 @@ def test_provider_speed_and_derived_speed_share_cumulative_distance():
 
 @pytest.mark.parametrize("speed_mps", [None, 0.0, 0.05])
 def test_stationary_jitter_does_not_accumulate_distance(speed_mps):
+    """Keep stationary position noise from adding distance or reporting movement."""
     processor = GpsMetricProcessor(12.0)
     location_filter = LocationFilter(LocationPolicy.outdoor(), max_speed_mps=12.0)
     for index in range(600):
@@ -71,6 +72,7 @@ def test_stationary_jitter_does_not_accumulate_distance(speed_mps):
 
 
 def test_slow_sustained_movement_survives_the_accuracy_gate():
+    """Accumulate slow progress once displacement exceeds positional uncertainty."""
     processor = GpsMetricProcessor(12.0)
     first = _fix()
     processor.process(first, 0)
@@ -83,6 +85,7 @@ def test_slow_sustained_movement_survives_the_accuracy_gate():
 
 
 def test_derived_speed_reaches_zero_after_stopping_and_resets_after_a_gap():
+    """Report a sustained stop and require a fresh speed window after signal loss."""
     processor = GpsMetricProcessor(12.0)
     for index in range(41):
         moving = processor.process(_fix(index * 0.00002), index * 1000)
@@ -160,6 +163,7 @@ class _Source:
 
 @pytest.fixture
 def gps_recorder(monkeypatch):
+    """Provide GPS recorders with a controlled clock and clean up their sessions."""
     recorders = []
     now = [1000]
     monkeypatch.setattr(recorder_module, "relative_timestamp_ms", lambda _origin: now[0])
@@ -205,6 +209,7 @@ def gps_recorder(monkeypatch):
 @pytest.mark.parametrize("accuracy_m", [3.0, 5.0, 10.0])
 @pytest.mark.parametrize("pattern", ["straight", "shuttle"])
 def test_continuous_derived_speed_handles_turnarounds(gps_recorder, sport, accuracy_m, pattern):
+    """Preserve scalar speed through turns in live averages and persisted readings."""
     recorder, source, samples, now = gps_recorder(sport)
     meters_per_degree = haversine_distance_m(_fix(), _fix(1))
     averages = MetricAverages()
@@ -225,6 +230,7 @@ def test_continuous_derived_speed_handles_turnarounds(gps_recorder, sport, accur
 
 
 def test_derived_speed_retains_a_curved_path():
+    """Estimate speed along a curve without reducing it to endpoint displacement."""
     processor = GpsMetricProcessor(12.0)
     meters_per_degree = haversine_distance_m(_fix(), _fix(1))
     speeds = []
@@ -260,6 +266,7 @@ def test_independent_bluetooth_links_preserve_other_sensor_roles(
     source,
     events,
 ):
+    """Keep each sensor's connected roles independent of other devices' link events."""
     recorder, location, _samples, _now = gps_recorder(sport, source=source)
     if source == "gps":
         location.on_fix(_fix(speed_mps=3))
@@ -283,6 +290,7 @@ def test_independent_bluetooth_links_preserve_other_sensor_roles(
 
 @pytest.mark.parametrize("stop_fails", [False, True])
 def test_speed_loop_cleanup_clears_all_link_roles(gps_recorder, monkeypatch, stop_fails):
+    """Clear movement and power connectivity even when mux shutdown raises."""
     recorder, _location, _samples, _now = gps_recorder(source="ble")
     recorder._on_running_link("motion", connected=True, roles={"rsc": True})
     recorder._on_running_link("power", connected=True, roles={"cps": True})
@@ -317,6 +325,7 @@ def test_unknown_speed_preserves_connection_until_signal_loss(gps_recorder):
 
 
 def test_bluetooth_scan_and_connection_failures_do_not_stop_gps(gps_recorder, monkeypatch):
+    """Keep GPS recording active when configured Bluetooth sensors cannot connect."""
     discover = AsyncMock(side_effect=BleakError("Bluetooth is disabled"))
     mux = SimpleNamespace(
         start=AsyncMock(side_effect=BleakError("No Bluetooth adapter")),
@@ -327,6 +336,7 @@ def test_bluetooth_scan_and_connection_failures_do_not_stop_gps(gps_recorder, mo
     recorder, source, samples, now = gps_recorder(hr_address="HR")
 
     async def exercise():
+        """Feed GPS fixes after BLE failures, then stop the recorder workflow cleanly."""
         workflow = asyncio.create_task(recorder._workflow())
         try:
             for _ in range(10):
@@ -359,6 +369,7 @@ def test_gps_records_metrics_without_bluetooth_and_respects_route_privacy(
     sport,
     route,
 ):
+    """Persist GPS measurements independently of the user's route storage setting."""
     recorder, source, samples, now = gps_recorder(sport, route=route)
     assert not recorder._configured_sensors[RecorderSensorKind.SPEED].configured
     assert source.policy.distance_threshold_m == 0
@@ -390,6 +401,7 @@ def test_gps_records_metrics_without_bluetooth_and_respects_route_privacy(
 
 @pytest.mark.parametrize("sport", [SportTypesEnum.running, SportTypesEnum.biking])
 def test_bluetooth_cannot_override_selected_gps_metrics(gps_recorder, sport):
+    """Retain BLE power while reserving outdoor movement measurements for GPS."""
     recorder, source, samples, _now = gps_recorder(sport)
     source.on_fix(_fix(speed_mps=3.0))
     if sport == SportTypesEnum.running:
@@ -463,6 +475,7 @@ def test_indoor_gps_selection_does_not_start_movement_tracking(gps_recorder):
 
 @pytest.mark.parametrize("sport", [SportTypesEnum.running, SportTypesEnum.biking])
 def test_gps_and_late_bluetooth_samples_share_the_recording_clock(gps_recorder, sport):
+    """Align late BLE readings with contemporaneous GPS samples in storage and UI."""
     recorder, source, samples, now = gps_recorder(sport)
     sample_type = RunningSample if sport == SportTypesEnum.running else CyclingSample
     handler = (
@@ -498,6 +511,7 @@ def test_gps_and_late_bluetooth_samples_share_the_recording_clock(gps_recorder, 
 
 @pytest.mark.parametrize("sport", [SportTypesEnum.running, SportTypesEnum.biking])
 def test_indoor_gps_profile_preserves_bluetooth_movement(gps_recorder, sport):
+    """Use BLE speed, distance, and incline altitude when a GPS profile runs indoors."""
     recorder, _source, samples, _now = gps_recorder(sport, environment=Environment.INDOOR)
     recorder._on_running_link("AA", connected=True, roles={"rsc": True, "cps": True})
     recorder.set_incline(5.0)
@@ -519,6 +533,7 @@ def test_indoor_gps_profile_preserves_bluetooth_movement(gps_recorder, sport):
 
 @pytest.mark.parametrize("sport", [SportTypesEnum.running, SportTypesEnum.biking])
 def test_route_disabled_gps_export_preserves_measured_altitude(gps_recorder, sport):
+    """Export measured GPS altitude without storing or exporting route coordinates."""
     from xml.etree import ElementTree as ET  # noqa: PLC0415
 
     recorder, source, _samples, now = gps_recorder(sport)
@@ -546,6 +561,7 @@ def test_route_disabled_gps_export_preserves_measured_altitude(gps_recorder, spo
 
 
 def test_gps_altitude_jitter_does_not_inflate_elevation():
+    """Ignore alternating altitude noise when calculating GPS ascent and descent."""
     samples = [
         RunningMetrics(altitude_m=100 + (3 if index % 2 else -3), source="gps")
         for index in range(3600)
@@ -555,6 +571,7 @@ def test_gps_altitude_jitter_does_not_inflate_elevation():
 
 
 def test_flat_gps_altitude_noise_stays_bounded_over_an_hour():
+    """Keep elevation totals small for a long stationary trace with altitude noise."""
     random = Random(0)
     samples = [
         RunningMetrics(altitude_m=100 + random.gauss(0, 3), source="gps") for _ in range(3600)
@@ -567,6 +584,7 @@ def test_flat_gps_altitude_noise_stays_bounded_over_an_hour():
 
 
 def test_gps_elevation_retains_a_sustained_climb_and_descent():
+    """Preserve substantial elevation changes while smoothing GPS altitude."""
     samples = [
         RunningMetrics(altitude_m=altitude, source="gps")
         for altitude in (
@@ -583,6 +601,7 @@ def test_gps_elevation_retains_a_sustained_climb_and_descent():
 
 @pytest.mark.parametrize("source", [None, "ble"])
 def test_small_bluetooth_elevation_changes_remain_precise(source):
+    """Leave precise BLE and legacy altitude changes outside GPS noise filtering."""
     samples = [RunningMetrics(altitude_m=altitude, source=source) for altitude in (0, 0.1, 0.2)]
 
     assert _calc_elevation(samples) == pytest.approx((0.2, 0.0))

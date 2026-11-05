@@ -292,6 +292,7 @@ def _running_values(
     metric: CompareMetric,
     unit_system: UnitSystem,
 ) -> list[tuple[int, float | None]]:
+    """Convert the selected running metric to display units, preserving missing readings."""
     values: list[tuple[int, float | None]] = []
     for timestamp_ms, speed_mps, cadence_spm, power_watts in points:
         if metric == "pace" and speed_mps is not None:
@@ -314,6 +315,7 @@ def _cycling_values(
     metric: CompareMetric,
     unit_system: UnitSystem,
 ) -> list[tuple[int, float | None]]:
+    """Convert the selected cycling metric to display units, preserving missing readings."""
     values: list[tuple[int, float | None]] = []
     for timestamp_ms, speed_mps, cadence_rpm, power_watts in points:
         if metric == "speed" and speed_mps is not None:

@@ -124,6 +124,7 @@ def test_compare_query_honors_pre_cancelled_token() -> None:
 @pytest.mark.parametrize("sport", [SportTypesEnum.running, SportTypesEnum.biking])
 @pytest.mark.parametrize("metric", ["speed", "cadence", "power"])
 def test_history_accepts_independent_gps_and_bluetooth_readings(sport, metric):
+    """Build chart values from partial rows without inventing missing sensor data."""
     from bleaksport import CyclingSample, RunningSample  # noqa: PLC0415
 
     db = DatabaseManager("sqlite:///:memory:")

@@ -347,6 +347,7 @@ def test_incline_clamp_applies_to_initial_values() -> None:
 
 
 def test_gps_speed_option_survives_scans_and_switches_back_to_bluetooth():
+    """Preserve GPS through scans and reloads while allowing BLE or no speed source."""
     from fitness_tracker.core.settings import SensorSettings  # noqa: PLC0415
 
     specs = tuple(

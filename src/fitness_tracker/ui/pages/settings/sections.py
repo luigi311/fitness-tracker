@@ -148,6 +148,7 @@ class SensorSection:
         return names
 
     def _active_name(self, spec: SensorRowSpec) -> str | None:
+        """Resolve a sensor selection, including GPS and trainer-supplied heart rate."""
         if isinstance(self.settings, SensorSettings):
             match spec.settings_field:
                 case "hr_name":

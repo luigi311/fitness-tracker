@@ -146,6 +146,7 @@ class Recorder:
         record_indoor_anchor: bool = False,
         indoor_accuracy: PortalAccuracy = PortalAccuracy.NEIGHBORHOOD,
     ) -> None:
+        """Configure sensor roles, location policy, callbacks, and session state."""
         logger.debug(f"Initializing Recorder with sport_type {sport_type}")
         logger.debug(f"HR sensor: name={profile.hr_name}, address={profile.hr_address}")
         logger.debug(f"Speed sensor: name={profile.speed_name}, address={profile.speed_address}")
@@ -948,7 +949,7 @@ class Recorder:
             lambda activity_id: self.store.insert_location_point(activity_id, timestamp_ms, fix),
         )
         if persisted:
-            logger.bind(data={"timestamp_ms": timestamp_ms, "fix": fix}).trace(
+            logger.bind(data={"timestamp_ms": timestamp_ms}).trace(
                 "Persisted location fix",
             )
         return persisted
@@ -1134,6 +1135,7 @@ class Recorder:
 
     # --- Running handling ---
     def _handle_running_sample(self, sample: RunningSample) -> None:
+        """Normalize, dispatch, and store BLE readings while preserving GPS ownership."""
         logger.bind(data=sample).trace("Handling running sample")
         with self._recording_lock:
             generation = self._recording_generation
@@ -1162,6 +1164,7 @@ class Recorder:
         )
 
     def _handle_cycling_sample(self, sample: CyclingSample) -> None:
+        """Normalize, dispatch, and store cycling readings without replacing GPS metrics."""
         logger.bind(data=sample).trace("Handling cycling sample")
         with self._recording_lock:
             generation = self._recording_generation
@@ -1187,6 +1190,7 @@ class Recorder:
         )
 
     def _handle_trainer_sample(self, sample: TrainerSample) -> None:
+        """Process trainer measurements and embedded heart rate on the recording clock."""
         logger.bind(data=sample).trace("Handling trainer sample")
         with self._recording_lock:
             generation = self._recording_generation
@@ -1319,6 +1323,7 @@ class Recorder:
                 logger.warning(f"Task {task.get_name()} raised on shutdown: {error}")
 
     async def _workflow(self) -> None:
+        """Discover configured BLE sensors and run their loops until shutdown."""
         logger.debug("Starting Recorder workflow")
         # Bind the stop event to the Recorder's worker loop.
         self._stop_event = asyncio.Event()
@@ -1366,6 +1371,7 @@ class Recorder:
         logger.debug("Workflow exiting")
 
     async def _speed_loop(self) -> None:
+        """Run the sport's movement mux and clear its link roles during cleanup."""
         speed = self._configured_sensors[RecorderSensorKind.SPEED]
         cadence = self._configured_sensors[RecorderSensorKind.CADENCE]
         power = self._configured_sensors[RecorderSensorKind.POWER]
@@ -1414,6 +1420,7 @@ class Recorder:
         connected: bool,  # noqa: FBT001 - BLE link callback supplies positional state
         roles: dict[str, bool],
     ) -> None:
+        """Aggregate movement and power availability across active BLE device roles."""
         if connected:
             self._link_roles[addr] = dict(roles)
         else:

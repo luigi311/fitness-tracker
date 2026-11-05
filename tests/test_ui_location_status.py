@@ -133,6 +133,7 @@ class _HeadlessCombo(_HeadlessWidget):
         self.active_index = -1
 
     def get_active_text(self) -> str | None:
+        """Return the headless combo's selected label, or None when unselected."""
         return self.items[self.active_index] if self.active_index >= 0 else None
 
     def set_active(self, index: int) -> None:  # ty:ignore[invalid-method-override]

@@ -1315,6 +1315,7 @@ class TrackerPageUI:
 
     # ---- resets & utils
     def _reset_buffers(self) -> None:
+        """Clear live readings, averages, chart buffers, and workout distance state."""
         self._live_metrics = LiveMetrics()
         self._metrics_dirty = True
         self._session_averages = MetricAverages()

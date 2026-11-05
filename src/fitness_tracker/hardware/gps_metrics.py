@@ -15,6 +15,7 @@ _SPEED_WINDOW_S = 10.0
 
 
 def _usable_fix(fix: LocationFix) -> bool:
+    """Reject fixes outside the supported accuracy or source timestamp window."""
     if fix.accuracy_m is not None and fix.accuracy_m > _MAX_ACCURACY_M:
         return False
     if fix.source_time_utc is not None:
