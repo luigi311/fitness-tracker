@@ -24,7 +24,7 @@ dependencies = [
     "sqlalchemy>=2.0.48",
     "workout-parser>=0.2.0",
     "xdg-base-dirs>=6.0.2",
-    "alembic>=1.17.0",
+    "alembic>=1.20.0",
 ]
 
 [dependency-groups]
