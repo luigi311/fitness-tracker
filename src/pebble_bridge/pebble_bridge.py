@@ -52,7 +52,7 @@ if TYPE_CHECKING:
 # Linux/D-Bus oriented and may not be installed; degrade gracefully if so.
 try:
     from cobble_client import CobbleClient as _CobbleClient
-    from cobble_client import DaemonNotRunningError
+    from cobble_client import DaemonNotRunningError, NotConnectedError
     from cobble_client import Int as _CobbleInt
     from cobble_client import u8 as _cobble_u8
     from cobble_client import u16 as _cobble_u16
@@ -80,6 +80,14 @@ def _target_wire_value(value: float, kind: int | None) -> int:
     target_kind = TGT_NONE if kind is None else kind
     scale = TARGET_KIND_SCALE.get(target_kind, TARGET_KIND_SCALE[TGT_NONE])
     return round(value * scale)
+
+
+def _log_bridge_error(error: Exception) -> None:
+    """Report disconnected watches as waiting and other bridge failures as errors."""
+    if HAVE_COBBLE and isinstance(error, NotConnectedError):
+        logger.info("Waiting for cobbled daemon to connect to Pebble")
+    else:
+        logger.error(f"PebbleBridge error: {error!r}")
 
 
 _CURRENT_WORKER = object()
@@ -153,7 +161,7 @@ class _CobbleBackend:
         return asyncio.run_coroutine_threadsafe(coro, loop).result(timeout)
 
     async def _async_connect(self) -> None:
-        """Connect to Cobble and report missing daemon signal support."""
+        """Connect to Cobble and require an active daemon-to-watch link."""
         client = _CobbleClient()
         # Retain partially connected clients so connect() can close their bus
         # before falling back to another transport.
@@ -172,6 +180,9 @@ class _CobbleBackend:
                 "Upgrade and restart cobbled to match the installed cobble-client version."
             )
             raise RuntimeError(message) from error
+        if not await client.is_connected():
+            message = "cobbled daemon is running but the Pebble watch is not connected"
+            raise NotConnectedError(message)
         client.on_app_message(self._handle_app_message)
 
     async def _async_launch_app(self) -> None:
@@ -694,6 +705,7 @@ class PebbleBridge:
         self._close_backend_instance(backend)
 
     def _connect(self) -> None:
+        """Connect through Cobble or serial, waiting if the daemon's watch link is down."""
         if self._backend_for_worker() is not None:
             logger.debug("Already connected")
             return
@@ -721,6 +733,11 @@ class PebbleBridge:
             backend = _CobbleBackend(self.app_uuid, self._on_app_message)
             try:
                 backend.connect()
+            except NotConnectedError:
+                # The daemon owns the watch connection and will reconnect it.
+                # Opening serial here could compete with that connection.
+                backend.close()
+                raise
             except DaemonNotRunningError as e:
                 logger.debug(f"no cobbled daemon running ({e!r}); using Bluetooth serial")
                 backend.close()
@@ -801,6 +818,7 @@ class PebbleBridge:
                     self._dirty_keys.discard(key)
 
     def _loop(self, stop_event: threading.Event | None = None) -> None:
+        """Send current state and retry disconnected watch links with bounded backoff."""
         self._worker_context.stop_event = stop_event
         backoff = 1.0
         full_after_reconnect = False
@@ -831,7 +849,7 @@ class PebbleBridge:
                 except Exception as e:
                     if not self._worker_is_active():
                         break
-                    logger.error(f"PebbleBridge error: {e!r}")
+                    _log_bridge_error(e)
                     self._close_backend()
                     if self._wake.wait(backoff):
                         self._wake.clear()
