@@ -52,6 +52,7 @@ def _format_float(v: float | None, unit: str = "", digits: int = 0) -> str:
 
 
 def _tz_aware_localize(value: dt.datetime) -> dt.datetime:
+    """Convert a timestamp to local time, treating naive values as UTC."""
     if value.tzinfo is None:
         value = value.replace(tzinfo=ZoneInfo("UTC"))
     return value.astimezone()
@@ -387,6 +388,7 @@ class HistoryPageUI:
 
     # ---- Data fetchers ----
     def _filter_cutoff(self, filter_id: str | None = None) -> dt.datetime | None:
+        """Return the local cutoff for a week or month filter, or None."""
         now = dt.datetime.now().astimezone()
         selected_filter = self.filter_id if filter_id is None else filter_id
         if selected_filter == "week":

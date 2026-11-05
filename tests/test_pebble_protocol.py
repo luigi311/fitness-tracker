@@ -711,6 +711,7 @@ def test_cobble_incompatible_daemon_closes_partial_connection(
     monkeypatch: pytest.MonkeyPatch,
     missing_signal: str,
 ) -> None:
+    """Reject incompatible daemons and close the client, loop, and worker thread."""
     pytest.importorskip("cobble_client")
     client = SimpleNamespace(
         connect=AsyncMock(side_effect=AttributeError("Missing signal", name=missing_signal)),
@@ -742,6 +743,7 @@ def test_cobble_failed_connection_preserves_error_and_closes_client(
     monkeypatch: pytest.MonkeyPatch,
     error: Exception,
 ) -> None:
+    """Preserve unrelated connection errors while closing partially opened clients."""
     pytest.importorskip("cobble_client")
     client = SimpleNamespace(connect=AsyncMock(side_effect=error), close=AsyncMock())
     monkeypatch.setattr(pebble_module, "_CobbleClient", lambda: client)
@@ -760,6 +762,7 @@ def test_cobble_failed_connection_preserves_error_and_closes_client(
 def test_cobble_connected_client_registers_handler_and_closes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Register the message handler and close a successfully connected client."""
     pytest.importorskip("cobble_client")
     client = SimpleNamespace(connect=AsyncMock(), close=AsyncMock(), on_app_message=Mock())
     monkeypatch.setattr(pebble_module, "_CobbleClient", lambda: client)

@@ -153,6 +153,7 @@ class _CobbleBackend:
         return asyncio.run_coroutine_threadsafe(coro, loop).result(timeout)
 
     async def _async_connect(self) -> None:
+        """Connect to Cobble and report missing daemon signal support."""
         client = _CobbleClient()
         # Retain partially connected clients so connect() can close their bus
         # before falling back to another transport.

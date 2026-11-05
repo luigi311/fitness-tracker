@@ -175,6 +175,7 @@ def test_history_backfill_discard_and_duplicate_release_reload_guard() -> None:
 
 
 def test_history_backfill_batches_heart_rates_in_worker_result() -> None:
+    """Batch heart-rate samples into the history worker's reload result."""
     page = HistoryPageUI.__new__(HistoryPageUI)
     jobs = Mock()
     repository = Mock()
@@ -250,6 +251,7 @@ def test_history_backfill_coalesces_reload_for_current_filter() -> None:
 
 
 def test_history_export_reads_and_conversion_run_in_submitted_job(monkeypatch) -> None:
+    """Read activity data and build TCX inside the submitted export job."""
     page = HistoryPageUI.__new__(HistoryPageUI)
     jobs = Mock()
     repository = Mock()
