@@ -1,0 +1,22 @@
+{
+  "pages": [
+    {"id": "tracker", "label": "Tracker"},
+    {"id": "workout", "label": "Workout"},
+    {"id": "free-run", "label": "Free Run"},
+    {"id": "history", "label": "History"},
+    {"id": "history-comparison", "label": "History comparison"},
+    {"id": "settings", "label": "Settings"}
+  ],
+  "viewports": [
+    {"id": "librem5-300-portrait", "label": "Librem 5 · 300% · portrait", "width": 240, "height": 480, "scale": 3},
+    {"id": "librem5-300-landscape", "label": "Librem 5 · 300% · landscape", "width": 480, "height": 240, "scale": 3},
+    {"id": "librem5-200-portrait", "label": "Librem 5 · 200% · portrait", "width": 360, "height": 720, "scale": 2},
+    {"id": "librem5-200-landscape", "label": "Librem 5 · 200% · landscape", "width": 720, "height": 360, "scale": 2},
+    {"id": "comet-250-portrait", "label": "Mecha Comet · 250% · portrait", "width": 432, "height": 496, "scale": 2.5},
+    {"id": "comet-250-landscape", "label": "Mecha Comet · 250% · landscape", "width": 496, "height": 432, "scale": 2.5},
+    {"id": "comet-200-portrait", "label": "Mecha Comet · 200% · portrait", "width": 540, "height": 620, "scale": 2},
+    {"id": "comet-200-landscape", "label": "Mecha Comet · 200% · landscape", "width": 620, "height": 540, "scale": 2},
+    {"id": "tablet-portrait", "label": "Tablet · portrait", "width": 800, "height": 1280, "scale": 1},
+    {"id": "tablet-landscape", "label": "Tablet · landscape", "width": 1280, "height": 800, "scale": 1}
+  ]
+}

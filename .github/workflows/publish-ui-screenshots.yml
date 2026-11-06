@@ -1,0 +1,50 @@
+name: Publish UI screenshots
+
+on:
+  workflow_run:
+    workflows: [UI screenshots]
+    types: [completed]
+
+permissions: {}
+
+# Serialize writes to the shared image branch and PR comments.
+concurrency:
+  group: publish-ui-screenshots
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: >-
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: write
+      pull-requests: write
+    steps:
+      # workflow_run uses trusted default-branch code. Never check out the PR or
+      # execute files from its artifact in this job, which has write credentials.
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+          path: trusted
+
+      - uses: actions/download-artifact@v7
+        with:
+          name: ui-screenshots
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+          path: incoming
+
+      - name: Validate images and update the PR comparison
+        uses: actions/github-script@v8
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          SCREENSHOT_ARTIFACT: ${{ github.workspace }}/incoming
+        with:
+          script: |
+            const { publish } = require('./trusted/scripts/ui_screenshots/publish.cjs');
+            await publish({ github, context, core, token: process.env.GITHUB_TOKEN });

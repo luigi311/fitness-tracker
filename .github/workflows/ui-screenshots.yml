@@ -1,0 +1,105 @@
+name: UI screenshots
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ui-screenshots-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  capture:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      # Use one harness for both revisions, even when the base predates this CI.
+      - uses: actions/checkout@v6
+        with:
+          path: harness
+          persist-credentials: false
+
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: before
+          persist-credentials: false
+
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: after
+          persist-credentials: false
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
+      - name: Test screenshot publication
+        run: node --test harness/scripts/ui_screenshots/publish.test.cjs
+
+      - uses: astral-sh/setup-uv@v7
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version-file: after/.python-version
+
+      - name: Install native rendering dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libcairo2-dev pkg-config libgirepository-2.0-dev \
+            gir1.2-gtk-4.0 gir1.2-adw-1 gir1.2-graphene-1.0 \
+            xvfb xauth dbus-x11 adwaita-icon-theme fonts-dejavu-core fonts-noto-color-emoji
+
+      - name: Capture before and after
+        env:
+          PYTHONUNBUFFERED: '1'
+        run: |
+          for revision in before after; do
+            uv sync --project "$revision" --frozen --no-dev
+            dbus-run-session -- xvfb-run -a -s '-screen 0 1600x1600x24 -nolisten tcp' \
+              uv run --project "$revision" --no-sync python \
+              harness/scripts/ui_screenshots/capture.py \
+              --output "$GITHUB_WORKSPACE/screenshots/$revision"
+          done
+
+      - name: Record comparison revisions
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          metadata = {
+              "pr": int(os.environ["PR_NUMBER"]),
+              "base": os.environ["BASE_SHA"],
+              "head": os.environ["HEAD_SHA"],
+              "headRepository": os.environ["HEAD_REPOSITORY"],
+          }
+          Path("screenshots/metadata.json").write_text(json.dumps(metadata), encoding="utf-8")
+          PY
+
+      - name: Upload screenshots
+        uses: actions/upload-artifact@v7
+        with:
+          name: ui-screenshots
+          path: screenshots/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Add run summary
+        run: |
+          cat >> "$GITHUB_STEP_SUMMARY" <<'EOF_SUMMARY'
+          Captured 6 pages × 10 layouts × 2 revisions (120 PNGs).
+          Download the **ui-screenshots** artifact for full-resolution images.
+          The **Publish UI screenshots** workflow adds the comparison to the PR
+          once these workflows are installed on the default branch.
+          EOF_SUMMARY
