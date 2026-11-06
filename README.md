@@ -55,6 +55,9 @@ After installing the project with `uv sync`, the canonical application command i
 
 * **Settings Page**: Configure your settings and upload/download your sessions/workouts
 
+PR CI captures before/after images for six pages across Librem 5, Mecha Comet,
+and tablet layouts. See [PR screenshot generation](docs/pr-ui-screenshots.md).
+
 ## Screenshots
 <p>
   <img src="docs/screenshots/tracker.png" width="360" alt="Tracker Page" />
