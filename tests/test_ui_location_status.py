@@ -61,6 +61,12 @@ class _HeadlessBox(_HeadlessWidget):
 
 
 class _HeadlessFlowBox(_HeadlessBox):
+    def set_min_children_per_line(self, _count: int) -> None:
+        return None
+
+    def set_max_children_per_line(self, _count: int) -> None:
+        return None
+
     def insert(self, child: object, _position: int) -> None:
         self.children.append(child)
 
@@ -198,6 +204,7 @@ def _load_headless_ui_classes(
         FlowBox=_HeadlessFlowBox,
         Label=_HeadlessLabel,
         SelectionMode=types.SimpleNamespace(NONE="none"),
+        ToggleButton=_HeadlessWidget,
     )
 
     monkeypatch.setattr(gi, "require_versions", lambda _versions: None)
@@ -261,11 +268,7 @@ class _LocationView:
     profile_ready = True
 
     def __init__(self) -> None:
-        self.statuses: list[str] = []
         self.states: list[SessionState] = []
-
-    def set_location_status(self, status: str) -> None:
-        self.statuses.append(status)
 
     def set_state(self, state: SessionState) -> None:
         self.states.append(state)
@@ -302,7 +305,6 @@ def _tracker_for_location_tests(
     page.session_view = view
     page._session_state = SessionState.PREVIEW
     page._active_environment = Environment.OUTDOOR
-    page._location_had_tracking = False
     page._location_error_notified = False
     page._start_requested = False
     page._workout_session = None
@@ -329,7 +331,7 @@ def test_indoor_location_warning_copy_is_present(headless_ui_classes) -> None:
     assert "may reveal your home location" in indoor_row.subtitle
 
 
-def test_location_status_transitions_do_not_block_session_start(headless_ui_classes) -> None:
+def test_location_transitions_do_not_block_session_start(headless_ui_classes) -> None:
     tracker_page_ui, _location_section, _session_view = headless_ui_classes
     page, view, recorder, toasts = _tracker_for_location_tests(tracker_page_ui)
 
@@ -360,60 +362,7 @@ def test_outdoor_permission_error_notifies_once(headless_ui_classes) -> None:
         page.on_location_state(state, None)  # ty:ignore[unresolved-attribute]
 
     assert toasts == ["Location permission denied"]
-    assert view.statuses[-1] == "Location unavailable"
-
-
-def test_location_status_visibility_follows_resolved_policy(headless_ui_classes) -> None:
-    tracker_page_ui, _location_section, _session_view = headless_ui_classes
-    page = tracker_page_ui.__new__(tracker_page_ui)
-    page.app = SimpleNamespace(
-        app_settings=SimpleNamespace(
-            location=SimpleNamespace(
-                record_outdoor_routes=True,
-                record_indoor_anchor=False,
-                indoor_accuracy="neighborhood",
-            ),
-        ),
-    )
-
-    class _CapturingSessionView:
-        def __init__(self, **kwargs: object) -> None:
-            self.location_enabled = kwargs["location_enabled"]
-
-    tracker_globals = tracker_page_ui._make_session_view.__globals__
-    original_session_view = tracker_globals["SessionView"]
-    tracker_globals["SessionView"] = _CapturingSessionView
-    try:
-        indoor_view = page._make_session_view(
-            SportTypesEnum.running,
-            Environment.INDOOR,
-            title="Run",
-            workout=False,
-        )
-        outdoor_view = page._make_session_view(
-            SportTypesEnum.running,
-            Environment.OUTDOOR,
-            title="Run",
-            workout=False,
-        )
-    finally:
-        tracker_globals["SessionView"] = original_session_view
-
-    assert indoor_view.location_enabled is False
-    assert outdoor_view.location_enabled is True
-
-
-def test_session_view_applies_location_status_visibility(headless_ui_classes) -> None:
-    _tracker_page_ui, _location_section, session_view = headless_ui_classes
-
-    def build_metric_strip(*, location_enabled: bool) -> bool:
-        view = session_view.__new__(session_view)
-        view.children = []
-        view._build_metric_strip(location_enabled=location_enabled)
-        return view.location_status.visible
-
-    assert build_metric_strip(location_enabled=False) is False
-    assert build_metric_strip(location_enabled=True) is True
+    assert view.states == []
 
 
 def test_stop_requires_configured_hold_duration_and_cancels_on_focus_loss(
@@ -431,6 +380,7 @@ def test_stop_requires_configured_hold_duration_and_cancels_on_focus_loss(
     view._on_stop = stop
     view._stop_hold_started_at = None
     view._stop_hold_source_id = None
+    view._stop_hold_geometry = lambda: (0, 0, 100, 48)
     view.btn_stop = button
     view._stop_progress = progress
     method_globals = session_view._begin_stop_hold.__globals__
@@ -660,26 +610,6 @@ def test_independent_gps_and_bluetooth_samples_preserve_live_values(headless_ui_
     )
     page._update_live_motion_metrics(RunningSample(timestamp_ms=2000, speed_mps=0))
     assert page._live_metrics.speed_mps == 0
-
-
-def test_gps_metrics_keep_location_status_visible_with_routes_disabled(headless_ui_classes):
-    from fitness_tracker.core.settings import (  # noqa: PLC0415
-        AppSettings,
-        LocationSettings,
-        SensorSettings,
-    )
-
-    tracker_type, _, _ = headless_ui_classes
-    page = tracker_type.__new__(tracker_type)
-    page.app = SimpleNamespace(
-        app_settings=AppSettings(
-            location=LocationSettings(record_outdoor_routes=False),
-            running_sensors=SensorSettings(speed_source="gps"),
-        ),
-    )
-    assert page._location_enabled_for_environment(Environment.OUTDOOR, SportTypesEnum.running)
-    assert not page._location_enabled_for_environment(Environment.OUTDOOR, SportTypesEnum.biking)
-    assert not page._location_enabled_for_environment(Environment.INDOOR, SportTypesEnum.running)
 
 
 def test_new_session_drops_old_values_before_merging_gps_samples(headless_ui_classes):

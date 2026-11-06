@@ -42,11 +42,7 @@ from fitness_tracker.core.units import (
     speed_in_units,
 )
 from fitness_tracker.core.workout_session import WorkoutSession
-from fitness_tracker.hardware.location import (
-    LocationState,
-    location_policy_for_environment,
-    portal_accuracy_for_setting,
-)
+from fitness_tracker.hardware.location import LocationState
 from fitness_tracker.services.pebble import apply_pebble_guidance
 from fitness_tracker.services.trainer import apply_trainer_guidance
 from fitness_tracker.ui.pages.mode import ModeSelectView
@@ -94,7 +90,6 @@ class TrackerPageUI:
         self._session_state: SessionState | None = None
         self._start_requested = False
         self._active_environment: Environment | None = None
-        self._location_had_tracking = False
         self._location_error_notified = False
 
         # stats
@@ -350,34 +345,6 @@ class TrackerPageUI:
             on_trainer_target=self._on_trainer_target_changed,
             capabilities=capabilities,
             workout=workout,
-            location_enabled=self._location_enabled_for_environment(environment, sport_type),
-        )
-
-    def _location_enabled_for_environment(
-        self,
-        environment: Environment,
-        sport_type: SportTypesEnum = SportTypesEnum.running,
-    ) -> bool:
-        """Return whether this session uses location for a route or GPS metrics."""
-        location_settings = self.app.app_settings.location
-        sensor_settings = getattr(
-            self.app.app_settings,
-            "running_sensors" if sport_type == SportTypesEnum.running else "cycling_sensors",
-            None,
-        )
-        if (
-            environment is Environment.OUTDOOR
-            and getattr(sensor_settings, "speed_source", None) == "gps"
-        ):
-            return True
-        return (
-            location_policy_for_environment(
-                environment,
-                record_outdoor_routes=location_settings.record_outdoor_routes,
-                record_indoor_anchor=location_settings.record_indoor_anchor,
-                indoor_accuracy=portal_accuracy_for_setting(location_settings.indoor_accuracy),
-            )
-            is not None
         )
 
     def _show_free_run_page(
@@ -388,7 +355,6 @@ class TrackerPageUI:
         self._workout_session = None
         self._start_requested = False
         self._active_environment = environment
-        self._location_had_tracking = False
         self._location_error_notified = False
 
         if self.app.pebble_bridge:
@@ -442,7 +408,6 @@ class TrackerPageUI:
         self._session_state = SessionState.PREVIEW
         self._start_requested = False
         self._active_environment = environment
-        self._location_had_tracking = False
         self._location_error_notified = False
         self._reset_buffers()
 
@@ -662,21 +627,10 @@ class TrackerPageUI:
 
     # ---- recorder callbacks (public)
     def on_location_state(self, state: LocationState, _detail: str | None) -> None:
-        """Render location state and notify once for outdoor failures."""
-        view = self.session_view
+        """Notify once for outdoor location failures during a session."""
         environment = self._active_environment
-        if view is None or environment is None:
+        if self.session_view is None or environment is None:
             return
-
-        if state is LocationState.TRACKING:
-            self._location_had_tracking = True
-        view.set_location_status(
-            self._location_status_text(
-                state,
-                environment,
-                had_tracking=self._location_had_tracking,
-            ),
-        )
 
         if (
             environment is Environment.OUTDOOR
@@ -696,30 +650,6 @@ class TrackerPageUI:
                 else "Location unavailable"
             )
             self.app.show_toast(message)
-
-    @staticmethod
-    def _location_status_text(
-        state: LocationState,
-        environment: Environment,
-        *,
-        had_tracking: bool,
-    ) -> str:
-        status = "Location off"
-        if state is LocationState.DISABLED:
-            status = "Location off"
-        elif state in {LocationState.STARTING, LocationState.ACQUIRING}:
-            status = "Acquiring location…"
-        elif state is LocationState.TRACKING:
-            status = "Location tracking" if environment is Environment.OUTDOOR else "Location saved"
-        elif state in {LocationState.CANCELLED, LocationState.DENIED}:
-            status = "Location permission denied"
-        elif state in {LocationState.ERROR, LocationState.UNAVAILABLE}:
-            status = "Location lost" if had_tracking else "Location unavailable"
-        elif state is LocationState.STOPPED and environment is not Environment.OUTDOOR:
-            status = "Location saved" if had_tracking else "Location off"
-        elif had_tracking:
-            status = "Location tracking"
-        return status
 
     def _update_live_motion_metrics(
         self,

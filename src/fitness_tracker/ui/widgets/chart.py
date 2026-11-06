@@ -57,6 +57,7 @@ class LiveChart:
         resting_hr: float,
         max_hr: float,
     ) -> None:
+        self._display_scale = 1.0
         self.figure = Figure(figsize=(6, 3), dpi=96)
         self.hr_axes = self.figure.add_subplot(111)
         self.power_axes = self.hr_axes.twinx()
@@ -71,7 +72,33 @@ class LiveChart:
         (self.line_hr,) = self.hr_axes.plot([], [], lw=2, zorder=2)
         self.canvas = FigureCanvas(self.figure)
         self.canvas.set_vexpand(True)
+        self.canvas.set_focusable(False)
+        self.canvas.set_focus_on_click(False)
+        self.canvas.connect("resize", self._on_resize)
+        self.figure.subplots_adjust(left=0.15, right=0.85, bottom=0.22, top=0.94)
         self.refresh_theme(theme, zones, resting_hr=resting_hr, max_hr=max_hr)
+
+    def _on_resize(self, _canvas: Gtk.Widget, width: int, height: int) -> None:
+        """Reserve label space on resize without a layout solver on every redraw."""
+        self.figure.subplots_adjust(
+            left=min(0.25, 44 * self._display_scale / max(1, width)),
+            right=1 - min(0.25, 42 * self._display_scale / max(1, width)),
+            bottom=min(0.4, 48 * self._display_scale / max(1, height)),
+            top=1 - min(0.15, 12 * self._display_scale / max(1, height)),
+        )
+
+    def set_display_scale(self, scale: float) -> None:
+        """Keep chart labels as readable as the surrounding session text."""
+        self._display_scale = scale
+        for axes in (self.hr_axes, self.power_axes):
+            axes.tick_params(labelsize=10 * scale, pad=3.5 * scale)
+            for axis in (axes.xaxis, axes.yaxis):
+                axis.label.set_fontsize(10 * scale)
+                axis.labelpad = 4 * scale
+        for line in (self.line_hr, self.line_pw):
+            line.set_linewidth(2 * scale)
+        self._on_resize(self.canvas, self.canvas.get_width(), self.canvas.get_height())
+        self.canvas.draw_idle()
 
     def refresh_theme(
         self,
@@ -122,7 +149,7 @@ class LiveChart:
         self.power_axes.set_ylim(0, 500)
         for spine in self.power_axes.spines.values():
             spine.set_alpha(0.35)
-        self.canvas.draw_idle()
+        self.set_display_scale(self._display_scale)
 
 
 class CompareChart:

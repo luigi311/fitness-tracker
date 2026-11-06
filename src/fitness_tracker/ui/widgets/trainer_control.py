@@ -20,10 +20,10 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
 
 gi.require_version("Gtk", "4.0")
-from gi.repository import Gtk  # noqa: E402  # ty:ignore[unresolved-import]
+from gi.repository import GObject, Gtk  # noqa: E402  # ty:ignore[unresolved-import]
 
 _MODE_BUTTON_HEIGHT = 48
-_ADJUST_BUTTON_HEIGHT = 60
+_ADJUST_BUTTON_HEIGHT = 48
 
 
 class TrainerTargetControl(Gtk.Frame):
@@ -51,6 +51,7 @@ class TrainerTargetControl(Gtk.Frame):
     }
     _DEFAULT_SPEED_MPH: ClassVar[float] = 3.0
     _MAX_SPEED_MPH: ClassVar[float] = 15.0
+    summary = GObject.Property(type=str, default="Trainer controls")
 
     def __init__(
         self,
@@ -86,7 +87,12 @@ class TrainerTargetControl(Gtk.Frame):
             getattr(outer, f"set_margin_{margin}")(4)
 
         if len(available_modes) > 1:
-            mode_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+            mode_row = Gtk.FlowBox()
+            mode_row.set_selection_mode(Gtk.SelectionMode.NONE)
+            mode_row.set_min_children_per_line(1)
+            mode_row.set_max_children_per_line(3)
+            mode_row.set_column_spacing(4)
+            mode_row.set_row_spacing(4)
             mode_row.set_homogeneous(True)
             mode_row.set_hexpand(True)
             for mode in available_modes:
@@ -96,16 +102,22 @@ class TrainerTargetControl(Gtk.Frame):
                     button.add_css_class("suggested-action")
                 button.connect("clicked", self._on_mode_clicked, mode)
                 self._mode_buttons[mode] = button
-                mode_row.append(button)
+                mode_row.insert(button, -1)
             outer.append(mode_row)
         else:
             title = Gtk.Label(label=self._mode.value)
             title.add_css_class("caption")
             outer.append(title)
 
+        outer.append(self._build_adjustment_row())
+        self.set_child(outer)
+        self._refresh()
+
+    def _build_adjustment_row(self) -> Gtk.Box:
+        """Build the target value and touch-sized adjustment buttons."""
         row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         self._btn_down = Gtk.Button(label="-")
-        self._btn_down.add_css_class("destructive-action")
+        self._btn_down.set_tooltip_text("Decrease trainer target")
         self._btn_down.set_hexpand(True)
         self._btn_down.set_size_request(-1, _ADJUST_BUTTON_HEIGHT)
         self._btn_down.get_child().add_css_class("title-1")
@@ -118,6 +130,7 @@ class TrainerTargetControl(Gtk.Frame):
         self._lbl_value.set_xalign(0.5)
 
         self._btn_up = Gtk.Button(label="+")
+        self._btn_up.set_tooltip_text("Increase trainer target")
         self._btn_up.add_css_class("suggested-action")
         self._btn_up.set_hexpand(True)
         self._btn_up.set_size_request(-1, _ADJUST_BUTTON_HEIGHT)
@@ -127,9 +140,12 @@ class TrainerTargetControl(Gtk.Frame):
         row.append(self._btn_down)
         row.append(self._lbl_value)
         row.append(self._btn_up)
-        outer.append(row)
-        self.set_child(outer)
-        self._refresh()
+        return row
+
+    @property
+    def touch_buttons(self) -> tuple[Gtk.Button, ...]:
+        """Return the controls whose touch targets follow the session density."""
+        return self._btn_down, self._btn_up, *self._mode_buttons.values()
 
     def _validate_modes(self, available_modes: tuple[TrainerMode, ...]) -> None:
         """Reject shared trainer modes that have no UI control configuration."""
@@ -168,6 +184,7 @@ class TrainerTargetControl(Gtk.Frame):
         button = self._mode_buttons.get(mode)
         if button:
             button.set_visible(available)
+            button.get_parent().set_visible(available)
         if not available:
             fallback = fallback_trainer_mode(
                 self._mode_buttons,
@@ -219,5 +236,6 @@ class TrainerTargetControl(Gtk.Frame):
         value = self._values[self._mode]
         value_text = f"{value:.{config.decimals}f}"
         self._lbl_value.set_text(f"{value_text} {config.unit}")
+        self.summary = f"Trainer · {self._mode.value} · {value_text} {config.unit}"
         self._btn_down.set_sensitive(value > config.minimum)
         self._btn_up.set_sensitive(value < config.maximum)
