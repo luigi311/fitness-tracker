@@ -453,7 +453,7 @@ requires-dist = [
     { name = "dbus-fast", specifier = ">=3.0.2" },
     { name = "libpebble2", git = "https://github.com/luigi311/libpebble2?branch=modern" },
     { name = "loguru", specifier = ">=0.7.3" },
-    { name = "matplotlib", specifier = ">=3.10.9" },
+    { name = "matplotlib", specifier = ">=3.11.2" },
     { name = "psycopg2-binary", specifier = ">=2.9.12" },
     { name = "pydantic", specifier = ">=2.13.5" },
     { name = "pydantic-file-settings", specifier = ">=0.1.0" },
