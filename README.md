@@ -21,6 +21,11 @@ An open-source application for tracking sensor data from Bluetooth Low Energy (B
 * BLE adapter (Bluetooth Low Energy support)
 * BLE sensor
 
+For Pebble connections through Cobble, upgrade and restart the host's `cobbled`
+daemon alongside `cobble-client`. The 0.8 client requires daemon signals absent
+from older versions. Updating Python dependencies does not update the host daemon;
+an incompatible daemon causes the bridge to fall back to Bluetooth serial.
+
 ## Validated Devices
 
 https://fitness-tracker.luigi311.com/devices/

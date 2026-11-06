@@ -4,7 +4,9 @@ import json
 import runpy
 import threading
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock, Mock
 
 import pebble_bridge.pebble_bridge as pebble_module
 import pebble_bridge.protocol as protocol_module
@@ -702,6 +704,189 @@ def test_watch_launch_requests_a_full_state_resend(
         pebble_module.KEY_UNITS,
         pebble_module.KEY_WORKOUT_STEP,
     }
+
+
+@pytest.mark.parametrize("missing_signal", ["on_install_pbw_progress", "on_installed_apps_changed"])
+def test_cobble_incompatible_daemon_closes_partial_connection(
+    monkeypatch: pytest.MonkeyPatch,
+    missing_signal: str,
+) -> None:
+    """Reject incompatible daemons and close the client, loop, and worker thread."""
+    pytest.importorskip("cobble_client")
+    client = SimpleNamespace(
+        connect=AsyncMock(side_effect=AttributeError("Missing signal", name=missing_signal)),
+        close=AsyncMock(),
+        on_app_message=Mock(),
+    )
+    monkeypatch.setattr(pebble_module, "_CobbleClient", lambda: client)
+    backend = pebble_module._CobbleBackend("00000000-0000-0000-0000-000000000000", Mock())
+
+    with pytest.raises(RuntimeError, match="Upgrade and restart cobbled"):
+        backend.connect()
+
+    client.connect.assert_awaited_once_with(require_daemon=True)
+    client.close.assert_awaited_once_with()
+    client.on_app_message.assert_not_called()
+    assert backend._client is None
+    assert backend._loop is None
+    assert backend._thread is None
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        RuntimeError("Connection failed"),
+        AttributeError("Unrelated client failure", name="unexpected_attribute"),
+    ],
+)
+def test_cobble_failed_connection_preserves_error_and_closes_client(
+    monkeypatch: pytest.MonkeyPatch,
+    error: Exception,
+) -> None:
+    """Preserve unrelated connection errors while closing partially opened clients."""
+    pytest.importorskip("cobble_client")
+    client = SimpleNamespace(connect=AsyncMock(side_effect=error), close=AsyncMock())
+    monkeypatch.setattr(pebble_module, "_CobbleClient", lambda: client)
+    backend = pebble_module._CobbleBackend("00000000-0000-0000-0000-000000000000", Mock())
+
+    with pytest.raises(type(error)) as caught:
+        backend.connect()
+
+    assert caught.value is error
+    client.close.assert_awaited_once_with()
+    assert backend._client is None
+    assert backend._loop is None
+    assert backend._thread is None
+
+
+def test_cobble_connected_client_registers_handler_and_closes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Register the message handler and close a successfully connected client."""
+    pytest.importorskip("cobble_client")
+    client = SimpleNamespace(
+        connect=AsyncMock(),
+        is_connected=AsyncMock(return_value=True),
+        close=AsyncMock(),
+        on_app_message=Mock(),
+    )
+    monkeypatch.setattr(pebble_module, "_CobbleClient", lambda: client)
+    backend = pebble_module._CobbleBackend("00000000-0000-0000-0000-000000000000", Mock())
+
+    try:
+        backend.connect()
+        client.connect.assert_awaited_once_with(require_daemon=True)
+        client.is_connected.assert_awaited_once_with()
+        client.on_app_message.assert_called_once_with(backend._handle_app_message)
+        assert backend._client is client
+    finally:
+        backend.close()
+
+    client.close.assert_awaited_once_with()
+
+
+def test_cobble_disconnected_watch_does_not_report_success_or_open_serial(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Wait for the daemon's watch link without reporting success or opening serial."""
+    cobble_client = pytest.importorskip("cobble_client")
+    client = SimpleNamespace(
+        connect=AsyncMock(),
+        is_connected=AsyncMock(return_value=False),
+        close=AsyncMock(),
+        on_app_message=Mock(),
+    )
+    serial_factory = Mock()
+    log = Mock()
+    monkeypatch.setattr(pebble_module, "_CobbleClient", lambda: client)
+    monkeypatch.setattr(pebble_module, "_Libpebble2Backend", serial_factory)
+    monkeypatch.setattr(pebble_module, "logger", log)
+    bridge = PebbleBridge("00000000-0000-0000-0000-000000000000", mac="AA:BB:CC:DD:EE:FF")
+
+    try:
+        with pytest.raises(cobble_client.NotConnectedError, match="watch is not connected"):
+            bridge._connect()
+    finally:
+        bridge._close_backend()
+
+    client.is_connected.assert_awaited_once_with()
+    client.close.assert_awaited_once_with()
+    client.on_app_message.assert_not_called()
+    serial_factory.assert_not_called()
+    log.success.assert_not_called()
+    assert bridge._backend is None
+
+
+def test_cobble_retries_until_watch_connects_and_sends_buffered_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Retry a disconnected watch and launch and send once the daemon reconnects it."""
+    pytest.importorskip("cobble_client")
+    clients = [
+        SimpleNamespace(
+            connect=AsyncMock(),
+            is_connected=AsyncMock(return_value=connected),
+            close=AsyncMock(),
+            on_app_message=Mock(),
+            launch_app=AsyncMock(),
+            stop_app=AsyncMock(),
+            send_app_message=AsyncMock(),
+        )
+        for connected in (False, True)
+    ]
+    client_factory = Mock(side_effect=clients)
+    serial_factory = Mock()
+    log = Mock()
+    monkeypatch.setattr(pebble_module, "_CobbleClient", client_factory)
+    monkeypatch.setattr(pebble_module, "_Libpebble2Backend", serial_factory)
+    monkeypatch.setattr(pebble_module, "logger", log)
+    bridge = PebbleBridge("00000000-0000-0000-0000-000000000000", mac="AA:BB:CC:DD:EE:FF")
+    bridge._wake = Mock()
+    bridge._wake.wait.side_effect = [False]
+    bridge.update(hr=140)
+    bridge._running = True
+    clients[1].send_app_message.side_effect = lambda *_args, **_kwargs: setattr(
+        bridge,
+        "_running",
+        False,
+    )
+
+    bridge._loop()
+
+    clients[0].launch_app.assert_not_awaited()
+    clients[0].send_app_message.assert_not_awaited()
+    clients[1].launch_app.assert_awaited_once_with(bridge.app_uuid)
+    clients[1].send_app_message.assert_awaited_once()
+    payload = clients[1].send_app_message.call_args.args[1]
+    assert payload[pebble_module.KEY_HR].value == 140
+    assert not bridge._dirty_keys
+    for client in clients:
+        client.close.assert_awaited_once_with()
+    serial_factory.assert_not_called()
+    log.info.assert_called_once_with("Waiting for cobbled daemon to connect to Pebble")
+    log.error.assert_not_called()
+    log.success.assert_called_once_with("Connected to Pebble via cobbled daemon")
+
+
+def test_missing_cobble_daemon_still_falls_back_to_serial(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Keep the serial fallback available when the daemon is not running."""
+    cobble_client = pytest.importorskip("cobble_client")
+    daemon_backend = Mock()
+    daemon_backend.connect.side_effect = cobble_client.DaemonNotRunningError("Daemon absent")
+    serial_backend = Mock()
+    monkeypatch.setattr(pebble_module, "_CobbleBackend", Mock(return_value=daemon_backend))
+    monkeypatch.setattr(pebble_module, "_Libpebble2Backend", Mock(return_value=serial_backend))
+    bridge = PebbleBridge("00000000-0000-0000-0000-000000000000", mac="AA:BB:CC:DD:EE:FF")
+
+    try:
+        bridge._connect()
+        assert bridge._backend is serial_backend
+        serial_backend.connect.assert_called_once_with()
+        daemon_backend.close.assert_called_once_with()
+    finally:
+        bridge._close_backend()
 
 
 def test_cobble_uint8_watch_launch_request_is_normalized() -> None:

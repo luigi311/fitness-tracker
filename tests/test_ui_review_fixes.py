@@ -1,7 +1,7 @@
 # ruff: noqa: SLF001
 """Focused coverage for UI review regressions."""
 
-import datetime
+import datetime as dt
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -175,13 +175,14 @@ def test_history_backfill_discard_and_duplicate_release_reload_guard() -> None:
 
 
 def test_history_backfill_batches_heart_rates_in_worker_result() -> None:
+    """Batch heart-rate samples into the history worker's reload result."""
     page = HistoryPageUI.__new__(HistoryPageUI)
     jobs = Mock()
     repository = Mock()
     repository.list_heart_rate_series.return_value = {7: [(0, 120)]}
     stats = SimpleNamespace(
         activity_id=7,
-        start_time=datetime.datetime(2026, 1, 1, tzinfo=datetime.UTC),
+        start_time=dt.datetime(2026, 1, 1, tzinfo=dt.UTC),
     )
     page.app = SimpleNamespace(  # ty:ignore[invalid-assignment]
         database=SimpleNamespace(stat_calc=Mock()),
@@ -250,11 +251,12 @@ def test_history_backfill_coalesces_reload_for_current_filter() -> None:
 
 
 def test_history_export_reads_and_conversion_run_in_submitted_job(monkeypatch) -> None:
+    """Read activity data and build TCX inside the submitted export job."""
     page = HistoryPageUI.__new__(HistoryPageUI)
     jobs = Mock()
     repository = Mock()
     activity = SimpleNamespace(
-        start_time=datetime.datetime(2026, 1, 2, 3, 4, 5, tzinfo=datetime.UTC),
+        start_time=dt.datetime(2026, 1, 2, 3, 4, 5, tzinfo=dt.UTC),
     )
     repository.get_activity.return_value = activity
     repository.list_heart_rates.return_value = []

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import datetime
+import datetime as dt
 import statistics
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
@@ -51,10 +51,11 @@ def _format_float(v: float | None, unit: str = "", digits: int = 0) -> str:
     return (fmt.format(v) + (f" {unit}" if unit else "")).strip()
 
 
-def _tz_aware_localize(dt: datetime.datetime) -> datetime.datetime:
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=ZoneInfo("UTC"))
-    return dt.astimezone()
+def _tz_aware_localize(value: dt.datetime) -> dt.datetime:
+    """Convert a timestamp to local time, treating naive values as UTC."""
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=ZoneInfo("UTC"))
+    return value.astimezone()
 
 
 def _configure_activity_title(title: Gtk.Label) -> None:
@@ -386,13 +387,14 @@ class HistoryPageUI:
         self._redraw_compare_chart()
 
     # ---- Data fetchers ----
-    def _filter_cutoff(self, filter_id: str | None = None) -> datetime.datetime | None:
-        now = datetime.datetime.now().astimezone()
+    def _filter_cutoff(self, filter_id: str | None = None) -> dt.datetime | None:
+        """Return the local cutoff for a week or month filter, or None."""
+        now = dt.datetime.now().astimezone()
         selected_filter = self.filter_id if filter_id is None else filter_id
         if selected_filter == "week":
-            return now - datetime.timedelta(days=7)
+            return now - dt.timedelta(days=7)
         if selected_filter == "month":
-            return now - datetime.timedelta(days=30)
+            return now - dt.timedelta(days=30)
         return None
 
     def _fetch_stats_rows(self, filter_id: str | None = None) -> list[ActivityStatsRow]:
