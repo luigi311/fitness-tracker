@@ -577,6 +577,48 @@ def test_workout_unit_changes_refresh_remaining_and_next_without_advancing(
         assert page._session_state is session_state
 
 
+def test_step_position_follows_preview_automatic_progress_and_paused_navigation(
+    headless_ui_classes,
+):
+    from fitness_tracker.core.live_metrics import LiveMetrics  # noqa: PLC0415
+    from fitness_tracker.core.settings import PersonalSettings  # noqa: PLC0415
+    from fitness_tracker.core.units import UnitSystem  # noqa: PLC0415
+    from fitness_tracker.core.workout_session import WorkoutSession  # noqa: PLC0415
+    from fitness_tracker.workout_execution import (  # noqa: PLC0415
+        WorkoutDistanceAccumulator,
+        WorkoutExecution,
+    )
+    from workout_parser import TimeDuration, WorkoutStep  # noqa: PLC0415
+
+    tracker_type, _, _ = headless_ui_classes
+    page, _, _, _ = _tracker_for_location_tests(tracker_type)
+    page.app.recorder = None
+    page.app.unit_system = UnitSystem.METRIC
+    page.app.app_settings = SimpleNamespace(personal=PersonalSettings())
+    page.app.calculate_hr_zones = dict
+    page.app.show_workout_step_notification = Mock()
+    page.session_view = Mock(sport_type=SportTypesEnum.running)
+    page._live_metrics = LiveMetrics()
+    steps = [WorkoutStep(duration=TimeDuration(seconds=10)) for _ in range(3)]
+    page._workout_session = WorkoutSession(
+        workout=None,
+        steps=steps,
+        execution=WorkoutExecution(steps),
+        distance_accumulator=WorkoutDistanceAccumulator(),
+    )
+    page._update_workout_execution(0)
+    page.session_view.set_step_position.assert_called_with(1, len(steps))
+    page._session_state = SessionState.RUNNING
+    page._update_workout_execution(10)
+    page.session_view.set_step_position.assert_called_with(2, len(steps))
+    page._elapsed_display_s = 10
+    page._session_state = SessionState.PAUSED
+    page._skip_step(1)
+    page.session_view.set_step_position.assert_called_with(3, len(steps))
+    page._skip_step(-1)
+    page.session_view.set_step_position.assert_called_with(2, len(steps))
+
+
 @pytest.mark.usefixtures("headless_ui_classes")
 def test_workout_list_summaries_refresh_when_units_change(monkeypatch, tmp_path) -> None:
     from fitness_tracker.core.units import UnitSystem  # noqa: PLC0415

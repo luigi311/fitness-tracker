@@ -879,6 +879,7 @@ class TrackerPageUI:
         if idx is None or step is None:
             return
 
+        session_view.set_step_position(idx + 1, len(session.steps))
         next_step = session.steps[idx + 1] if idx + 1 < len(session.steps) else None
         guidance = resolve_step_guidance(
             step,

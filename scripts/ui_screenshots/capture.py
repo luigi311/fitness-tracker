@@ -122,6 +122,8 @@ def sample_session(app: FitnessAppUI, *, workout: bool) -> SessionView:
     view.set_timer("00:18:42")
     view.set_elapsed_text("18:42")
     view.set_step_remaining_text("04:18")
+    if workout and hasattr(view, "set_step_position"):
+        view.set_step_position(5, 15)
     view.set_target_text("Tempo · 4:45-5:00 /km")
     view.set_next_text("Next: Recover · 2 min")
     view.set_progress(0.47)

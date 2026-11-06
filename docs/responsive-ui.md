@@ -48,6 +48,11 @@ Activity setup also uses the two-thirds density at the Librem's 3× allocations.
 Portrait keeps the environment cards within the narrow window; short landscape
 places selection beside the workout list, with the free-session action visible.
 
+Workouts show Elapsed, Remaining, and Step (for example, `5/15`) together.
+The counter follows the executable step sequence through preview, automatic
+progression, and previous/next navigation. When width is limited, the two time
+values stack beside the step counter. Free sessions hide the workout readouts.
+
 The gauge shows the current reading against the target band without a separate
 target-status row. Its complete painted bounds, including labels and needle,
 are centered horizontally and vertically inside the frame. Compact layouts draw

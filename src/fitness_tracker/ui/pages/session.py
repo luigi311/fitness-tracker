@@ -80,6 +80,7 @@ _SESSION_CSS = b"""
 .session-view expander > title { min-height: 48px; }
 .session-view .metric-live { color: @success_color; }
 .session-view .session-timer { border: none; }
+.session-view .session-time-values flowboxchild { padding: 0; }
 .session-view button.stop-activity {
     background-color: @destructive_bg_color;
     color: @destructive_fg_color;
@@ -230,7 +231,7 @@ class SessionView(Gtk.Box):
         )
         tiny.add_setter(self._hero, "orientation", Gtk.Orientation.HORIZONTAL)
         tiny.add_setter(self.gauge, "content-width", 100)
-        tiny.add_setter(self._timers, "orientation", Gtk.Orientation.VERTICAL)
+        tiny.add_setter(self._time_values, "max-children-per-line", 1)
         tiny.add_setter(self.gauge, "content-height", 64)
         tiny.add_setter(self.title_label, "visible", value=False)
         tiny.add_setter(self.lbl_next, "visible", value=False)
@@ -291,6 +292,7 @@ class SessionView(Gtk.Box):
         layout.add_setter(self._controls.get_last_child(), "spacing", round(8 * scale))
         layout.add_setter(self._hero, "spacing", round(6 * scale))
         layout.add_setter(self._timers, "spacing", round(6 * scale))
+        layout.add_setter(self._time_values, "column-spacing", round(6 * scale))
         layout.add_setter(self._step_details, "spacing", round(4 * scale))
         layout.add_setter(self.metrics, "column-spacing", round(8 * scale))
         layout.add_setter(self.metrics, "row-spacing", round(4 * scale))
@@ -385,6 +387,7 @@ class SessionView(Gtk.Box):
         roomy.add_setter(self._controls.get_last_child(), "spacing", 16)
         roomy.add_setter(self._hero, "spacing", 12)
         roomy.add_setter(self._timers, "spacing", 12)
+        roomy.add_setter(self._time_values, "column-spacing", 12)
         roomy.add_setter(self._step_details, "spacing", 8)
         roomy.add_setter(self.metrics, "column-spacing", 16)
         roomy.add_setter(self.metrics, "row-spacing", 8)
@@ -502,10 +505,23 @@ class SessionView(Gtk.Box):
         """Keep timers, target instructions, and next-step context together."""
         timers = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         self._timers = timers
+        self._time_values = Gtk.FlowBox()
+        self._time_values.add_css_class("session-time-values")
+        self._time_values.set_selection_mode(Gtk.SelectionMode.NONE)
+        self._time_values.set_min_children_per_line(1)
+        self._time_values.set_max_children_per_line(2)
+        self._time_values.set_column_spacing(6)
+        self._time_values.set_focusable(False)
+        self._time_values.set_hexpand(True)
         self.timer_elapsed = SessionTimer("Elapsed")
         self.timer_remaining = SessionTimer("Remaining")
-        timers.append(self.timer_elapsed)
-        timers.append(self.timer_remaining)
+        for value in (self.timer_elapsed, self.timer_remaining):
+            self._time_values.insert(value, -1)
+            value.get_parent().set_focusable(False)
+        timers.append(self._time_values)
+        self.step_position = SessionTimer("Step")
+        self.step_position.set_text("—")
+        timers.append(self.step_position)
         self._step_details.append(timers)
 
         self.lbl_target = Gtk.Label(xalign=0.0, wrap=True)
@@ -993,6 +1009,17 @@ class SessionView(Gtk.Box):
     def set_step_remaining_text(self, text: str) -> None:
         """Update the workout remaining timer."""
         self.timer_remaining.set_text(text)
+
+    def set_step_position(self, step_number: int, step_count: int) -> None:
+        """Show the current step within the expanded workout sequence."""
+        text = f"{step_number}/{step_count}"
+        if self.step_position.value.get_text() == text:
+            return
+        self.step_position.set_text(text)
+        self.step_position.value.update_property(
+            [Gtk.AccessibleProperty.LABEL],
+            [f"Workout step {step_number} of {step_count}"],
+        )
 
     def set_unit_system(self, unit_system: UnitSystem) -> None:
         """Update all distance, pace, speed, and trainer labels."""

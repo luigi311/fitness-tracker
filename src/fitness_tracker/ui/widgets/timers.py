@@ -9,7 +9,7 @@ from gi.repository import Gtk  # noqa: E402  # ty:ignore[unresolved-import]
 
 
 class SessionTimer(Gtk.Frame):
-    """Display a session timer with an optional caption."""
+    """Display a session value with an optional caption."""
 
     def __init__(self, caption: str | None = None) -> None:
         super().__init__()
@@ -47,5 +47,5 @@ class SessionTimer(Gtk.Frame):
         self.set_child(box)
 
     def set_text(self, text: str) -> None:
-        """Update the displayed time."""
+        """Update the displayed value."""
         self.value.set_text(text)

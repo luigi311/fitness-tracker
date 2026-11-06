@@ -119,6 +119,7 @@ def make_session(app, kind):
     view.set_timer("00:18:42")
     view.set_elapsed_text("18:42")
     view.set_step_remaining_text("04:18")
+    view.set_step_position(5, 15)
     view.set_target_text("Tempo · 4:45-5:00 /km")
     view.set_next_text("Next: Recover · 2 min")
     view.set_progress(0.47)
@@ -258,12 +259,14 @@ def test_session_allocations(app_stub, width, height, kind):
         assert_inside(stop_label, overlay)
         assert stop_label.measure(Gtk.Orientation.HORIZONTAL, -1)[1] <= stop_label.get_width()
         assert view._body.get_width() <= width
+        if kind == "free":
+            assert not view.step_position.get_mapped()
         if width >= MIN_COMPACT_WIDTH:
             # At normal text size the target, timers, metrics, and statuses
             # must all be visible together, including the tight Comet layout.
             essential = [view.metrics]
             if kind != "free":
-                essential.extend([view.gauge, view.timer_remaining])
+                essential.extend([view.gauge, view.timer_remaining, view.step_position])
             for widget in essential:
                 assert_inside(widget, view._scroller)
         assert not callbacks.mock_calls
@@ -290,6 +293,8 @@ def test_enlarged_text_keeps_actions_visible(app_stub, width, height, text_scale
         assert view._body.get_width() <= width
         assert_inside(view.metrics, view._scroller)
         assert_inside(view.gauge, view._scroller)
+        assert_inside(view.step_position, view._scroller)
+        assert_inside(view.step_position.value, view._timers)
         if view._adjustments_inline:
             assert_inside(view.trainer_target_control._btn_down, view._scroller)
             assert_inside(view.trainer_target_control._btn_up, view._scroller)
@@ -330,6 +335,7 @@ def test_rotation_preserves_session_state_and_cancels_stop_hold(app_stub, kind):
             assert timer.value.get_text() == "04:18"
             assert view._state is SessionState.RUNNING
             assert view._profile_ready
+            assert view.step_position.value.get_text() == "5/15"
             assert_inside(view.metrics, view._scroller)
             if kind == "free":
                 assert not view.live_chart.canvas.get_focusable()
@@ -810,6 +816,7 @@ def test_high_scale_devices_keep_the_dashboard_visible(
         if kind != "free":
             assert_inside(view.gauge, view._scroller)
             assert_inside(view.timer_remaining, view._scroller)
+            assert_inside(view.step_position, view._scroller)
         for button in (view.btn_start, view.btn_stop):
             assert_inside(button, window)
             assert button.get_height() == pytest.approx(48 * scale, abs=2)
@@ -844,6 +851,7 @@ def test_high_scale_text_matches_the_two_x_reference(
         view.lbl_target,
         view.timer_elapsed.value,
         view.timer_remaining.value,
+        view.step_position.value,
         view.card_power.label,
         view.card_power.value,
         view.card_power.unit,
@@ -928,6 +936,7 @@ def test_comet_one_x_matches_two_x_text_readability(app_stub, width, height):
         view.lbl_next,
         view.timer_elapsed.value,
         view.timer_elapsed.get_child().get_first_child(),
+        view.step_position.value,
         view.card_power.label,
         view.card_power.value,
         view.card_power.unit,
