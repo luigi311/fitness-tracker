@@ -421,6 +421,39 @@ def test_stop_requires_configured_hold_duration_and_cancels_on_focus_loss(
     assert button.set_sensitive.call_args.args == (False,)
 
 
+@pytest.mark.parametrize(
+    "position",
+    [(True, -1, 24), (True, 101, 24), (True, 50, -1), (True, 50, 49), (False, 50, 24)],
+)
+def test_stop_cancels_outside_pressed_bounds_even_without_a_leave_event(
+    headless_ui_classes,
+    monkeypatch,
+    position,
+):
+    _, _, session_view = headless_ui_classes
+    now = [10.0]
+    view = session_view.__new__(session_view)
+    view._on_stop = Mock()
+    view._stop_hold_started_at = None
+    view._stop_hold_source_id = None
+    view._stop_hold_geometry = lambda: (0, 0, 100, 48)
+    view.btn_stop = Mock(get_width=lambda: 100, get_height=lambda: 48)
+    view._stop_progress = Mock()
+    gesture = Mock()
+    gesture.get_point.return_value = (True, 50, 24)
+    monkeypatch.setitem(session_view._begin_stop_hold.__globals__, "monotonic", lambda: now[0])
+    view._begin_stop_hold(gesture)
+    gesture.get_point.return_value = position
+    now[0] += 2
+
+    assert view._update_stop_hold() is False
+    assert view._stop_hold_started_at is None
+    view._stop_progress.set_fraction.assert_called_with(0.0)
+    gesture.get_point.return_value = (True, 50, 24)
+    view._end_stop_hold()
+    view._on_stop.assert_not_called()
+
+
 def test_tracker_averages_exclude_preview_pause_and_reset_each_step(headless_ui_classes) -> None:
     from bleaksport import HeartRateSample  # noqa: PLC0415
     from fitness_tracker.core.live_metrics import LiveMetrics  # noqa: PLC0415

@@ -44,6 +44,9 @@ pixels, compared with 48px at 2× occupying 96. The application minimum width is
 200px, allowing a 240px Librem portrait viewport without horizontal clipping.
 All six metrics and target guidance remain visible at normal text size in both
 orientations. Enlarged text can scroll while recording actions remain visible.
+Activity setup also uses the two-thirds density at the Librem's 3× allocations.
+Portrait keeps the environment cards within the narrow window; short landscape
+places selection beside the workout list, with the free-session action visible.
 
 The gauge shows the current reading against the target band without a separate
 target-status row. Its complete painted bounds, including labels and needle,
@@ -55,6 +58,12 @@ band edge, using seconds per selected distance unit for pace. An untargeted step
 clears the previous gauge. A disconnected target source hides the reading and
 needle. Offline live metrics show a dash; accumulated distance remains readable.
 Location tracking uses the same live metric indicators without a separate status row.
+Session toasts appear within the dashboard's scroll area, above the recording
+footer. Step announcements use a short step/count message; the target remains
+in the guidance area and the full desktop notification.
+Moving a held pointer or touch outside Stop cancels the countdown, including
+during GTK's implicit grab. Moving back inside requires a fresh press. The fill
+and label retain contrast in light and dark themes.
 
 Trainer controls appear directly when the available width and height can fit
 the target, all metrics, and the full adjustment panel. On smaller allocations or
@@ -93,6 +102,10 @@ They also compare the physical text and recording-control sizes of the Comet's
 High-scale coverage includes Comet at 2.5× and Librem 5 at 3×, their physical text
 sizes against 2× references, enlarged-text scrolling, and rotation through all
 four high-scale allocations without recording-control callbacks.
+Additional checks cover toast hit-testing in the production shell and populated
+Librem 3× setup in both orientations. Stop feedback is checked for contrast.
+To exercise real pointer cancellation on an isolated X server, also set
+`FITNESS_TRACKER_XINPUT_TESTS=1`; this requires the X11 and XTEST libraries.
 
 These are desktop GTK allocation and behavior checks. Compositor scaling, touch
 input, and rendering performance still need confirmation on physical devices.

@@ -8,6 +8,8 @@ Set FITNESS_TRACKER_SCREENSHOTS to a directory to save the rendered sample views
 
 from __future__ import annotations
 
+import ctypes
+import ctypes.util
 import json
 import math
 import os
@@ -44,6 +46,9 @@ pytestmark = pytest.mark.skipif(
 MIN_TOUCH_HEIGHT = 48
 MIN_COMPACT_WIDTH = 300
 GAUGE_LABEL_COUNT = 2
+MIN_FILL_CONTRAST = 3
+MIN_TEXT_CONTRAST = 4.5
+SRGB_LINEAR_THRESHOLD = 0.04045
 SMALL_DENSITIES = (
     (432, 496, 0.8, 540, 620),
     (496, 432, 0.8, 620, 540),
@@ -437,6 +442,56 @@ def test_comet_setup_leaves_room_for_workouts(app_stub, tmp_path, width, height,
         settle()
 
 
+@pytest.mark.parametrize(("width", "height"), [(240, 480), (480, 240)])
+def test_librem_three_x_setup_keeps_selections_and_starts_visible(
+    app_stub,
+    tmp_path,
+    width,
+    height,
+):
+    del app_stub
+    for index in range(6):
+        (tmp_path / f"{index}.json").write_text(
+            json.dumps({"name": f"Endurance workout {index + 1}", "steps": [{"duration": 1200}]}),
+            encoding="utf-8",
+        )
+    start = Mock()
+    view = ModeSelectView(tmp_path, tmp_path, start, Mock(), unit_system=UnitSystem.METRIC)
+    window = show_view(view, width, height, production_shell=True)
+    try:
+        assert window.get_width() == width
+        assert view.get_width() <= width
+        setup_scroll = view._setup.get_parent()
+        assert view.has_css_class("mini-setup")
+        assert_inside(view._btn_run, setup_scroll)
+        assert_inside(view._btn_cycle, setup_scroll)
+        view._btn_cycle.set_active(True)
+        settle()
+        for card in view._env_cards.values():
+            assert_inside(card, setup_scroll)
+            for badge in card._badge_box:
+                assert_inside(badge, setup_scroll)
+            card.emit("clicked")
+        settle()
+        assert_inside(view._btn_start_free, window)
+        assert_inside(view._btn_start_free, view._setup_pane)
+        view._btn_start_free.emit("clicked")
+        start.assert_called_once_with(
+            sport_type=SportTypesEnum.biking,
+            environment=Environment.TRAINER,
+        )
+        library_scroll = view._library.get_last_child().get_child()
+        row = view._list.get_first_child()
+        assert_inside(row, library_scroll)
+        assert_inside(row.get_last_child(), library_scroll)
+        if width > height:
+            assert view._setup_pane.get_parent().get_orientation() is Gtk.Orientation.HORIZONTAL
+        save_screenshot(window, f"librem-three-x-setup-{width}x{height}")
+    finally:
+        window.destroy()
+        settle()
+
+
 def test_navigation_away_cancels_stop_hold(app_stub):
     view, callbacks = make_session(app_stub, "workout")
     window = show_view(view, 360, 720)
@@ -459,6 +514,7 @@ def test_full_application_shell_fits_short_landscape(app_stub, monkeypatch, tmp_
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
     app = FitnessAppUI(test_mode=True)
     app.set_flags(Gio.ApplicationFlags.NON_UNIQUE)
+    app.set_application_id(f"com.luigi311.fitness-tracker.test_{tmp_path.name}")
     app.register(None)
     app._build_ui()
     view, _callbacks = make_session(app, "workout")
@@ -506,6 +562,89 @@ def test_full_application_shell_fits_short_landscape(app_stub, monkeypatch, tmp_
         app.jobs.shutdown()
         GLib.source_remove(app.tracker._status_timer_id)
         settle()
+
+
+@pytest.fixture
+def shell_app(app_stub, monkeypatch, tmp_path):
+    from fitness_tracker.ui.app import FitnessAppUI  # noqa: PLC0415
+
+    del app_stub
+    settings = Gtk.Settings.get_default()
+    animations = settings.get_property("gtk-enable-animations")
+    settings.props.gtk_enable_animations = False
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    app = FitnessAppUI(test_mode=True)
+    app.set_flags(Gio.ApplicationFlags.NON_UNIQUE)
+    app.set_application_id(f"com.luigi311.fitness-tracker.test_{tmp_path.name}")
+    app.register(None)
+    app._build_ui()
+    app._send_background_notification = Mock()
+    app.window.set_decorated(False)
+    app.window.present()
+    try:
+        yield app
+    finally:
+        app.window.destroy()
+        app.jobs.shutdown()
+        GLib.source_remove(app.tracker._status_timer_id)
+        settings.set_property("gtk-enable-animations", animations)
+        settle()
+
+
+def test_real_application_setup_fits_librem_three_x(shell_app):
+    app = shell_app
+    for directory in (app.workouts_running_dir, app.workouts_cycling_dir):
+        for index in range(6):
+            payload = {"name": f"Endurance workout {index + 1}", "steps": [{"duration": 1200}]}
+            (directory / f"{index}.json").write_text(
+                json.dumps(payload),
+                encoding="utf-8",
+            )
+    view = app.tracker.mode_view
+    view._btn_cycle.set_active(True)
+    view.refresh()
+    for width, height in ((240, 480), (480, 240), (240, 480)):
+        app.window.set_default_size(width, height)
+        settle()
+        setup_scroll = view._setup.get_parent()
+        assert view.get_width() <= width
+        for card in view._env_cards.values():
+            assert_inside(card, setup_scroll)
+        assert_inside(view._btn_start_free, app.window)
+        assert_inside(view._list.get_first_child(), view._library.get_last_child().get_child())
+        save_screenshot(app.window, f"real-librem-three-x-setup-{width}x{height}")
+
+
+def test_session_toasts_leave_recording_and_step_buttons_hit_testable(shell_app):
+    app = shell_app
+    view, _callbacks = make_session(app, "workout")
+    app.tracker.session_view = view
+    app.tracker.nav.push(Adw.NavigationPage.new(view, "Workout"))
+    try:
+        for width, height in ((360, 720), (720, 360), (432, 496), (240, 480), (480, 240)):
+            app.window.set_default_size(width, height)
+            settle()
+            app.show_workout_step_notification(2, 8, "Target: 200 - 230 W")
+            settle()
+            settle()
+            assert any(
+                label.get_mapped() and label.get_text() == "Workout step 2 of 8"
+                for label in descendant_labels(view._toast_overlay)
+            )
+            for button in (view.btn_stop, view.btn_start, view.btn_prev, view.btn_next):
+                assert_inside(button, app.window)
+                success, bounds = button.compute_bounds(app.window)
+                assert success
+                picked = app.window.pick(
+                    bounds.get_x() + bounds.get_width() / 2,
+                    bounds.get_y() + bounds.get_height() / 2,
+                    Gtk.PickFlags.DEFAULT,
+                )
+                assert picked is button or (picked is not None and picked.is_ancestor(button))
+            save_screenshot(app.window, f"safe-session-toast-{width}x{height}")
+    finally:
+        view.set_visible(False)
 
 
 @pytest.mark.parametrize("kind", ["trainer", "incline"])
@@ -1056,4 +1195,165 @@ def test_stop_fill_is_vertically_centered(app_stub, width, height, text_scale):
     finally:
         window.destroy()
         settings.set_property("gtk-xft-dpi", original_dpi)
+        settle()
+
+
+@pytest.mark.parametrize("dark", [False, True])
+def test_stop_fill_and_label_have_contrast_in_both_themes(app_stub, tmp_path, dark):
+    style = Adw.StyleManager.get_default()
+    style.set_color_scheme(
+        Adw.ColorScheme.FORCE_DARK if dark else Adw.ColorScheme.FORCE_LIGHT,
+    )
+    view, _callbacks = make_session(app_stub, "workout")
+    window = show_view(view, 540, 620)
+    try:
+        view._stop_progress.set_fraction(0.5)
+        settle()
+        button = view.btn_stop
+        width, height = button.get_width(), button.get_height()
+        snapshot = Gtk.Snapshot()
+        Gtk.WidgetPaintable.new(button).snapshot(snapshot, width, height)
+        texture = window.get_renderer().render_texture(
+            snapshot.to_node(),
+            Graphene.Rect().init(0, 0, width, height),
+        )
+        path = tmp_path / "stop-contrast.png"
+        texture.save_to_png(str(path))
+        surface = cairo.ImageSurface.create_from_png(str(path))
+        pixels = np.frombuffer(surface.get_data(), dtype=np.uint8).reshape(
+            height,
+            surface.get_stride() // 4,
+            4,
+        )
+        success, bounds = view._stop_progress.get_first_child().compute_bounds(button)
+        assert success
+        y = height // 2
+        fill = pixels[y, round(bounds.get_x()) + 20, :3][::-1] / 255
+        unfilled = pixels[y, round(bounds.get_x() + bounds.get_width()) - 20, :3][::-1] / 255
+        label = button.get_child().get_last_child().get_style_context().get_color()
+
+        def luminance(rgb):
+            channels = [
+                c / 12.92 if c <= SRGB_LINEAR_THRESHOLD else ((c + 0.055) / 1.055) ** 2.4
+                for c in rgb
+            ]
+            return sum(
+                c * weight for c, weight in zip(channels, (0.2126, 0.7152, 0.0722), strict=True)
+            )
+
+        def contrast(first, second):
+            values = sorted((luminance(first), luminance(second)))
+            return (values[1] + 0.05) / (values[0] + 0.05)
+
+        assert contrast(fill, unfilled) >= MIN_FILL_CONTRAST
+        for background in (fill, unfilled):
+            assert contrast((label.red, label.green, label.blue), background) >= MIN_TEXT_CONTRAST
+        save_screenshot(window, f"stop-contrast-{'dark' if dark else 'light'}")
+    finally:
+        window.destroy()
+        style.set_color_scheme(Adw.ColorScheme.FORCE_DARK)
+        settle()
+
+
+@pytest.fixture
+def x_pointer():
+    if os.environ.get("FITNESS_TRACKER_XINPUT_TESTS") != "1":
+        pytest.skip("Opt in to pointer injection on an isolated X server")
+    try:
+        x11 = ctypes.CDLL(ctypes.util.find_library("X11") or "libX11.so.6")
+        xtest = ctypes.CDLL(ctypes.util.find_library("Xtst") or "libXtst.so.6")
+    except OSError:
+        pytest.skip("X11/XTEST libraries are unavailable")
+    x11.XOpenDisplay.argtypes = [ctypes.c_char_p]
+    x11.XOpenDisplay.restype = ctypes.c_void_p
+    x11.XCloseDisplay.argtypes = [ctypes.c_void_p]
+    x11.XSync.argtypes = [ctypes.c_void_p, ctypes.c_int]
+    x11.XDefaultRootWindow.argtypes = [ctypes.c_void_p]
+    x11.XDefaultRootWindow.restype = ctypes.c_ulong
+    x11.XTranslateCoordinates.argtypes = [
+        ctypes.c_void_p,
+        ctypes.c_ulong,
+        ctypes.c_ulong,
+        ctypes.c_int,
+        ctypes.c_int,
+        ctypes.POINTER(ctypes.c_int),
+        ctypes.POINTER(ctypes.c_int),
+        ctypes.POINTER(ctypes.c_ulong),
+    ]
+    xtest.XTestFakeMotionEvent.argtypes = [
+        ctypes.c_void_p,
+        ctypes.c_int,
+        ctypes.c_int,
+        ctypes.c_int,
+        ctypes.c_ulong,
+    ]
+    xtest.XTestFakeButtonEvent.argtypes = [
+        ctypes.c_void_p,
+        ctypes.c_uint,
+        ctypes.c_int,
+        ctypes.c_ulong,
+    ]
+    display = x11.XOpenDisplay(os.environ["DISPLAY"].encode())
+    assert display
+
+    def move(x, y):
+        xtest.XTestFakeMotionEvent(display, -1, round(x), round(y), 0)
+        x11.XSync(display, 0)
+
+    def button(*, pressed):
+        xtest.XTestFakeButtonEvent(display, 1, pressed, 0)
+        x11.XSync(display, 0)
+
+    def origin(window):
+        x, y, child = ctypes.c_int(), ctypes.c_int(), ctypes.c_ulong()
+        assert x11.XTranslateCoordinates(
+            display,
+            window.get_surface().get_xid(),
+            x11.XDefaultRootWindow(display),
+            0,
+            0,
+            ctypes.byref(x),
+            ctypes.byref(y),
+            ctypes.byref(child),
+        )
+        return x.value, y.value
+
+    try:
+        yield SimpleNamespace(move=move, button=button, origin=origin)
+    finally:
+        button(pressed=False)
+        x11.XCloseDisplay(display)
+
+
+def test_real_pointer_dragging_off_stop_cancels_until_a_fresh_press(app_stub, x_pointer):
+    view, callbacks = make_session(app_stub, "workout")
+    window = show_view(view, 360, 720, production_shell=True)
+    try:
+        root_x, root_y = x_pointer.origin(window)
+        success, bounds = view.btn_stop.compute_bounds(window)
+        assert success
+        x = root_x + bounds.get_x() + bounds.get_width() / 2
+        y = root_y + bounds.get_y() + bounds.get_height() / 2
+        x_pointer.move(x, y)
+        settle()
+        x_pointer.button(pressed=True)
+        settle()
+        assert view._stop_hold_started_at is not None
+        x_pointer.move(x, y - 250)
+        settle()
+        assert view._stop_hold_started_at is None
+        # Returning while still pressed must not restart the cancelled hold.
+        x_pointer.move(x, y)
+        for _ in range(14):
+            settle()
+        callbacks.stop.assert_not_called()
+        x_pointer.button(pressed=False)
+        settle()
+        x_pointer.button(pressed=True)
+        for _ in range(14):
+            settle()
+        callbacks.stop.assert_called_once_with()
+    finally:
+        x_pointer.button(pressed=False)
+        window.destroy()
         settle()

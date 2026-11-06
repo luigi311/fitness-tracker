@@ -236,9 +236,17 @@ class FitnessAppUI(Adw.Application):
             logger.debug(message)
             return
         logger.info(message)
-        # Create and display a toast on our overlay
         toast = Adw.Toast.new(message)
-        self.toast_overlay.add_toast(toast)
+        self._add_toast(toast)
+
+    def _add_toast(self, toast: Adw.Toast) -> None:
+        """Keep notices within the dashboard while session controls are visible."""
+        tracker = self.__dict__.get("tracker")
+        view = tracker.session_view if tracker is not None else None
+        if view is not None and view.get_mapped():
+            view.add_toast(toast)
+        else:
+            self.toast_overlay.add_toast(toast)
 
     def show_finalization_pending(self, recorder: Recorder) -> None:
         """Show an actionable toast for an activity awaiting finalization."""
@@ -253,7 +261,7 @@ class FitnessAppUI(Adw.Application):
             self._retry_pending_finalization(recorder)
 
         toast.connect("button-clicked", retry)
-        self.toast_overlay.add_toast(toast)
+        self._add_toast(toast)
 
     def schedule_finalization(self, recorder: Recorder) -> None:
         """Finalize a recorder in a background job and update history on success."""
@@ -397,7 +405,7 @@ class FitnessAppUI(Adw.Application):
             return
 
         title = f"Workout step {step_number} of {step_count}"
-        self.show_toast(f"{title}: {target_text}")
+        self.show_toast(title)
         self._send_background_notification(
             "workout-step-change",
             title,

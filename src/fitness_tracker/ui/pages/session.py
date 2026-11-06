@@ -80,6 +80,10 @@ _SESSION_CSS = b"""
 .session-view expander > title { min-height: 48px; }
 .session-view .metric-live { color: @success_color; }
 .session-view .session-timer { border: none; }
+.session-view button.stop-activity {
+    background-color: @destructive_bg_color;
+    color: @destructive_fg_color;
+}
 .stop-hold-progress trough {
     min-width: 0;
     min-height: 32px;
@@ -88,7 +92,8 @@ _SESSION_CSS = b"""
 }
 .stop-hold-progress progress {
     min-height: 32px;
-    background-color: rgba(255, 255, 255, 0.28);
+    background-color: shade(@destructive_bg_color, 0.16);
+    border: none;
     border-radius: 6px;
 }
 """
@@ -156,7 +161,10 @@ class SessionView(Gtk.Box):
         self._scroller.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         self._scroller.set_vexpand(True)
         self._scroller.set_child(self._body)
-        shell.append(self._scroller)
+        self._toast_overlay = Adw.ToastOverlay()
+        self._toast_overlay.set_vexpand(True)
+        self._toast_overlay.set_child(self._scroller)
+        shell.append(self._toast_overlay)
 
         self._build_workout_panel(title, on_prev, on_next)
         self._build_metric_strip()
@@ -740,6 +748,7 @@ class SessionView(Gtk.Box):
         action_pair.set_hexpand(True)
         self.btn_stop = Gtk.Button()
         self.btn_stop.add_css_class("destructive-action")
+        self.btn_stop.add_css_class("stop-activity")
         self.btn_stop.set_tooltip_text(
             f"Press and hold for {_STOP_HOLD_SECONDS} seconds to stop the activity",
         )
@@ -759,10 +768,25 @@ class SessionView(Gtk.Box):
         self.btn_start.set_hexpand(True)
         self.btn_stop.set_hexpand(True)
         self.btn_stop.update_property([Gtk.AccessibleProperty.LABEL], ["Hold to stop activity"])
+        self._connect_stop_controls()
 
+        self.btn_start.connect("clicked", lambda *_: on_start_record())
+        action_pair.append(self.btn_stop)
+        action_pair.append(self.btn_start)
+
+        controls = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        controls.set_hexpand(True)
+        controls.add_css_class("session-actions")
+        controls.append(self._workout_navigation)
+        controls.append(action_pair)
+        self._controls = controls
+
+    def _connect_stop_controls(self) -> None:
+        """Handle pointer and keyboard holds, including cancellation."""
         stop_gesture = Gtk.GestureClick.new()
         stop_gesture.set_button(1)
-        stop_gesture.connect("pressed", lambda *_: self._begin_stop_hold())
+        stop_gesture.connect("pressed", lambda *_: self._begin_stop_hold(stop_gesture))
+        stop_gesture.connect("update", self._on_stop_gesture_updated)
         stop_gesture.connect("released", lambda *_: self._end_stop_hold())
         stop_gesture.connect("cancel", lambda *_: self._cancel_stop_hold())
         self.btn_stop.add_controller(stop_gesture)
@@ -780,21 +804,12 @@ class SessionView(Gtk.Box):
         stop_focus.connect("leave", self._on_stop_focus_leave)
         self.btn_stop.add_controller(stop_focus)
 
-        self.btn_start.connect("clicked", lambda *_: on_start_record())
-        action_pair.append(self.btn_stop)
-        action_pair.append(self.btn_start)
-
-        controls = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
-        controls.set_hexpand(True)
-        controls.add_css_class("session-actions")
-        controls.append(self._workout_navigation)
-        controls.append(action_pair)
-        self._controls = controls
-
-    def _begin_stop_hold(self) -> None:
+    def _begin_stop_hold(self, gesture: Gtk.GestureClick | None = None) -> None:
         """Start the stop countdown without allowing repeated presses to restart it."""
         if self._stop_hold_started_at is not None:
             return
+        self._stop_hold_gesture = gesture
+        self._stop_hold_sequence = gesture.get_current_sequence() if gesture is not None else None
         self._stop_hold_started_at = monotonic()
         self._stop_hold_start_geometry = self._stop_hold_geometry()
         self._stop_progress.set_fraction(0.0)
@@ -808,12 +823,35 @@ class SessionView(Gtk.Box):
         _success, bounds = self.btn_stop.compute_bounds(self)
         return bounds.get_x(), bounds.get_y(), bounds.get_width(), bounds.get_height()
 
+    def _stop_hold_position_valid(self) -> bool:
+        """Check press coordinates even while GTK implicitly grabs the pointer."""
+        if self._stop_hold_gesture is None:
+            return True
+        valid, x, y = self._stop_hold_gesture.get_point(self._stop_hold_sequence)
+        return valid and 0 <= x < self.btn_stop.get_width() and 0 <= y < self.btn_stop.get_height()
+
+    def _on_stop_gesture_updated(
+        self,
+        gesture: Gtk.Gesture,
+        _sequence: Gdk.EventSequence | None,
+    ) -> None:
+        """Cancel immediately when a held pointer or touch leaves the button."""
+        if (
+            self._stop_hold_started_at is not None
+            and self._stop_hold_gesture is gesture
+            and not self._stop_hold_position_valid()
+        ):
+            self._cancel_stop_hold()
+
     def _update_stop_hold(self) -> bool:
         """Update the countdown and stop once the full hold duration elapses."""
         started_at = self._stop_hold_started_at
         if started_at is None:
             return GLib.SOURCE_REMOVE
-        if self._stop_hold_geometry() != self._stop_hold_start_geometry:
+        if (
+            self._stop_hold_geometry() != self._stop_hold_start_geometry
+            or not self._stop_hold_position_valid()
+        ):
             self._cancel_stop_hold()
             return GLib.SOURCE_REMOVE
         elapsed = monotonic() - started_at
@@ -832,7 +870,10 @@ class SessionView(Gtk.Box):
         started_at = self._stop_hold_started_at
         if started_at is None:
             return
-        if self._stop_hold_geometry() != self._stop_hold_start_geometry:
+        if (
+            self._stop_hold_geometry() != self._stop_hold_start_geometry
+            or not self._stop_hold_position_valid()
+        ):
             self._cancel_stop_hold()
             return
         if monotonic() - started_at >= _STOP_HOLD_SECONDS:
@@ -926,6 +967,10 @@ class SessionView(Gtk.Box):
     def set_title(self, title: str) -> None:
         """Update the workout title shown in the guidance panel."""
         self.title_label.set_text(title or "Workout")
+
+    def add_toast(self, toast: Adw.Toast) -> None:
+        """Show session notices above the pinned recording controls."""
+        self._toast_overlay.add_toast(toast)
 
     @property
     def profile_ready(self) -> bool:

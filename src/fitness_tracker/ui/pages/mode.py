@@ -13,7 +13,7 @@ from fitness_tracker.workouts import discover_workouts, format_workout_summary
 
 gi.require_versions({"Gtk": "4.0", "Adw": "1"})
 
-from gi.repository import Adw, Gdk, GLib, Gtk  # noqa: E402  # ty:ignore[unresolved-import]
+from gi.repository import Adw, Gdk, GLib, GObject, Gtk  # noqa: E402  # ty:ignore[unresolved-import]
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -193,6 +193,14 @@ _CSS = b"""
 .workout-frame row {
     padding: 0;
 }
+.mode-select.mini-setup { font-size: 0.666667em; }
+.mode-select.mini-setup button { min-height: 32px; padding: 0 6px; }
+.mode-select.mini-setup .env-card { padding: 1px 3px; }
+.mode-select.mini-setup .env-icon { font-size: 15px; }
+.mode-select.mini-setup .env-name { font-size: 9px; }
+.mode-select.mini-setup .badge { font-size: 7px; padding: 1px 5px; }
+.mode-select.mini-setup .section-label { font-size: 8px; }
+.mode-select.mini-setup .start-free-btn { font-size: 10px; padding: 0 6px; }
 """
 
 
@@ -235,6 +243,7 @@ class ModeSelectView(Gtk.Box):
     ) -> None:
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         _ensure_css()
+        self.add_css_class("mode-select")
         for m in ("top", "bottom"):
             getattr(self, f"set_margin_{m}")(6)
 
@@ -268,7 +277,7 @@ class ModeSelectView(Gtk.Box):
         body.append(self._setup_pane)
         body.append(self._library)
         adaptive = Adw.BreakpointBin()
-        adaptive.set_size_request(280, 180)
+        adaptive.set_size_request(200, 160)
         adaptive.set_vexpand(True)
         adaptive.set_child(body)
         self.append(adaptive)
@@ -286,10 +295,45 @@ class ModeSelectView(Gtk.Box):
         self._build_environment_selector()
         self._build_start_button()
         self._build_workout_panel()
+        self._build_compact_breakpoints(adaptive, body, setup_scroll)
 
         # Defer initial population until after the widget is realized so the
         # CSS provider has been fully cascaded before set_selected() runs.
         self.connect("realize", lambda *_: self.refresh())
+
+    def _build_compact_breakpoints(
+        self,
+        adaptive: Adw.BreakpointBin,
+        body: Gtk.Box,
+        setup_scroll: Gtk.ScrolledWindow,
+    ) -> None:
+        """Keep environment selection and workout starts usable at 3x density."""
+        for condition, landscape in (
+            ("max-width: 279px", False),
+            ("min-width: 400px and max-width: 599px and max-height: 280px", True),
+        ):
+            compact = Adw.Breakpoint.new(Adw.BreakpointCondition.parse(condition))
+            compact.add_setter(
+                self,
+                "css-classes",
+                GObject.Value(GObject.TYPE_STRV, ["mode-select", "mini-setup"]),
+            )
+            for box in (body, self._setup, self._setup_pane, self._library):
+                compact.add_setter(box, "spacing", 5)
+            compact.add_setter(self, "margin-top", 4)
+            compact.add_setter(self, "margin-bottom", 4)
+            for button in (self._btn_run, self._btn_cycle):
+                compact.add_setter(button, "height-request", 32)
+            for card in self._env_cards.values():
+                inner = card.get_child()
+                compact.add_setter(inner, "spacing", 3)
+                compact.add_setter(inner, "margin-top", 4)
+                compact.add_setter(inner, "margin-bottom", 4)
+            if landscape:
+                compact.add_setter(body, "orientation", Gtk.Orientation.HORIZONTAL)
+                compact.add_setter(body, "homogeneous", value=True)
+                compact.add_setter(setup_scroll, "vexpand", value=True)
+            adaptive.add_breakpoint(compact)
 
     def _build_sport_switch(self) -> Gtk.Box:
         """Build the Run/Bike segmented switcher."""

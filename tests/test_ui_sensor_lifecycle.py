@@ -224,7 +224,7 @@ class SensorSettingsLifecycleTests(unittest.TestCase):
         app.show_workout_step_notification(2, 5, "Target: 150 - 175 W")
 
         self.assertEqual(pebble_steps, [1])
-        self.assertEqual(toasts, ["Workout step 2 of 5: Target: 150 - 175 W"])
+        self.assertEqual(toasts, ["Workout step 2 of 5"])
         self.assertEqual(notifications[0][0], "workout-step-change")
         self.assertEqual(notifications[0][1].title, "Workout step 2 of 5")
         self.assertEqual(notifications[0][1].body, "Target: 150 - 175 W")
@@ -260,7 +260,7 @@ class SensorSettingsLifecycleTests(unittest.TestCase):
         app.show_workout_step_notification(2, 5, "Target: 150 - 175 W")
 
         self.assertEqual(pebble_steps, [1])
-        self.assertEqual(toasts, ["Workout step 2 of 5: Target: 150 - 175 W"])
+        self.assertEqual(toasts, ["Workout step 2 of 5"])
 
     def test_changed_pebble_settings_restart_bridge_for_active_recording(self):
         app = FitnessAppUI.__new__(FitnessAppUI)
