@@ -2,7 +2,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { execFileSync } = require('node:child_process');
+const { execFileSync, spawnSync } = require('node:child_process');
 const { test } = require('node:test');
 const { deflateSync } = require('node:zlib');
 const matrix = require('./matrix.json');
@@ -193,6 +193,28 @@ test('git storage bootstraps the image branch and preserves other PRs and old im
 });
 
 
+test('git storage supplies the token authorization header to Git commands', t => {
+  const directory = temporary(t);
+  const remote = path.join(directory, 'remote.git');
+  execFileSync('git', ['init', '--bare', '--quiet', remote]);
+  const token = 'test-only-screenshot-token';
+  const environments = [];
+  const spawn = (command, args, options) => {
+    assert.equal(command, 'git');
+    environments.push(options.env);
+    return spawnSync(command, args, options);
+  };
+  const image = { relative: 'before/comet-250-portrait/tracker.png', bytes: png(1080, 1240) };
+  storeImages({ images: [image], meta, remote, token, spawn });
+  assert.ok(environments.length > 0);
+  for (const env of environments) {
+    assert.equal(env.GIT_CONFIG_COUNT, '1');
+    assert.equal(env.GIT_CONFIG_KEY_0, 'http.https://github.com/.extraheader');
+    assert.equal(env.GIT_CONFIG_VALUE_0,
+      `AUTHORIZATION: basic ${Buffer.from(`x-access-token:${token}`).toString('base64')}`);
+  }
+});
+
 test('publisher creates one comment, updates only its bot comment, and skips stale runs', async t => {
   const directory = fixture(t);
   const original = process.env.SCREENSHOT_ARTIFACT;
@@ -218,12 +240,15 @@ test('publisher creates one comment, updates only its bot comment, and skips sta
   };
   const core = { info: () => {}, summary: { addRaw() { return this; }, async write() {} } };
   const context = { repo: { owner: 'owner', repo: 'fitness-tracker' }, payload: { workflow_run: run } };
-  const store = ({ images }) => {
+  const token = 'test-only-publisher-token';
+  const store = ({ images, token: suppliedToken, remote }) => {
+    assert.equal(suppliedToken, token);
+    assert.equal(remote, 'https://github.com/owner/fitness-tracker.git');
     assert.equal(images.length, 120);
     stored++;
     return 'c'.repeat(40);
   };
-  await publish({ github, context, core, store });
+  await publish({ github, context, core, token, store });
   assert.equal(writes.length, 1);
   assert.equal(writes[0].kind, 'create');
   assert.equal(writes[0].issue_number, 42);
@@ -232,15 +257,15 @@ test('publisher creates one comment, updates only its bot comment, and skips sta
     { id: 1, user: { login: 'contributor' }, body: writes[0].body },
     { id: 2, user: { login: 'github-actions[bot]' }, body: writes[0].body },
   ];
-  await publish({ github, context, core, store });
+  await publish({ github, context, core, token, store });
   assert.equal(writes[1].kind, 'update');
   assert.equal(writes[1].comment_id, 2);
   current = { ...pr, state: 'closed' };
-  await publish({ github, context, core, store });
+  await publish({ github, context, core, token, store });
   assert.equal(stored, 2);
   assert.equal(writes.length, 2);
   current = pr;
-  await publish({ github, context, core, store: value => {
+  await publish({ github, context, core, token, store: value => {
     const commit = store(value);
     current = { ...pr, head: { ...pr.head, sha: 'd'.repeat(40) } };
     return commit;

@@ -10,6 +10,7 @@ permissions: {}
 # Serialize writes to the shared image branch and PR comments.
 concurrency:
   group: publish-ui-screenshots
+  queue: max
   cancel-in-progress: false
 
 jobs:

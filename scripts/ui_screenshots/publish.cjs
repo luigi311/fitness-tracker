@@ -97,7 +97,7 @@ function imageComment(meta, commit, repository, runUrl) {
   return lines.join('\n');
 }
 
-function storeImages({ images, meta, remote, token }) {
+function storeImages({ images, meta, remote, token, spawn = spawnSync }) {
   // Use a fresh object database, with no checkout, hooks or executable files from
   // either the PR artifact or the image branch. Push only allowlisted PNG blobs.
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'fitness-ui-images-'));
@@ -117,7 +117,7 @@ function storeImages({ images, meta, remote, token }) {
     env.GIT_CONFIG_VALUE_0 = `AUTHORIZATION: basic ${Buffer.from(`x-access-token:${token}`).toString('base64')}`;
   }
   const git = (args, input, allowFailure = false) => {
-    const result = spawnSync('git', ['-c', 'core.hooksPath=/dev/null', ...args], {
+    const result = spawn('git', ['-c', 'core.hooksPath=/dev/null', ...args], {
       cwd: directory, env, input, encoding: 'utf8', timeout: 120000,
     });
     if (result.error || (result.status !== 0 && !allowFailure)) {
