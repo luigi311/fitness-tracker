@@ -58,6 +58,25 @@ The initial PR can still generate and upload its screenshot artifact. Subsequent
 and superseded base/head revisions are skipped. Updating the PR's base branch
 alone does not trigger a capture; synchronize the PR branch to refresh the comparison.
 
+## Image-size budget
+
+The publisher accepts at most **3 MiB per PNG** and **32 MiB of PNG data per
+publication**, including both Before and After. It rejects an oversized set
+before writing images or updating the PR comment. Metadata is separate from
+this image budget. Existing image URLs continue to use their commit SHA.
+
+The limit is based on two normal local Xvfb/Cairo captures of `main` at
+`7c99fef`, using the `0f38fa3` capture harness and the complete six-page,
+ten-layout matrix. Each 60-image capture measured **5,896,143 bytes**; together,
+the 120 PNGs measured **11,792,286 bytes (11.25 MiB)**. The largest PNG was
+**171,414 bytes**, the Comet 250% portrait history comparison. These are raw PNG
+file sizes, before ZIP or Git compression.
+
+Twice the measured publication size is 23,584,572 bytes. Rounding that up to the
+next power of two gives **33,554,432 bytes (32 MiB)**, about 2.85 times the normal
+baseline. Re-measure normal captures when changing the matrix or rendering setup
+before adjusting this limit.
+
 ## Workflow permissions
 
 The `pull_request` capture workflow has only `contents: read`, including on forks.
@@ -99,7 +118,7 @@ node --test scripts/ui_screenshots/publish.test.cjs
 ```
 
 The tests cover the matrix, artifact validation, same-repository and fork PR
-identity checks, stale runs, comment image coverage, and local Git publication
-without network access or GitHub writes.
+identity checks, stale runs, per-image and aggregate byte limits, comment image
+coverage, and local Git publication without network access or GitHub writes.
 
 [workflow-run]: https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#workflow_run

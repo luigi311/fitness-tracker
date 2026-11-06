@@ -21,14 +21,16 @@ const pr = {
   head: { sha: meta.head, ref: 'ui-change', repo: { full_name: meta.headRepository } },
 };
 
+/** Create a temporary fixture directory and remove it after the test. */
 function temporary(t) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'fitness-screenshots-test-'));
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
   return directory;
 }
 
-// Generate real, decodable PNG fixtures with correct chunk checksums.
-function png(width, height) {
+/** Build a decodable PNG with optional ancillary padding for file-size boundary tests. */
+function png(width, height, paddingBytes = 0) {
+  /** Encode a PNG chunk with its length and CRC checksum. */
   function chunk(type, bytes) {
     const name = Buffer.from(type);
     const data = Buffer.concat([name, bytes]);
@@ -50,10 +52,13 @@ function png(width, height) {
   header[9] = 6;
   return Buffer.concat([
     Buffer.from('89504e470d0a1a0a', 'hex'), chunk('IHDR', header),
-    chunk('IDAT', deflateSync(Buffer.alloc((width * 4 + 1) * height))), chunk('IEND', Buffer.alloc(0)),
+    chunk('IDAT', deflateSync(Buffer.alloc((width * 4 + 1) * height))),
+    ...(paddingBytes ? [chunk('npAD', Buffer.alloc(paddingBytes))] : []),
+    chunk('IEND', Buffer.alloc(0)),
   ]);
 }
 
+/** Write metadata and correctly sized before/after PNGs for the complete matrix. */
 function fixture(t) {
   const directory = temporary(t);
   fs.writeFileSync(path.join(directory, 'metadata.json'), JSON.stringify(meta));
@@ -117,6 +122,52 @@ test('rejects missing images, bad dimensions, non-PNG data and symlinks', t => {
   fs.renameSync(parent, `${parent}-real`);
   fs.symlinkSync(`${parent}-real`, parent);
   assert.throws(() => readImages(directory), /Symlink/);
+});
+
+test('accepts the aggregate image budget exactly and rejects one byte over it', t => {
+  const directory = fixture(t);
+  const images = readImages(directory);
+  const imageLimit = 3 * 1024 * 1024;
+  const publicationLimit = 32 * 1024 * 1024;
+  let total = images.reduce((sum, image) => sum + image.bytes.length, 0);
+  let last;
+  for (const image of images) {
+    const increase = Math.min(imageLimit - image.bytes.length, publicationLimit - total);
+    if (!increase) break;
+    const width = image.bytes.readUInt32BE(16);
+    const height = image.bytes.readUInt32BE(20);
+    // Ancillary padding adds a twelve-byte chunk header and checksum.
+    const padding = increase - 12;
+    assert.ok(padding > 0);
+    const bytes = png(width, height, padding);
+    assert.equal(bytes.length, image.bytes.length + increase);
+    assert.ok(bytes.length <= imageLimit);
+    const file = path.join(directory, image.relative);
+    fs.writeFileSync(file, bytes);
+    total += increase;
+    last = { file, width, height, padding };
+  }
+  assert.equal(total, publicationLimit);
+  const accepted = readImages(directory);
+  assert.equal(accepted.length, 120);
+  assert.equal(accepted.reduce((sum, image) => sum + image.bytes.length, 0), publicationLimit);
+  const oversized = png(last.width, last.height, last.padding + 1);
+  assert.ok(oversized.length <= imageLimit);
+  fs.writeFileSync(last.file, oversized);
+  assert.throws(() => readImages(directory), /Screenshot images exceed the .* publication limit/);
+});
+
+test('retains the per-image size limit when the publication is below the aggregate budget', t => {
+  const directory = fixture(t);
+  const file = path.join(directory, 'before', matrix.viewports[0].id, 'tracker.png');
+  const original = fs.readFileSync(file);
+  const width = original.readUInt32BE(16);
+  const height = original.readUInt32BE(20);
+  const size = 3 * 1024 * 1024 + 1;
+  const bytes = png(width, height, size - original.length - 12);
+  assert.equal(bytes.length, size);
+  fs.writeFileSync(file, bytes);
+  assert.throws(() => readImages(directory), /Invalid artifact file/);
 });
 
 test('rejects metadata that could alter publication paths or PR selection', t => {

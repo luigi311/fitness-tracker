@@ -9,7 +9,10 @@ const BRANCH = 'ui-screenshots';
 const MARKER = '<!-- fitness-tracker-ui-screenshots -->';
 const PNG_SIGNATURE = Buffer.from('89504e470d0a1a0a', 'hex');
 const MAX_IMAGE_BYTES = 3 * 1024 * 1024;
+// Measured 120 normal PNGs at 11,792,286 bytes; round twice that baseline up to 32 MiB.
+const MAX_TOTAL_IMAGE_BYTES = 32 * 1024 * 1024;
 
+/** Read an artifact file after rejecting symlinks, non-files, and excess size. */
 function readRegularFile(root, relative, maxBytes) {
   let current = root;
   for (const component of relative.split('/')) {
@@ -21,6 +24,7 @@ function readRegularFile(root, relative, maxBytes) {
   return fs.readFileSync(current);
 }
 
+/** Validate the artifact PR number, base/head revisions, and source repository. */
 function readMetadata(root) {
   const meta = JSON.parse(readRegularFile(root, 'metadata.json', 4096).toString('utf8'));
   if (!Number.isSafeInteger(meta.pr) || meta.pr < 1 ||
@@ -31,14 +35,20 @@ function readMetadata(root) {
   return meta;
 }
 
+/** Validate every expected PNG and bound both individual and aggregate image bytes. */
 function readImages(root) {
   const images = [];
+  let totalBytes = 0;
   for (const side of ['before', 'after']) {
     for (const viewport of matrix.viewports) {
       for (const page of matrix.pages) {
         // All paths and image sizes come from trusted configuration, never metadata.
         const relative = `${side}/${viewport.id}/${page.id}.png`;
         const bytes = readRegularFile(root, relative, MAX_IMAGE_BYTES);
+        totalBytes += bytes.length;
+        if (totalBytes > MAX_TOTAL_IMAGE_BYTES) {
+          throw new Error(`Screenshot images exceed the ${MAX_TOTAL_IMAGE_BYTES}-byte publication limit`);
+        }
         if (bytes.length < 45 || !bytes.subarray(0, 8).equals(PNG_SIGNATURE) ||
             bytes.readUInt32BE(8) !== 13 || bytes.toString('ascii', 12, 16) !== 'IHDR' ||
             bytes.readUInt32BE(16) !== Math.round(viewport.width * viewport.scale) ||
@@ -53,6 +63,7 @@ function readImages(root) {
   return images;
 }
 
+/** Check workflow provenance and require the same open PR, base, and head. */
 function currentPullRequest(run, meta, pr, repository) {
   if (run.event !== 'pull_request' || run.conclusion !== 'success' ||
       run.path?.split('@')[0] !== '.github/workflows/ui-screenshots.yml' ||
@@ -70,6 +81,7 @@ function currentPullRequest(run, meta, pr, repository) {
     pr.head.ref === run.head_branch && run.head_repository?.full_name === meta.headRepository;
 }
 
+/** Build grouped before/after tables using immutable image-commit URLs. */
 function imageComment(meta, commit, repository, runUrl) {
   const root = `https://raw.githubusercontent.com/${repository}/${commit}/pr-${meta.pr}`;
   const lines = [
@@ -97,6 +109,7 @@ function imageComment(meta, commit, repository, runUrl) {
   return lines.join('\n');
 }
 
+/** Commit validated images to their branch without checking out artifact files. */
 function storeImages({ images, meta, remote, token, spawn = spawnSync }) {
   // Use a fresh object database, with no checkout, hooks or executable files from
   // either the PR artifact or the image branch. Push only allowlisted PNG blobs.
@@ -116,6 +129,7 @@ function storeImages({ images, meta, remote, token, spawn = spawnSync }) {
     env.GIT_CONFIG_KEY_0 = 'http.https://github.com/.extraheader';
     env.GIT_CONFIG_VALUE_0 = `AUTHORIZATION: basic ${Buffer.from(`x-access-token:${token}`).toString('base64')}`;
   }
+  /** Run an isolated Git command and propagate unexpected failures. */
   const git = (args, input, allowFailure = false) => {
     const result = spawn('git', ['-c', 'core.hooksPath=/dev/null', ...args], {
       cwd: directory, env, input, encoding: 'utf8', timeout: 120000,
@@ -152,6 +166,7 @@ function storeImages({ images, meta, remote, token, spawn = spawnSync }) {
   }
 }
 
+/** Create or update the screenshot report only while its PR revision is current. */
 async function publish({ github, context, core, token, store = storeImages }) {
   const run = context.payload.workflow_run;
   const repository = `${context.repo.owner}/${context.repo.repo}`;
