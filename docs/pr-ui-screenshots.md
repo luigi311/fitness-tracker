@@ -35,8 +35,12 @@ Python dependencies.
 
 ## Viewing results
 
-**Publish UI screenshots** updates one bot comment on the PR. Each device layout
-has an expandable table containing the six pages, with Before and After columns.
+**Publish UI screenshots** updates one bot comment on the PR. There are five
+separate tables, grouped by device and scale: **Librem 5 · 300%**, **Librem 5 · 200%**,
+**Mecha Comet · 250%**, **Mecha Comet · 200%**, and **Tablet · 100%**. Each table has
+**Page | Before | After** columns. The Page cell identifies the page, portrait or
+landscape orientation, and logical viewport size. All six pages appear in both
+orientations within their group. The tables are visible without expanding a section.
 The comment identifies both commit SHAs and links to the capture run. Its
 `ui-screenshots` artifact contains the full-resolution PNGs for 30 days.
 

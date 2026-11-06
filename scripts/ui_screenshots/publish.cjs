@@ -78,18 +78,21 @@ function imageComment(meta, commit, repository, runUrl) {
     '',
     `Before: \`${meta.base.slice(0, 12)}\` · After: \`${meta.head.slice(0, 12)}\` · [CI run and full-resolution artifact](${runUrl})`,
     '',
-    'Six pages at ten layouts. Expand a device to compare the base and PR head.',
+    'Six pages at ten layouts, grouped by device and scale. Each page row identifies its orientation and logical size.',
     'Dark theme, fixed sample activities and live metrics; viewport captures include application navigation.',
     '',
   ];
-  for (const viewport of matrix.viewports) {
-    lines.push('<details>', `<summary>${viewport.label} — ${viewport.width}×${viewport.height} logical pixels</summary>`, '');
-    lines.push('| Page | Before | After |', '| --- | --- | --- |');
+  for (const group of matrix.groups) {
+    const viewports = matrix.viewports.filter(viewport => viewport.group === group.id);
+    lines.push(`### ${group.label}`, '', '| Page | Before | After |', '| --- | --- | --- |');
     for (const page of matrix.pages) {
-      const image = side => `<img src="${root}/${side}/${viewport.id}/${page.id}.png" width="320" alt="${page.label}, ${viewport.label}, ${side}">`;
-      lines.push(`| ${page.label} | ${image('before')} | ${image('after')} |`);
+      for (const viewport of viewports) {
+        const label = `${page.label} · ${viewport.orientation} (${viewport.width}×${viewport.height})`;
+        const image = side => `<img src="${root}/${side}/${viewport.id}/${page.id}.png" width="320" alt="${page.label}, ${viewport.label}, ${side}">`;
+        lines.push(`| ${label} | ${image('before')} | ${image('after')} |`);
+      }
     }
-    lines.push('', '</details>', '');
+    lines.push('');
   }
   return lines.join('\n');
 }

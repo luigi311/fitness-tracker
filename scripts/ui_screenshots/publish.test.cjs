@@ -71,6 +71,13 @@ function fixture(t) {
 test('matrix covers six pages and all ten device allocations at the right panel sizes', () => {
   assert.equal(matrix.pages.length, 6);
   assert.equal(matrix.viewports.length, 10);
+  assert.deepEqual(matrix.groups.map(group => group.label), [
+    'Librem 5 · 300%', 'Librem 5 · 200%', 'Mecha Comet · 250%', 'Mecha Comet · 200%', 'Tablet · 100%',
+  ]);
+  for (const group of matrix.groups) {
+    assert.deepEqual(matrix.viewports.filter(viewport => viewport.group === group.id)
+      .map(viewport => viewport.orientation).sort(), ['landscape', 'portrait']);
+  }
   for (const viewport of matrix.viewports) {
     const physical = [viewport.width * viewport.scale, viewport.height * viewport.scale].sort((a, b) => a - b);
     const expected = viewport.id.startsWith('librem5') ? [720, 1440] :
@@ -144,7 +151,23 @@ test('rejects unrelated workflow provenance and skips obsolete or closed PRs', (
 test('comment embeds all 120 images with immutable URLs and revision labels', () => {
   const body = imageComment(meta, 'c'.repeat(40), repository, 'https://github.com/owner/repo/actions/runs/1');
   assert.equal((body.match(/<img /g) || []).length, 120);
-  assert.equal((body.match(/<details>/g) || []).length, 10);
+  const tables = body.split(/^### /m).slice(1);
+  assert.equal(tables.length, 5);
+  for (const [index, table] of tables.entries()) {
+    const group = matrix.groups[index];
+    assert.ok(table.startsWith(`${group.label}\n`));
+    assert.equal((table.match(/\| Page \| Before \| After \|/g) || []).length, 1);
+    assert.equal((table.match(/<img /g) || []).length, 24);
+    const viewports = matrix.viewports.filter(viewport => viewport.group === group.id);
+    for (const viewport of viewports) {
+      for (const page of matrix.pages) {
+        assert.ok(table.includes(`| ${page.label} · ${viewport.orientation} (${viewport.width}×${viewport.height}) |`));
+        for (const side of ['before', 'after']) {
+          assert.equal(table.split(`/${side}/${viewport.id}/${page.id}.png"`).length - 1, 1);
+        }
+      }
+    }
+  }
   assert.ok(body.includes(`/${'c'.repeat(40)}/pr-42/before/`));
   assert.ok(body.includes(meta.base.slice(0, 12)));
   assert.ok(body.includes(meta.head.slice(0, 12)));
