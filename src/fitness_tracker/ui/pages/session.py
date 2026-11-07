@@ -55,6 +55,7 @@ _SESSION_CSS = b"""
 .session-view .compact-metrics flowboxchild { padding: 2px; }
 .session-view .session-footer { min-height: 104px; }
 .session-view .session-footer.horizontal { min-height: 48px; }
+.session-view .trainer-mode { padding: 0 4px; }
 .session-view expander > title { min-height: 48px; }
 .session-view .metric-live { color: @success_color; }
 .session-view .session-timer { border: none; }
@@ -196,6 +197,13 @@ class SessionView(Gtk.Box):
         portrait = self.layout_family is LayoutFamily.PORTRAIT
         square = self.layout_family is LayoutFamily.SQUARE
         self.landscape = self.layout_family is LayoutFamily.LANDSCAPE
+        portrait_trainer = portrait and self.trainer_target_control is not None
+        if self.trainer_target_control is not None:
+            self.trainer_target_control.set_mode_columns(3 if portrait else 2)
+        if portrait_trainer:
+            self.add_css_class("portrait-trainer")
+        else:
+            self.remove_css_class("portrait-trainer")
         equipment = self.trainer_target_control is not None or self.incline_control is not None
         self._set_quadrants(active=square and self._workout_visible and equipment)
         self._set_trainer_rail(active=self.landscape and equipment)
@@ -203,6 +211,7 @@ class SessionView(Gtk.Box):
             Gtk.Orientation.HORIZONTAL if self.landscape else Gtk.Orientation.VERTICAL,
         )
         self._body.set_homogeneous(False)
+        self._body.set_spacing(4 if portrait_trainer else 8)
         self._hero.set_orientation(
             Gtk.Orientation.HORIZONTAL if square else Gtk.Orientation.VERTICAL,
         )
@@ -213,12 +222,16 @@ class SessionView(Gtk.Box):
         self.metric_columns = 3 if square and not equipment else 2
         self.metrics.set_min_children_per_line(self.metric_columns)
         self.metrics.set_max_children_per_line(self.metric_columns)
+        self.metrics.set_row_spacing(2 if portrait_trainer else 4)
         self.metrics.set_vexpand(not portrait)
         self._readings.set_vexpand(not portrait)
         self._controls.set_orientation(
             Gtk.Orientation.VERTICAL if portrait else Gtk.Orientation.HORIZONTAL,
         )
-        self._footer.set_css_classes(["session-footer"] + ([] if portrait else ["horizontal"]))
+        horizontal_footer = not portrait
+        self._footer.set_css_classes(
+            ["session-footer"] + (["horizontal"] if horizontal_footer else []),
+        )
         self.title_label.set_visible(square)
         self.lbl_next.set_visible(square)
         self._time_values.set_max_children_per_line(2)
@@ -229,11 +242,12 @@ class SessionView(Gtk.Box):
         self.live_chart.canvas.set_size_request(200, 110 if self.landscape else 160)
         self._body.set_css_classes(["compact-metrics"] if self.landscape else [])
         for tile in self._status_tiles:
-            tile.get_child().set_margin_top(2 if self.landscape else 4)
-            tile.get_child().set_margin_bottom(2 if self.landscape else 4)
+            tile.set_status_inline(inline=portrait)
+            tile.get_child().set_margin_top(2 if self.landscape or portrait_trainer else 4)
+            tile.get_child().set_margin_bottom(2 if self.landscape or portrait_trainer else 4)
         if equipment:
-            self._set_adjustments_inline(inline=not portrait)
-        self._readings.set_spacing(8)
+            self._set_adjustments_inline(inline=not portrait or portrait_trainer)
+        self._readings.set_spacing(4 if portrait_trainer else 8)
 
     def _build_workout_navigation(
         self,
@@ -521,6 +535,19 @@ class SessionView(Gtk.Box):
         """Refresh chart text after allocation without moving equipment controls."""
         self._adjustments_layout_source_id = None
         if self.get_mapped():
+            if self.trainer_target_control is not None:
+                available = self._scroller.get_width()
+                if self._quadrants_active:
+                    available = (available - self._readings.get_spacing()) // 2
+                elif self._trainer_rail:
+                    available -= (
+                        self._guidance.measure(Gtk.Orientation.HORIZONTAL, -1)[0]
+                        + self._readings.measure(Gtk.Orientation.HORIZONTAL, -1)[0]
+                        + 2 * self._body.get_spacing()
+                    )
+                self.trainer_target_control.fit_mode_columns(
+                    min(self._adjustments_slot.get_width(), available),
+                )
             dpi = self.get_settings().get_property("gtk-xft-dpi")
             self.live_chart.set_display_scale(dpi / (96 * 1024) if dpi > 0 else 1)
         return GLib.SOURCE_REMOVE

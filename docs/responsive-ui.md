@@ -6,7 +6,7 @@ size do not choose different panel arrangements.
 
 | Window width / height | Session arrangement | Reference canvas |
 | --- | --- | --- |
-| Below 0.80 | Gauge, timers and step counter, live metrics, then equipment disclosure | 360×720 |
+| Below 0.80 | Gauge, timers and step counter, live metrics, then equipment controls | 360×720 |
 | 0.80 through 1.35 | Gauge and timers side by side; metrics and equipment controls side by side below | 540×620 portrait; 620×540 landscape |
 | Above 1.35 | Gauge above timers on the left, live metrics in the middle, equipment controls on the right | 720×360 |
 
@@ -46,18 +46,27 @@ behavior, touch input, and rendering performance.
 Accessibility font enlargement remains independent of display zoom. It enlarges
 text within the chosen arrangement; content can scroll horizontally or vertically
 rather than moving equipment controls to another panel. Recording actions remain
-outside that scroll area. Portrait uses a two-row footer; balanced and landscape
-use one row. Global Tracker, History, and Settings navigation always stays at the
-bottom. The in-app title bar stays hidden in
+outside that scroll area. Previous/Next remain in the recording footer. Portrait
+uses two footer rows; balanced and landscape use one row. Global Tracker, History,
+and Settings navigation stays at the bottom. The in-app title bar stays hidden in
 every arrangement, reclaiming its height without depending on display zoom.
 
 ## Session behavior
 
 The same widgets remain alive during zoom, resize, and rotation. Reflow does not
 restart recording, reset step timers, change trainer targets, or invoke controls.
-Trainer bias and selected modes survive movement between panels. Portrait keeps a
-48-unit disclosure with the current equipment mode/value; the other arrangements
-keep adjustments directly available. Enlarged text can scroll those same panels.
+Trainer bias and selected modes survive movement between panels. Trainer modes and
+adjustments remain directly available in every arrangement. Mode choices use up to
+three columns in portrait and two in other arrangements; enlarged text can use
+fewer columns inside the same panel. Compact mode-button padding, portrait
+metric-tile margins, and vertical gaps retain two
+metric columns, all six readings, and the full trainer panel. Portrait shows
+source indicators and Live/Dead text beside each number. Square and landscape
+layouts keep that information underneath the value. Filled green Live markers
+mean connected; hollow Dead markers mean disconnected, with full connection details
+in tooltips and accessible labels. Numeric text sizes and 48-unit touch heights
+are retained. Portrait incline sessions keep a disclosure showing the current
+value. Enlarged text can scroll those same panels.
 
 Workouts show Elapsed, Remaining, and Step (for example `5/15`). The counter follows
 the executable step sequence through preview, automatic progression, and previous

@@ -234,6 +234,8 @@ def panel_placement(view):
         view._adjustments_inline,
         view.metrics.get_max_children_per_line(),
         view._controls.get_orientation(),
+        view.btn_prev.get_parent(),
+        view.btn_next.get_parent(),
     )
 
 
@@ -244,7 +246,7 @@ def assert_fixed_placement(view):
         assert view._body.get_orientation() is Gtk.Orientation.VERTICAL
         assert view._hero.get_orientation() is Gtk.Orientation.VERTICAL
         assert not view._trainer_rail
-        assert not view._adjustments_inline
+        assert view._adjustments_inline is (view.trainer_target_control is not None)
     elif view.layout_family is LayoutFamily.LANDSCAPE:
         assert view._body.get_orientation() is Gtk.Orientation.HORIZONTAL
         assert view._hero.get_orientation() is Gtk.Orientation.VERTICAL
@@ -482,9 +484,14 @@ def test_missing_sensor_and_untargeted_step_clear_gauge_reading(app_stub):
     """Clear unavailable target readings while retaining accumulated distance."""
     view, _callbacks = make_session(app_stub, "trainer")
     assert view.gauge._available
+    assert view.card_power.dot.get_text() == "● Live"
+    assert view.card_power.dot.get_tooltip_text() == "Power sensor connected"
     view.set_statuses(SensorStatus())
     assert not view.gauge._available
     assert view.card_distance.value.get_text() == "4.28"
+    assert view.card_power.value.get_text() == "—"
+    assert view.card_power.dot.get_text() == "○ Dead"
+    assert view.card_power.dot.get_tooltip_text() == "Power sensor not connected"
     view.set_statuses(SensorStatus(power=True))
     assert view.gauge._available
     view.apply_guidance(
@@ -991,10 +998,10 @@ def test_expanded_controls_keep_recording_actions_visible(app_stub, width, heigh
     ("width", "height", "inline"),
     [
         (1440, 900, True),
-        (900, 1440, False),
+        (900, 1440, True),
         (1024, 768, True),
-        (768, 1024, False),
-        (360, 720, False),
+        (768, 1024, True),
+        (360, 720, True),
         (720, 360, True),
         (1080, 1240, True),
         (1240, 1080, True),
@@ -1056,6 +1063,8 @@ def test_trainer_controls_preserve_bias_and_step_during_reflow(app_stub):
             (620, 540, True, False),
             (1240, 1080, True, False),
             (540, 620, True, False),
+            (360, 720, True, False),
+            (240, 480, True, False),
         )
         for width, height, inline, rail in allocations * 3:
             window.set_default_size(width, height)
@@ -1069,6 +1078,102 @@ def test_trainer_controls_preserve_bias_and_step_during_reflow(app_stub):
             assert_inside(view.metrics, view._scroller)
             assert_inside(view.gauge, view._scroller)
             assert not callbacks.mock_calls
+    finally:
+        window.destroy()
+        settle()
+
+
+@pytest.mark.parametrize(
+    ("width", "height"),
+    [(720, 1440), (626, 1252), (360, 720), (288, 576), (240, 480), (360, 610)],
+)
+def test_portrait_trainer_shows_bias_and_all_readings(app_stub, width, height):
+    """Keep trainer controls open, metrics compact, and step navigation in the footer."""
+    view, callbacks = make_session(app_stub, "trainer")
+    window = show_view(view, width, height, production_shell=True)
+    control = view.trainer_target_control
+    try:
+        assert view._adjustments_inline
+        assert not view._adjustments_expander.get_mapped()
+        assert view._workout_navigation.get_mapped()
+        assert view._controls.get_orientation() is Gtk.Orientation.VERTICAL
+        assert view.metrics.get_max_children_per_line() == 2  # noqa: PLR2004
+        for widget in (
+            view.gauge,
+            view._step_details,
+            view.metrics,
+            control,
+            *control.touch_buttons,
+        ):
+            assert_inside(widget, view._scroller)
+        for button in (view.btn_prev, view.btn_next, view.btn_stop, view.btn_start):
+            assert button.get_allocation().height >= MIN_TOUCH_HEIGHT
+            _, bounds = button.compute_bounds(window)
+            picked = window.pick(
+                bounds.get_x() + bounds.get_width() / 2,
+                bounds.get_y() + bounds.get_height() / 2,
+                Gtk.PickFlags.DEFAULT,
+            )
+            assert picked is button or (picked is not None and picked.is_ancestor(button))
+        assert view.btn_prev.get_parent() is view._workout_navigation
+        assert view.btn_next.get_parent() is view._workout_navigation
+        assert_inside(view._workout_navigation, view._footer)
+        for tile in view._status_tiles:
+            assert tile.dot.get_parent() is tile.value.get_parent()
+            _, number = tile.value.compute_bounds(tile)
+            _, source = tile.dot.compute_bounds(tile)
+            assert number.get_x() + number.get_width() <= source.get_x()
+            assert number.get_y() <= source.get_y()
+            assert source.get_y() + source.get_height() <= number.get_y() + number.get_height()
+            assert tile.value.measure(Gtk.Orientation.HORIZONTAL, -1)[1] <= tile.value.get_width()
+        assert not callbacks.mock_calls
+        control._btn_up.emit("clicked")
+        callbacks.target.assert_called_once_with(TrainerMode.BIAS, 5.0)
+        view.btn_next.emit("clicked")
+        callbacks.next.assert_called_once_with()
+        view.btn_prev.emit("clicked")
+        callbacks.previous.assert_called_once_with()
+        for mode in (TrainerMode.POWER, TrainerMode.RESISTANCE, TrainerMode.BIAS):
+            control._mode_buttons[mode].emit("clicked")
+            settle()
+            assert_inside(control, view._scroller)
+            for button in control._mode_buttons.values():
+                assert button.has_css_class("trainer-mode")
+                assert_inside(button, view._scroller)
+        save_screenshot(window, f"portrait-trainer-inline-{width}x{height}")
+    finally:
+        window.destroy()
+        settle()
+
+
+@pytest.mark.parametrize("connected", [True, False])
+@pytest.mark.parametrize(
+    ("width", "height"),
+    [(360, 720), (720, 360), (540, 620), (620, 540), (240, 480), (480, 240)],
+)
+def test_source_placement_preserves_long_distance(app_stub, width, height, connected):
+    """Keep Live/Dead labels beside portrait readings and underneath wider layouts."""
+    view, callbacks = make_session(app_stub, "trainer")
+    tile = view.card_distance
+    tile.set_value("100.00")
+    tile.set_status(connected=connected)
+    window = show_view(view, width, height, production_shell=True)
+    try:
+        assert tile.value.get_text() == "100.00"
+        assert tile.dot.get_text() == ("● Live" if connected else "○ Dead")
+        assert tile.value.measure(Gtk.Orientation.HORIZONTAL, -1)[1] <= tile.value.get_width()
+        assert tile.dot.measure(Gtk.Orientation.HORIZONTAL, -1)[1] <= tile.dot.get_width()
+        assert_inside(tile.value, tile)
+        assert_inside(tile.dot, tile)
+        _, number = tile.value.compute_bounds(tile)
+        _, source = tile.dot.compute_bounds(tile)
+        if view.layout_family is LayoutFamily.PORTRAIT:
+            assert number.get_x() + number.get_width() <= source.get_x()
+            assert number.get_y() <= source.get_y()
+            assert source.get_y() + source.get_height() <= number.get_y() + number.get_height()
+        else:
+            assert source.get_y() >= number.get_y() + number.get_height()
+        assert not callbacks.mock_calls
     finally:
         window.destroy()
         settle()
@@ -1211,7 +1316,7 @@ def test_large_portrait_sessions_stack_the_sections(app_stub, width, height, kin
         if view.capabilities.incline or view.capabilities.trainer_targets:
             _, controls = view._adjustments_slot.compute_bounds(view._body)
             assert metrics.get_y() + metrics.get_height() <= controls.get_y()
-            assert not view._adjustments_inline
+            assert view._adjustments_inline is (kind == "trainer")
             assert_inside(view._adjustments_slot, view._scroller)
         for tile in view._status_tiles:
             assert_inside(tile.value, view._scroller)
