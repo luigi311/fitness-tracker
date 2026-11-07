@@ -80,6 +80,7 @@ VIEWPORTS = (
 
 @pytest.fixture
 def app_stub():
+    """Initialize GTK and supply session settings without recorder hardware."""
     Adw.init()
     Adw.StyleManager.get_default().set_color_scheme(Adw.ColorScheme.FORCE_DARK)
     return SimpleNamespace(
@@ -92,6 +93,7 @@ def app_stub():
 
 
 def make_session(app, kind):
+    """Build a running sample session with live readings and tracked callbacks."""
     callbacks = Mock()
     view = SessionView(
         app,
@@ -143,6 +145,7 @@ def make_session(app, kind):
 
 
 def show_view(view, width, height, *, production_shell=False):
+    """Map a view inside a navigation shell and finish its initial allocation."""
     window = Gtk.Window(decorated=False)
     window.set_default_size(width, height)
     toolbar = Adw.ToolbarView()
@@ -193,6 +196,7 @@ def show_view(view, width, height, *, production_shell=False):
 
 
 def gauge_ink_bounds(surface, width, height):
+    """Return the bounding rectangle of painted pixels in a gauge surface."""
     surface.flush()
     pixels = np.frombuffer(surface.get_data(), dtype=np.uint8).reshape(height, surface.get_stride())
     rows, columns = np.nonzero(pixels[:, :width])
@@ -201,6 +205,7 @@ def gauge_ink_bounds(surface, width, height):
 
 
 def assert_gauge_centered(bounds, width, height):
+    """Require painted gauge content to stay centered and inside its surface."""
     left, top, right, bottom = bounds
     assert (left + right) / 2 == pytest.approx(width / 2, abs=1.5)
     assert (top + bottom) / 2 == pytest.approx(height / 2, abs=1.5)
@@ -213,6 +218,7 @@ def assert_gauge_centered(bounds, width, height):
 @pytest.mark.parametrize(("width", "height"), VIEWPORTS)
 @pytest.mark.parametrize("kind", SESSION_KINDS)
 def test_session_allocations(app_stub, width, height, kind):
+    """Keep recording actions and essential workout readings within each viewport."""
     view, callbacks = make_session(app_stub, kind)
     window = show_view(view, width, height)
     try:
@@ -250,6 +256,7 @@ def test_session_allocations(app_stub, width, height, kind):
     [(360, 648), (360, 720), (720, 310), (540, 620), (620, 540), (708, 617)],
 )
 def test_enlarged_text_keeps_actions_visible(app_stub, width, height, text_scale):
+    """Preserve readable workout content and complete action labels at larger text sizes."""
     settings = Gtk.Settings.get_default()
     original = settings.get_property("gtk-xft-dpi")
     settings.set_property("gtk-xft-dpi", round(96 * text_scale * 1024))
@@ -279,6 +286,7 @@ def test_enlarged_text_keeps_actions_visible(app_stub, width, height, text_scale
 
 @pytest.mark.parametrize("kind", ["trainer", "free"])
 def test_rotation_preserves_session_state_and_cancels_stop_hold(app_stub, kind):
+    """Cancel pending stops on rotation while retaining session widgets and state."""
     view, callbacks = make_session(app_stub, kind)
     window = show_view(view, 360, 720, production_shell=True)
     timer, gauge, control = view.timer_remaining, view.gauge, view.trainer_target_control
@@ -318,6 +326,7 @@ def test_rotation_preserves_session_state_and_cancels_stop_hold(app_stub, kind):
 
 
 def test_missing_sensor_and_untargeted_step_clear_gauge_reading(app_stub):
+    """Clear unavailable target readings while retaining accumulated distance."""
     view, _callbacks = make_session(app_stub, "trainer")
     assert view.gauge._available
     view.set_statuses(SensorStatus())
@@ -346,6 +355,7 @@ def test_missing_sensor_and_untargeted_step_clear_gauge_reading(app_stub):
     [(360, 650), (720, 310), (360, 380), (540, 590), (432, 496), (496, 432)],
 )
 def test_activity_setup_reflows_and_remains_accessible(app_stub, tmp_path, width, height):
+    """Keep setup selections, environment icons, and the start action accessible."""
     del app_stub  # GTK initialization is shared with the session checks.
     start_free = Mock()
     view = ModeSelectView(tmp_path, tmp_path, start_free, Mock(), unit_system=UnitSystem.METRIC)
@@ -386,6 +396,7 @@ def test_activity_setup_reflows_and_remains_accessible(app_stub, tmp_path, width
     [(540, 620, 6), (620, 540, 4), (432, 496, 4), (496, 432, 2)],
 )
 def test_comet_setup_leaves_room_for_workouts(app_stub, tmp_path, width, height, visible_rows):
+    """Reserve visible workout rows beside usable setup controls on Comet layouts."""
     del app_stub
     workout_count = 6
     for index in range(workout_count):
@@ -427,6 +438,7 @@ def test_librem_three_x_setup_keeps_selections_and_starts_visible(
     width,
     height,
 ):
+    """Fit populated setup and its start actions at Librem 5 three-times scaling."""
     del app_stub
     for index in range(6):
         (tmp_path / f"{index}.json").write_text(
@@ -471,6 +483,7 @@ def test_librem_three_x_setup_keeps_selections_and_starts_visible(
 
 
 def test_navigation_away_cancels_stop_hold(app_stub):
+    """Cancel a pending stop when its session view leaves the screen."""
     view, callbacks = make_session(app_stub, "workout")
     window = show_view(view, 360, 720)
     try:
@@ -540,6 +553,7 @@ def test_session_font_handlers_disconnect_and_reconnect_on_remap(app_stub, monke
 
 
 def test_full_application_shell_fits_short_landscape(shell_app):
+    """Fit the real shell around session readings, actions, and bottom navigation."""
     app = shell_app
     view, _callbacks = make_session(app, "workout")
     app.tracker.nav.push(Adw.NavigationPage.new(view, "Workout"))
@@ -591,6 +605,7 @@ def test_full_application_shell_fits_short_landscape(shell_app):
 
 @pytest.fixture
 def shell_app(app_stub, monkeypatch, tmp_path):
+    """Provide a native application with isolated settings and automatic cleanup."""
     from fitness_tracker.ui.app import FitnessAppUI  # noqa: PLC0415
 
     del app_stub
@@ -619,6 +634,7 @@ def shell_app(app_stub, monkeypatch, tmp_path):
 
 @pytest.mark.parametrize("page", ["tracker", "history", "settings"])
 def test_application_navigation_stays_at_the_bottom_on_every_page(shell_app, page):
+    """Keep complete application navigation at the bottom across pages and sizes."""
     shell_app.stack.set_visible_child_name(page)
     navigation = shell_app._navigation_bar
     for width, height in (
@@ -655,6 +671,7 @@ def test_application_navigation_stays_at_the_bottom_on_every_page(shell_app, pag
 
 
 def test_real_application_setup_fits_librem_three_x(shell_app):
+    """Keep populated setup usable in the real shell at Librem 5 three-times scaling."""
     app = shell_app
     for directory in (app.workouts_running_dir, app.workouts_cycling_dir):
         for index in range(6):
@@ -743,6 +760,7 @@ def test_finalization_notices_use_application_overlay_during_teardown(
 
 
 def test_session_toasts_leave_recording_and_step_buttons_hit_testable(shell_app):
+    """Keep session actions clickable while a notice is displayed above them."""
     app = shell_app
     view, _callbacks = make_session(app, "workout")
     app.tracker.session_view = view
@@ -789,6 +807,7 @@ def test_session_toasts_leave_recording_and_step_buttons_hit_testable(shell_app)
     ],
 )
 def test_expanded_controls_keep_recording_actions_visible(app_stub, width, height, kind):
+    """Keep expanded equipment adjustments reachable alongside recording actions."""
     view, callbacks = make_session(app_stub, kind)
     window = show_view(view, width, height, production_shell=True)
     control = view.trainer_target_control if kind == "trainer" else view.incline_control
@@ -831,6 +850,7 @@ def test_trainer_controls_are_directly_accessible_when_dashboard_fits(
     height,
     inline,
 ):
+    """Expose trainer controls inline only when the complete dashboard fits."""
     view, callbacks = make_session(app_stub, "trainer")
     window = show_view(view, width, height)
     control = view.trainer_target_control
@@ -861,6 +881,7 @@ def test_trainer_controls_are_directly_accessible_when_dashboard_fits(
 
 
 def test_trainer_controls_preserve_bias_and_step_during_reflow(app_stub):
+    """Preserve trainer bias, workout timing, and control identity during reflow."""
     view, callbacks = make_session(app_stub, "trainer")
     window = show_view(view, 540, 620)
     control = view.trainer_target_control
@@ -907,6 +928,7 @@ def test_phone_landscape_stacks_guidance_and_keeps_trainer_controls_on_the_right
     height,
     rail,
 ):
+    """Stack phone landscape guidance and place trainer controls beside it when feasible."""
     view, callbacks = make_session(app_stub, "trainer")
     window = show_view(view, width, height, production_shell=True)
     try:
@@ -946,6 +968,7 @@ def test_phone_landscape_stacks_guidance_and_keeps_trainer_controls_on_the_right
     [(540, 620), (620, 540), (432, 496), (496, 432), (1080, 1240), (1240, 1080)],
 )
 def test_comet_workouts_use_four_visible_quadrants(app_stub, width, height, kind):
+    """Arrange Comet guidance, timers, metrics, and equipment controls in quadrants."""
     view, callbacks = make_session(app_stub, kind)
     window = show_view(view, width, height, production_shell=True)
     try:
@@ -983,6 +1006,7 @@ def test_comet_workouts_use_four_visible_quadrants(app_stub, width, height, kind
 @pytest.mark.parametrize("kind", ["trainer", "incline"])
 @pytest.mark.parametrize(("width", "height"), [(1600, 900), (1280, 800), (1024, 768)])
 def test_large_landscape_workouts_use_four_quadrants(app_stub, width, height, kind):
+    """Use four visible workout quadrants on large landscape allocations."""
     view, callbacks = make_session(app_stub, kind)
     window = show_view(view, width, height, production_shell=True)
     try:
@@ -1010,6 +1034,7 @@ def test_large_landscape_workouts_use_four_quadrants(app_stub, width, height, ki
 @pytest.mark.parametrize("kind", ["workout", "trainer", "incline", "free"])
 @pytest.mark.parametrize(("width", "height"), [(800, 1280), (768, 1024), (900, 1600)])
 def test_large_portrait_sessions_stack_the_sections(app_stub, width, height, kind):
+    """Stack guidance, metrics, and equipment controls on large portrait allocations."""
     view, callbacks = make_session(app_stub, kind)
     window = show_view(view, width, height, production_shell=True)
     try:
@@ -1050,6 +1075,7 @@ def test_large_portrait_sessions_stack_the_sections(app_stub, width, height, kin
 
 @pytest.mark.parametrize(("width", "height"), [(620, 540), (496, 432), (1240, 1080)])
 def test_landscape_workout_to_free_transition_restores_the_chart_layout(app_stub, width, height):
+    """Restore the free-session chart layout without replacing trainer controls."""
     settings = Gtk.Settings.get_default()
     animations = settings.get_property("gtk-enable-animations")
     settings.props.gtk_enable_animations = False
@@ -1079,6 +1105,7 @@ def test_landscape_workout_to_free_transition_restores_the_chart_layout(app_stub
 
 
 def test_trainer_disclosure_adapts_to_text_size_without_resize(app_stub):
+    """Reconsider inline trainer controls when text size changes at a fixed viewport."""
     settings = Gtk.Settings.get_default()
     original_dpi = settings.get_property("gtk-xft-dpi")
     view, callbacks = make_session(app_stub, "trainer")
@@ -1114,6 +1141,7 @@ def test_high_scale_devices_keep_the_dashboard_visible(
     reference_width,
     reference_height,
 ):
+    """Keep live readings and proportionate actions visible on high-scale displays."""
     del reference_width, reference_height
     view, callbacks = make_session(app_stub, kind)
     window = show_view(view, width, height, production_shell=True)
@@ -1157,6 +1185,7 @@ def test_high_scale_text_matches_the_two_x_reference(
     reference_width,
     reference_height,
 ):
+    """Scale dashboard text against its reference and restore it after reflow."""
     view, callbacks = make_session(app_stub, "trainer")
     window = show_view(view, reference_width, reference_height, production_shell=True)
     labels = (
@@ -1210,6 +1239,7 @@ def test_high_scale_large_text_keeps_actions_and_scrolling_usable(
     reference_width,
     reference_height,
 ):
+    """Keep recording actions visible and metrics reachable with dense enlarged text."""
     del scale, reference_width, reference_height
     settings = Gtk.Settings.get_default()
     original_dpi = settings.get_property("gtk-xft-dpi")
@@ -1239,6 +1269,7 @@ def test_high_scale_large_text_keeps_actions_and_scrolling_usable(
 
 @pytest.mark.parametrize(("width", "height"), [(540, 620), (620, 540)])
 def test_comet_one_x_matches_two_x_text_readability(app_stub, width, height):
+    """Match Comet text and action sizing across one-times and two-times scaling."""
     view, callbacks = make_session(app_stub, "trainer")
     window = show_view(view, width, height, production_shell=True)
     control = view.trainer_target_control
@@ -1305,6 +1336,7 @@ def test_comet_one_x_matches_two_x_text_readability(app_stub, width, height):
     ],
 )
 def test_comet_chart_labels_match_dashboard_density(app_stub, width, height, scale):
+    """Scale live-chart labels with dashboard density without clipping the axes."""
     view, callbacks = make_session(app_stub, "free")
     window = show_view(view, width, height, production_shell=True)
     chart = view.live_chart
@@ -1330,6 +1362,7 @@ def test_comet_chart_labels_match_dashboard_density(app_stub, width, height, sca
 
 
 def test_light_theme_keeps_metric_values_and_gauge_visible(app_stub):
+    """Keep primary workout readings visible in the light appearance."""
     Adw.StyleManager.get_default().set_color_scheme(Adw.ColorScheme.FORCE_LIGHT)
     view, _callbacks = make_session(app_stub, "workout")
     window = show_view(view, 540, 620)
@@ -1375,6 +1408,7 @@ def test_gauge_text_stays_clear_of_arc_and_other_line(
     headline,
     subline,
 ):
+    """Keep fitted gauge labels separate, inside the arc, and centered as a group."""
     del app_stub
     settings = Gtk.Settings.get_default()
     original_dpi = settings.get_property("gtk-xft-dpi")
@@ -1406,10 +1440,12 @@ def test_gauge_text_stays_clear_of_arc_and_other_line(
     show_layout = session_controls_module.PangoCairo.show_layout
 
     def capture_band(ctx, **geometry):
+        """Record target-band geometry while preserving the actual drawing."""
         band.update(geometry)
         draw_band(ctx, **geometry)
 
     def capture_label(ctx, layout):
+        """Record painted text bounds while preserving the actual label rendering."""
         x, y = ctx.get_current_point()
         ink, _logical = layout.get_pixel_extents()
         labels.append((x + ink.x, y + ink.y, ink.width, ink.height))
@@ -1452,6 +1488,7 @@ def test_gauge_is_smaller_and_centered_in_compact_sessions(
     compact,
     available,
 ):
+    """Shrink compact gauges while preserving centering and large-layout geometry."""
     view, callbacks = make_session(app_stub, "trainer")
     window = show_view(view, width, height, production_shell=True)
     gauge = view.gauge
@@ -1494,6 +1531,7 @@ def test_gauge_is_smaller_and_centered_in_compact_sessions(
     ],
 )
 def test_stop_fill_is_vertically_centered(app_stub, width, height, text_scale):
+    """Center stop-hold progress vertically across densities and text sizes."""
     settings = Gtk.Settings.get_default()
     original_dpi = settings.get_property("gtk-xft-dpi")
     settings.set_property("gtk-xft-dpi", round(96 * text_scale * 1024))
@@ -1521,6 +1559,7 @@ def test_stop_fill_is_vertically_centered(app_stub, width, height, text_scale):
 
 @pytest.mark.parametrize("dark", [False, True])
 def test_stop_fill_and_label_have_contrast_in_both_themes(app_stub, tmp_path, dark):
+    """Maintain visible stop progress and readable labels in light and dark themes."""
     style = Adw.StyleManager.get_default()
     style.set_color_scheme(
         Adw.ColorScheme.FORCE_DARK if dark else Adw.ColorScheme.FORCE_LIGHT,
@@ -1578,6 +1617,7 @@ def test_stop_fill_and_label_have_contrast_in_both_themes(app_stub, tmp_path, da
 
 @pytest.fixture
 def x_pointer():
+    """Provide optional pointer injection restricted to an isolated X display."""
     if os.environ.get("FITNESS_TRACKER_XINPUT_TESTS") != "1":
         pytest.skip("Opt in to pointer injection on an isolated X server")
     try:
@@ -1618,14 +1658,17 @@ def x_pointer():
     assert display
 
     def move(x, y):
+        """Move the pointer to coordinates on the isolated display."""
         xtest.XTestFakeMotionEvent(display, -1, round(x), round(y), 0)
         x11.XSync(display, 0)
 
     def button(*, pressed):
+        """Inject a primary-button press or release on the isolated display."""
         xtest.XTestFakeButtonEvent(display, 1, pressed, 0)
         x11.XSync(display, 0)
 
     def origin(window):
+        """Return the native window origin in root-window coordinates."""
         x, y, child = ctypes.c_int(), ctypes.c_int(), ctypes.c_ulong()
         assert x11.XTranslateCoordinates(
             display,
@@ -1647,6 +1690,7 @@ def x_pointer():
 
 
 def test_real_pointer_dragging_off_stop_cancels_until_a_fresh_press(app_stub, x_pointer):
+    """Cancel a dragged-off stop hold and require a fresh press before stopping."""
     view, callbacks = make_session(app_stub, "workout")
     window = show_view(view, 360, 720, production_shell=True)
     try:

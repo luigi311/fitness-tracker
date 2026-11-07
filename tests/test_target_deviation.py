@@ -24,10 +24,12 @@ from fitness_tracker.core.units import UnitSystem
     ],
 )
 def test_target_deviation(domain, current, low, high, expected):
+    """Report distance from the nearest target boundary with correct pace direction."""
     assert format_target_deviation(domain, current, low, high, UnitSystem.METRIC) == expected
 
 
 def test_pace_deviation_uses_mile_distance_for_imperial_units():
+    """Express imperial pace deviation in seconds per mile."""
     assert (
         format_target_deviation(TargetDomain.PACE, 3.0, 3.5, 4.0, UnitSystem.IMPERIAL)
         == "77 s/mi slower"

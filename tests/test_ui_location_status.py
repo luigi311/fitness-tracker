@@ -62,10 +62,10 @@ class _HeadlessBox(_HeadlessWidget):
 
 class _HeadlessFlowBox(_HeadlessBox):
     def set_min_children_per_line(self, _count: int) -> None:
-        return None
+        """Accept minimum column hints without allocating a native GTK grid."""
 
     def set_max_children_per_line(self, _count: int) -> None:
-        return None
+        """Accept maximum column hints without allocating a native GTK grid."""
 
     def insert(self, child: object, _position: int) -> None:
         self.children.append(child)
@@ -268,6 +268,7 @@ class _LocationView:
     profile_ready = True
 
     def __init__(self) -> None:
+        """Initialize the recorded session-state transitions."""
         self.states: list[SessionState] = []
 
     def set_state(self, state: SessionState) -> None:
@@ -292,6 +293,7 @@ class _LocationRecorder:
 def _tracker_for_location_tests(
     tracker_page_ui: type,
 ) -> tuple[object, _LocationView, _LocationRecorder, list[str]]:
+    """Build an outdoor session controller with observable recorder and notice doubles."""
     view = _LocationView()
     recorder = _LocationRecorder()
     toasts: list[str] = []
@@ -332,6 +334,7 @@ def test_indoor_location_warning_copy_is_present(headless_ui_classes) -> None:
 
 
 def test_location_transitions_do_not_block_session_start(headless_ui_classes) -> None:
+    """Allow recording to start independently of the outdoor location lifecycle."""
     tracker_page_ui, _location_section, _session_view = headless_ui_classes
     page, view, recorder, toasts = _tracker_for_location_tests(tracker_page_ui)
 
@@ -350,6 +353,7 @@ def test_location_transitions_do_not_block_session_start(headless_ui_classes) ->
 
 
 def test_outdoor_permission_error_notifies_once(headless_ui_classes) -> None:
+    """Report location permission failure once without changing session state."""
     tracker_page_ui, _location_section, _session_view = headless_ui_classes
     page, view, _recorder, toasts = _tracker_for_location_tests(tracker_page_ui)
 
@@ -369,6 +373,7 @@ def test_stop_requires_configured_hold_duration_and_cancels_on_focus_loss(
     headless_ui_classes,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Require the full stop hold and cancel progress when focus leaves the action."""
     _tracker_page_ui, _location_section, session_view = headless_ui_classes
     now = [10.0]
     removed_sources: list[int] = []
@@ -430,6 +435,7 @@ def test_stop_cancels_outside_pressed_bounds_even_without_a_leave_event(
     monkeypatch,
     position,
 ):
+    """Cancel holds outside the stop bounds even when pointer grabs suppress leave events."""
     _, _, session_view = headless_ui_classes
     now = [10.0]
     view = session_view.__new__(session_view)
@@ -580,6 +586,7 @@ def test_workout_unit_changes_refresh_remaining_and_next_without_advancing(
 def test_step_position_follows_preview_automatic_progress_and_paused_navigation(
     headless_ui_classes,
 ):
+    """Update the displayed step through preview, progression, and paused navigation."""
     from fitness_tracker.core.live_metrics import LiveMetrics  # noqa: PLC0415
     from fitness_tracker.core.settings import PersonalSettings  # noqa: PLC0415
     from fitness_tracker.core.units import UnitSystem  # noqa: PLC0415

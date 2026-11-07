@@ -108,6 +108,7 @@ class _CurrentRecorder:
 
 class SensorSettingsLifecycleTests(unittest.TestCase):
     def setUp(self):
+        """Scope application UI doubles to one test and reset its queued callbacks."""
         ui_dependencies = patch.multiple(
             app_module,
             GLib=_GLib,
@@ -160,6 +161,7 @@ class SensorSettingsLifecycleTests(unittest.TestCase):
         _GLib.callbacks.get(timeout=2)()
 
     def test_workout_step_notification_uses_desktop_notification_without_toast(self):
+        """Notify background users and update the watch without an in-app step toast."""
         app = FitnessAppUI.__new__(FitnessAppUI)
         toasts = []
         notifications = []
@@ -198,6 +200,7 @@ class SensorSettingsLifecycleTests(unittest.TestCase):
         self.assertEqual(pebble_steps, [0])
 
     def test_workout_step_desktop_notification_is_suppressed_in_foreground(self):
+        """Keep foreground step changes silent while updating the watch position."""
         app = FitnessAppUI.__new__(FitnessAppUI)
         toasts = []
         pebble_steps = []

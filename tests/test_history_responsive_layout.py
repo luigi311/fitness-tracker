@@ -45,6 +45,7 @@ COMPARE_COUNT = 2
 
 
 def wait_for(predicate):
+    """Process GTK events until history background work completes or times out."""
     for _ in range(50):
         if predicate():
             settle()
@@ -55,6 +56,7 @@ def wait_for(predicate):
 
 @pytest.fixture(scope="module")
 def populated_app(tmp_path_factory):
+    """Provide an isolated native application with seeded activity history."""
     directory = tmp_path_factory.mktemp("native-history")
     with patch.dict(
         os.environ,
@@ -102,6 +104,7 @@ def populated_app(tmp_path_factory):
 
 @pytest.fixture
 def history_app(populated_app):
+    """Reset shared history selection, filters, units, and scroll positions."""
     app = populated_app
     Adw.StyleManager.get_default().set_color_scheme(Adw.ColorScheme.FORCE_DARK)
     app.history.selected_ids.clear()
@@ -123,6 +126,7 @@ def history_app(populated_app):
 
 
 def resize(app, width, height):
+    """Apply a viewport size and verify the actual window allocation."""
     app.window.set_default_size(width, height)
     settle()
     settle()
@@ -131,6 +135,7 @@ def resize(app, width, height):
 
 
 def select_pair(page):
+    """Select two visible activities and wait for their comparison data."""
     for row in page._displayed[:2]:
         page._on_select_toggle(row.activity_id, active=True)
     wait_for(lambda: page._compare_job is None and len(page._compare_legend_items) == COMPARE_COUNT)
@@ -139,6 +144,7 @@ def select_pair(page):
 @pytest.mark.parametrize(("width", "height"), VIEWPORTS)
 @pytest.mark.parametrize("tab", ["activities", "compare"])
 def test_populated_history_fits_all_supported_sizes(history_app, width, height, tab):
+    """Keep history actions, chart labels, and activity rows within each viewport."""
     app = history_app
     page = app.history
     resize(app, width, height)
@@ -192,6 +198,7 @@ def test_populated_history_fits_all_supported_sizes(history_app, width, height, 
 
 
 def test_rotation_keeps_selection_choices_widgets_and_compare_data(history_app):
+    """Preserve history choices, widget identity, and chart data through rotation."""
     app = history_app
     page = app.history
     select_pair(page)
@@ -216,6 +223,7 @@ def test_rotation_keeps_selection_choices_widgets_and_compare_data(history_app):
 
 
 def test_filters_sort_units_and_export_keep_their_meaning(history_app):
+    """Preserve filtering, sorting, unit conversion, and independent export actions."""
     app = history_app
     page = app.history
     resize(app, 540, 620)
@@ -263,6 +271,7 @@ def test_enlarged_text_keeps_history_navigation_and_content_reachable(
     height,
     text_scale,
 ):
+    """Keep history navigation and scrollable content reachable with enlarged text."""
     app = history_app
     settings = Gtk.Settings.get_default()
     original = settings.get_property("gtk-xft-dpi")
@@ -321,6 +330,7 @@ def test_enlarged_text_keeps_history_navigation_and_content_reachable(
 
 
 def test_empty_history_and_comparison_explain_the_next_action(history_app):
+    """Explain empty history and comparison states without hiding navigation."""
     app = history_app
     page = app.history
     resize(app, 240, 480)
@@ -340,6 +350,7 @@ def test_empty_history_and_comparison_explain_the_next_action(history_app):
 
 
 def test_light_theme_keeps_comparison_and_selection_visible(history_app):
+    """Preserve comparison selection and chart visibility when the theme changes."""
     app = history_app
     page = app.history
     select_pair(page)
