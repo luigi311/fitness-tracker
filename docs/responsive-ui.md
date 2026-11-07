@@ -107,6 +107,26 @@ or short landscape windows, with keyboard-accessible environment toggles.
 Smaller vertical gaps and card padding leave more room for the workout list.
 Environment cards retain the original house, tree and lightning emoji icons.
 
+## History
+
+History uses the same normal, Comet 1×, Comet 2.5×, and Librem 3× text and touch
+densities as the session page. Activities and Compare are compact view controls
+above the page; global navigation remains at the bottom.
+
+Portrait places filters, a wrapping totals grid, and activity cards in one scroll
+area. Landscape moves filters and totals beside an independently scrolling list.
+Activity dates have their own line, metrics wrap, and sparklines yield width to
+the explicit Compare checkbox and TCX export action. Export does not change the
+comparison selection. Selection and choice widgets survive rotation.
+
+Comparison gives the plot the remaining space. Metric selection and colored
+activity labels sit beside the plot in landscape; portrait puts the legend in
+the selected-activities menu. Long legends do not cover the data. Axes use the
+history density and text scaling, reserve label margins on resize, and show
+elapsed-time ticks at readable intervals. Empty and filtered-out states explain
+how to choose activities. Filtering, sorting, unit conversion, asynchronous
+queries, and export retain their existing behavior.
+
 ## Verification
 
 Run the normal suite with `uv run pytest`. Native GTK tests opt in so CI without a
@@ -114,6 +134,7 @@ display can continue running the existing headless tests:
 
 ```sh
 xvfb-run -a env FITNESS_TRACKER_GTK_TESTS=1 uv run pytest tests/test_responsive_layout.py
+xvfb-run -a env FITNESS_TRACKER_GTK_TESTS=1 uv run pytest tests/test_history_responsive_layout.py
 ```
 
 On an existing display, omit `xvfb-run -a`. Add
