@@ -45,6 +45,8 @@ _MIN_CHART_POINTS = 2
 _STOP_HOLD_SECONDS = 1.5
 _STOP_HOLD_TICK_MS = 32
 _INLINE_ADJUSTMENTS_CLEARANCE = 8
+_QUADRANT_ASPECT_MIN = 0.75
+_QUADRANT_ASPECT_MAX = 1.35
 _SESSION_CSS = b"""
 .session-view .session-actions button { min-height: 48px; padding: 0 10px; }
 .session-view .metric-value { font-size: 1.8em; font-weight: 700; }
@@ -114,6 +116,13 @@ def _ensure_session_css() -> None:
 class SessionView(Gtk.Box):
     """Render free-run metrics and an optional workout guidance panel."""
 
+    metric_columns = GObject.Property(type=int, default=2, minimum=1, maximum=3)
+    metric_fill = GObject.Property(type=bool, default=False)
+    horizontal_hero = GObject.Property(type=bool, default=False)
+    gauge_height = GObject.Property(type=int, default=125)
+    landscape = GObject.Property(type=bool, default=False)
+    stacked_landscape = GObject.Property(type=bool, default=False)
+
     def __init__(
         self,
         app: FitnessAppUI,
@@ -158,6 +167,10 @@ class SessionView(Gtk.Box):
         self._readings.set_hexpand(True)
         self._body.append(self._guidance)
         self._body.append(self._readings)
+        self._side_controls = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        self._side_controls.set_visible(False)
+        self._side_controls.set_hexpand(True)
+        self._body.append(self._side_controls)
         self._scroller = Gtk.ScrolledWindow()
         self._scroller.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         self._scroller.set_vexpand(True)
@@ -204,9 +217,8 @@ class SessionView(Gtk.Box):
         """Reflow existing widgets using available logical pixels, including height."""
         compact_classes = GObject.Value(GObject.TYPE_STRV, ["compact-metrics"])
         medium = Adw.Breakpoint.new(Adw.BreakpointCondition.parse("min-width: 480sp"))
-        medium.add_setter(self.metrics, "min-children-per-line", 3)
-        medium.add_setter(self.metrics, "max-children-per-line", 3)
-        medium.add_setter(self._hero, "orientation", Gtk.Orientation.HORIZONTAL)
+        medium.add_setter(self, "metric-columns", 3)
+        medium.add_setter(self, "horizontal-hero", value=True)
         self._adaptive.add_breakpoint(medium)
 
         tight = Adw.Breakpoint.new(
@@ -216,11 +228,10 @@ class SessionView(Gtk.Box):
                 "(min-width: 350px and max-height: 400sp)",
             ),
         )
-        tight.add_setter(self.metrics, "min-children-per-line", 3)
-        tight.add_setter(self.metrics, "max-children-per-line", 3)
-        tight.add_setter(self._hero, "orientation", Gtk.Orientation.HORIZONTAL)
+        tight.add_setter(self, "metric-columns", 3)
+        tight.add_setter(self, "horizontal-hero", value=True)
         tight.add_setter(self.gauge, "content-width", 110)
-        tight.add_setter(self.gauge, "content-height", 60)
+        tight.add_setter(self, "gauge-height", 60)
         tight.add_setter(self.title_label, "visible", value=False)
         tight.add_setter(self.lbl_next, "visible", value=False)
         tight.add_setter(self._body, "css-classes", compact_classes)
@@ -229,10 +240,10 @@ class SessionView(Gtk.Box):
         tiny = Adw.Breakpoint.new(
             Adw.BreakpointCondition.parse("max-width: 349px and max-height: 560sp"),
         )
-        tiny.add_setter(self._hero, "orientation", Gtk.Orientation.HORIZONTAL)
+        tiny.add_setter(self, "horizontal-hero", value=True)
         tiny.add_setter(self.gauge, "content-width", 100)
         tiny.add_setter(self._time_values, "max-children-per-line", 1)
-        tiny.add_setter(self.gauge, "content-height", 64)
+        tiny.add_setter(self, "gauge-height", 64)
         tiny.add_setter(self.title_label, "visible", value=False)
         tiny.add_setter(self.lbl_next, "visible", value=False)
         tiny.add_setter(self._body, "css-classes", compact_classes)
@@ -245,19 +256,16 @@ class SessionView(Gtk.Box):
 
     def _build_wide_breakpoints(self, compact_classes: GObject.Value) -> None:
         """Keep landscape guidance beside metrics, including with enlarged text."""
-        # Near-square Comet allocations keep the hero above the metric grid,
-        # even at 1x scaling. Landscape places guidance beside the metrics.
+        # Near-square portrait keeps the hero above the metrics. Rotated
+        # workouts can use side-by-side panels without moving free charts.
         wide = Adw.Breakpoint.new(
             Adw.BreakpointCondition.parse(
                 "min-width: 600sp and min-aspect-ratio: 13/10",
             ),
         )
-        wide.add_setter(self._body, "orientation", Gtk.Orientation.HORIZONTAL)
-        wide.add_setter(self._body, "homogeneous", value=True)
-        wide.add_setter(self._guidance, "valign", Gtk.Align.START)
-        wide.add_setter(self.metrics, "min-children-per-line", 2)
-        wide.add_setter(self.metrics, "max-children-per-line", 2)
-        wide.add_setter(self._hero, "orientation", Gtk.Orientation.HORIZONTAL)
+        wide.add_setter(self, "landscape", value=True)
+        wide.add_setter(self, "metric-columns", 2)
+        wide.add_setter(self, "horizontal-hero", value=True)
         wide.add_setter(self.gauge, "content-width", 140)
         wide.add_setter(self.gauge, "size-scale", 1.0)
         self._adaptive.add_breakpoint(wide)
@@ -268,17 +276,18 @@ class SessionView(Gtk.Box):
                 "and min-aspect-ratio: 8/5",
             ),
         )
-        landscape.add_setter(self._body, "orientation", Gtk.Orientation.HORIZONTAL)
-        landscape.add_setter(self._body, "homogeneous", value=True)
-        landscape.add_setter(self._guidance, "valign", Gtk.Align.START)
-        landscape.add_setter(self.metrics, "min-children-per-line", 3)
-        landscape.add_setter(self.metrics, "max-children-per-line", 3)
-        landscape.add_setter(self._hero, "orientation", Gtk.Orientation.HORIZONTAL)
+        landscape.add_setter(self, "landscape", value=True)
+        landscape.add_setter(self, "stacked-landscape", value=True)
+        landscape.add_setter(self, "metric-columns", 3)
+        landscape.add_setter(self, "horizontal-hero", value=True)
         landscape.add_setter(self.gauge, "content-width", 110)
-        landscape.add_setter(self.gauge, "content-height", 80)
+        landscape.add_setter(self, "gauge-height", 80)
         landscape.add_setter(self.title_label, "visible", value=False)
         landscape.add_setter(self.lbl_next, "visible", value=False)
         landscape.add_setter(self._body, "css-classes", compact_classes)
+        landscape.add_setter(self._readings, "spacing", 4)
+        if self.capabilities.incline or self.capabilities.trainer_targets:
+            landscape.add_setter(self._adjustments_slot, "margin-bottom", 0)
         self._adaptive.add_breakpoint(landscape)
 
     def _set_small_density(self, layout: Adw.Breakpoint, css_class: str, scale: float) -> None:
@@ -330,17 +339,16 @@ class SessionView(Gtk.Box):
             ),
         )
         self._set_small_density(reduced, "reduced", 0.8)
-        reduced.add_setter(self._hero, "orientation", Gtk.Orientation.HORIZONTAL)
+        reduced.add_setter(self, "horizontal-hero", value=True)
         reduced.add_setter(self.gauge, "content-width", 128)
-        reduced.add_setter(self.gauge, "content-height", 100)
-        reduced.add_setter(self.metrics, "min-children-per-line", 3)
-        reduced.add_setter(self.metrics, "max-children-per-line", 3)
+        reduced.add_setter(self, "gauge-height", 100)
+        reduced.add_setter(self, "metric-columns", 3)
         self._adaptive.add_breakpoint(reduced)
 
         portrait = Adw.Breakpoint.new(Adw.BreakpointCondition.parse("max-width: 279px"))
         self._set_small_density(portrait, "mini", 2 / 3)
         portrait.add_setter(self.gauge, "content-width", 107)
-        portrait.add_setter(self.gauge, "content-height", 107)
+        portrait.add_setter(self, "gauge-height", 107)
         self._adaptive.add_breakpoint(portrait)
 
         landscape = Adw.Breakpoint.new(
@@ -350,14 +358,12 @@ class SessionView(Gtk.Box):
             ),
         )
         self._set_small_density(landscape, "mini", 2 / 3)
-        landscape.add_setter(self._body, "orientation", Gtk.Orientation.HORIZONTAL)
-        landscape.add_setter(self._body, "homogeneous", value=True)
-        landscape.add_setter(self._guidance, "valign", Gtk.Align.START)
-        landscape.add_setter(self._hero, "orientation", Gtk.Orientation.HORIZONTAL)
+        landscape.add_setter(self, "landscape", value=True)
+        landscape.add_setter(self, "stacked-landscape", value=True)
+        landscape.add_setter(self, "horizontal-hero", value=True)
         landscape.add_setter(self.gauge, "content-width", 73)
-        landscape.add_setter(self.gauge, "content-height", 53)
-        landscape.add_setter(self.metrics, "min-children-per-line", 3)
-        landscape.add_setter(self.metrics, "max-children-per-line", 3)
+        landscape.add_setter(self, "gauge-height", 53)
+        landscape.add_setter(self, "metric-columns", 3)
         landscape.add_setter(self.title_label, "visible", value=False)
         landscape.add_setter(self.lbl_next, "visible", value=False)
         landscape.add_setter(self._body, "css-classes", compact_classes)
@@ -365,24 +371,26 @@ class SessionView(Gtk.Box):
 
     def _build_roomy_breakpoint(self) -> None:
         """Give the whole dashboard the readable density of a 2x session."""
-        roomy = Adw.Breakpoint.new(
-            Adw.BreakpointCondition.parse(
-                "min-width: 900px and min-height: 700px and max-aspect-ratio: 13/10",
-            ),
-        )
-        roomy.add_setter(self._hero, "orientation", Gtk.Orientation.HORIZONTAL)
+        condition = "min-width: 900px and min-height: 700px and max-aspect-ratio: 13/10"
+        roomy = Adw.Breakpoint.new(Adw.BreakpointCondition.parse(condition))
+        roomy.add_setter(self, "horizontal-hero", value=True)
         roomy.add_setter(self.gauge, "content-width", 320)
-        roomy.add_setter(self.gauge, "content-height", 250)
+        roomy.add_setter(self, "gauge-height", 250)
         roomy.add_setter(self.gauge, "label-scale", 2.0)
         roomy.add_setter(self.gauge, "size-scale", 1.0)
-        roomy.add_setter(self.metrics, "min-children-per-line", 3)
-        roomy.add_setter(self.metrics, "max-children-per-line", 3)
-        roomy.add_setter(self.metrics, "vexpand", value=True)
+        roomy.add_setter(self, "metric-columns", 3)
+        roomy.add_setter(self, "metric-fill", value=True)
         shell = self._adaptive.get_child()
         roomy.add_setter(shell, "css-classes", GObject.Value(GObject.TYPE_STRV, ["roomy"]))
         for side in ("top", "bottom", "start", "end"):
             roomy.add_setter(shell, f"margin-{side}", 16)
-        for widget in (shell, self._body, self._readings, self._controls, self._workout_navigation):
+        for widget in (
+            shell,
+            self._body,
+            self._readings,
+            self._controls,
+            self._workout_navigation,
+        ):
             roomy.add_setter(widget, "spacing", 16)
         roomy.add_setter(self._controls.get_last_child(), "spacing", 16)
         roomy.add_setter(self._hero, "spacing", 12)
@@ -393,7 +401,11 @@ class SessionView(Gtk.Box):
         roomy.add_setter(self.metrics, "row-spacing", 8)
         roomy.add_setter(self.live_chart.canvas, "height-request", 320)
         if self.capabilities.incline or self.capabilities.trainer_targets:
-            roomy.add_setter(self._adjustments_expander.get_label_widget(), "height-request", 96)
+            roomy.add_setter(
+                self._adjustments_expander.get_label_widget(),
+                "height-request",
+                96,
+            )
             roomy.add_setter(self._adjustments_slot, "margin-bottom", 16)
         for button in (self.btn_prev, self.btn_next):
             roomy.add_setter(button, "width-request", 96)
@@ -402,6 +414,7 @@ class SessionView(Gtk.Box):
     def _on_layout_changed(self, *_args: object) -> None:
         """Keep the chart below portrait metrics and cancel a pending stop."""
         self._cancel_stop_hold()
+        self._apply_base_layout()
         shell = self._adaptive.get_child()
         scale = next(
             (
@@ -428,10 +441,29 @@ class SessionView(Gtk.Box):
         if parent is not destination:
             parent.remove(self._live_chart_frame)
             destination.append(self._live_chart_frame)
-        if density_changed and self.capabilities.trainer_targets:
+        if density_changed and (self.capabilities.trainer_targets or self.capabilities.incline):
             self._on_adjustments_font_changed()
         else:
             self._queue_adjustments_layout()
+
+    def _apply_base_layout(self) -> None:
+        """Apply the breakpoint preference before measuring the available space."""
+        self._set_quadrants(active=False)
+        landscape = self.landscape
+        self._body.set_orientation(
+            Gtk.Orientation.HORIZONTAL if landscape else Gtk.Orientation.VERTICAL,
+        )
+        self._body.set_homogeneous(landscape and not self._workout_visible)
+        self._set_trainer_rail(active=False)
+        self.metrics.set_min_children_per_line(self.metric_columns)
+        self.metrics.set_max_children_per_line(self.metric_columns)
+        self._hero.set_orientation(
+            Gtk.Orientation.HORIZONTAL
+            if self.horizontal_hero and not (self.stacked_landscape and self._workout_visible)
+            else Gtk.Orientation.VERTICAL,
+        )
+        self.gauge.set_content_height(self.gauge_height)
+        self._guidance.set_valign(Gtk.Align.START if landscape else Gtk.Align.FILL)
 
     def _build_workout_navigation(
         self,
@@ -486,6 +518,7 @@ class SessionView(Gtk.Box):
         self._hero.set_vexpand(True)
         self.workout_panel.append(self._hero)
         target_display = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        self._target_display = target_display
         target_display.set_hexpand(True)
         self._hero.append(target_display)
         self._step_details = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
@@ -597,6 +630,8 @@ class SessionView(Gtk.Box):
     ) -> None:
         """Build capability-dependent incline and trainer controls."""
         self._adjustments_inline = False
+        self._trainer_rail = False
+        self._quadrants_active = False
         self._layout_density = 1.0
         self._adjustments_layout_source_id: int | None = None
         adjustments = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
@@ -650,34 +685,34 @@ class SessionView(Gtk.Box):
             self._adjustments_slot.set_margin_bottom(8)
             self._adjustments_slot.append(expander)
             self._readings.append(self._adjustments_slot)
-            if self.capabilities.trainer_targets:
-                for adjustment in (
-                    self._scroller.get_hadjustment(),
-                    self._scroller.get_vadjustment(),
-                ):
-                    adjustment.connect("changed", self._queue_adjustments_layout)
-                self.connect("map", self._on_adjustments_font_changed)
-                self.connect("unmap", self._cancel_adjustments_layout)
-                settings = self.get_settings()
-                for setting in ("gtk-xft-dpi", "gtk-font-name"):
-                    settings.connect_object(
-                        f"notify::{setting}",
-                        SessionView._on_adjustments_font_changed,
-                        self,
-                    )
+        for adjustment in (
+            self._scroller.get_hadjustment(),
+            self._scroller.get_vadjustment(),
+        ):
+            adjustment.connect("changed", self._queue_adjustments_layout)
+        self.connect("map", self._on_adjustments_font_changed)
+        self.connect("unmap", self._cancel_adjustments_layout)
+        settings = self.get_settings()
+        for setting in ("gtk-xft-dpi", "gtk-font-name"):
+            settings.connect_object(
+                f"notify::{setting}",
+                SessionView._on_adjustments_font_changed,
+                self,
+            )
 
     def _on_adjustments_font_changed(self, *_args: object) -> None:
         """Refresh hidden GTK font metrics before deciding whether controls fit."""
         if self.get_mapped():
             # A collapsed expander does not refresh its children's text metrics.
             # Map the same controls for one allocation, then measure the new font.
-            self._set_adjustments_inline(inline=True)
+            if self.capabilities.trainer_targets or self.capabilities.incline:
+                self._set_adjustments_inline(inline=True)
             self._cancel_adjustments_layout()
             self._adjustments_layout_source_id = GLib.timeout_add(50, self._sync_adjustments_layout)
 
     def _queue_adjustments_layout(self, *_args: object) -> None:
         """Reconsider direct trainer access after allocation, without frame polling."""
-        if self.capabilities.trainer_targets and self._adjustments_layout_source_id is None:
+        if self.get_mapped() and self._adjustments_layout_source_id is None:
             self._adjustments_layout_source_id = GLib.idle_add(self._sync_adjustments_layout)
 
     def _cancel_adjustments_layout(self, *_args: object) -> None:
@@ -691,28 +726,275 @@ class SessionView(Gtk.Box):
         self._adjustments_layout_source_id = None
         if not self.get_mapped():
             return GLib.SOURCE_REMOVE
-        width = self._readings.get_width()
+        if self._try_quadrant_workout():
+            return GLib.SOURCE_REMOVE
+        if self._quadrants_active:
+            self._apply_base_layout()
+        if self.stacked_landscape and self._workout_visible:
+            self._fit_landscape_workout()
+        if not self.capabilities.trainer_targets:
+            if self.capabilities.incline:
+                self._set_adjustments_inline(inline=False)
+            return GLib.SOURCE_REMOVE
+        if not self._trainer_rail:
+            self._set_adjustments_inline(inline=self._adjustments_fit())
+        return GLib.SOURCE_REMOVE
+
+    def _adjustments_fit(self) -> bool:
+        """Measure direct controls without displacing guidance or live readings."""
+        width = max(
+            self._readings.get_width(),
+            self._readings.measure(Gtk.Orientation.HORIZONTAL, -1)[0],
+        )
         minimum_width = self._adjustments_content.measure(Gtk.Orientation.HORIZONTAL, -1)[0]
         if width < minimum_width:
-            inline = False
-        else:
-            readings_height = self._adjustments_content.measure(Gtk.Orientation.VERTICAL, width)[1]
-            readings_height += self._adjustments_slot.get_margin_bottom()
-            for child in self._readings:
-                if child is not self._adjustments_slot and child.get_visible():
-                    readings_height += child.measure(Gtk.Orientation.VERTICAL, width)[1]
-                    readings_height += self._readings.get_spacing()
-            guidance_height = self._guidance.measure(
-                Gtk.Orientation.VERTICAL,
+            return False
+        readings_height = self._adjustments_content.measure(Gtk.Orientation.VERTICAL, width)[1]
+        readings_height += self._adjustments_slot.get_margin_bottom()
+        for child in self._readings:
+            if child is not self._adjustments_slot and child.get_visible():
+                readings_height += child.measure(Gtk.Orientation.VERTICAL, width)[1]
+                readings_height += self._readings.get_spacing()
+        guidance_height = self._guidance.measure(
+            Gtk.Orientation.VERTICAL,
+            max(
                 self._guidance.get_width(),
-            )[1]
-            if self._body.get_orientation() is Gtk.Orientation.HORIZONTAL:
-                required_height = max(guidance_height, readings_height)
+                self._guidance.measure(Gtk.Orientation.HORIZONTAL, -1)[0],
+            ),
+        )[1]
+        if self._body.get_orientation() is Gtk.Orientation.HORIZONTAL:
+            required_height = max(guidance_height, readings_height)
+        else:
+            required_height = guidance_height + self._body.get_spacing() + readings_height
+        return required_height + _INLINE_ADJUSTMENTS_CLEARANCE <= self._scroller.get_height()
+
+    def _set_quadrants(self, *, active: bool) -> None:
+        """Align two guidance cells above metrics and the existing adjustment panel."""
+        if active != self._quadrants_active:
+            self._cancel_stop_hold()
+        self._quadrants_active = active
+        self._hero.set_homogeneous(active)
+        self._readings.set_homogeneous(active)
+        self._readings.set_orientation(
+            Gtk.Orientation.HORIZONTAL if active else Gtk.Orientation.VERTICAL,
+        )
+        if active:
+            self._readings.set_vexpand(True)
+        else:
+            self._readings.set_vexpand_set(False)
+        control = self.trainer_target_control or self.incline_control
+        if control is not None:
+            control.set_vexpand(active)
+            control.get_child().set_valign(Gtk.Align.CENTER if active else Gtk.Align.FILL)
+        if not active and self.incline_control is not None and self._adjustments_inline:
+            self._set_adjustments_inline(inline=False)
+
+    def _try_quadrant_workout(self) -> bool:
+        """Use four cells on near-square displays only when their contents fit."""
+        if not self._workout_visible or not (
+            self.capabilities.trainer_targets or self.capabilities.incline
+        ):
+            return False
+        aspect = self._adaptive.get_width() / max(1, self._adaptive.get_height())
+        if not _QUADRANT_ASPECT_MIN <= aspect <= _QUADRANT_ASPECT_MAX:
+            return False
+        width, height = self._dashboard_size()
+        column = (width - max(self._hero.get_spacing(), self._readings.get_spacing())) // 2
+        minimum = max(
+            self._metric_column_width(2),
+            self._adjustments_content.measure(Gtk.Orientation.HORIZONTAL, -1)[0],
+            self._step_details.measure(Gtk.Orientation.HORIZONTAL, -1)[0],
+            self._target_display.measure(Gtk.Orientation.HORIZONTAL, -1)[0],
+        )
+        if column < minimum:
+            return False
+        gauge_height = max(self.gauge_height, round(64 * self._layout_density))
+        top_height = max(
+            gauge_height + self.gauge.get_margin_top() + 2,
+            self._step_details.measure(Gtk.Orientation.VERTICAL, column)[1],
+        )
+        if self.title_label.get_visible():
+            top_height += self.title_label.measure(Gtk.Orientation.VERTICAL, width)[1]
+            top_height += self.workout_panel.get_spacing()
+        controls_height = self._adjustments_content.measure(Gtk.Orientation.VERTICAL, column)[1]
+        controls_height += self._adjustments_slot.get_margin_bottom()
+        bottom_height = max(self._metric_grid_height(2, column), controls_height)
+        required = top_height + self._body.get_spacing() + bottom_height
+        if required + _INLINE_ADJUSTMENTS_CLEARANCE > height:
+            return False
+        self._set_trainer_rail(active=False)
+        self._set_quadrants(active=True)
+        self._set_adjustments_inline(inline=True)
+        self._body.set_orientation(Gtk.Orientation.VERTICAL)
+        self._body.set_homogeneous(False)
+        self._hero.set_orientation(Gtk.Orientation.HORIZONTAL)
+        self._guidance.set_valign(Gtk.Align.FILL)
+        self.metrics.set_min_children_per_line(2)
+        self.metrics.set_max_children_per_line(2)
+        self.metrics.set_vexpand(True)
+        self.gauge.set_content_height(gauge_height)
+        return True
+
+    def _set_trainer_rail(self, *, active: bool) -> None:
+        """Reparent the existing controls without emitting a trainer callback."""
+        if self.trainer_target_control is not None:
+            destination = self._side_controls if active else self._readings
+            parent = self._adjustments_slot.get_parent()
+            if parent is not destination:
+                self._cancel_stop_hold()
+                parent.remove(self._adjustments_slot)
+                destination.append(self._adjustments_slot)
+        self._trainer_rail = active
+        self._side_controls.set_visible(active)
+        if not active:
+            for column in (self._guidance, self._readings, self._side_controls):
+                column.set_size_request(-1, -1)
+            self.metrics.set_vexpand(self.metric_fill)
+
+    def _metric_column_width(self, columns: int) -> int:
+        """Keep numeric readings readable before giving space to another column."""
+        widths = []
+        for child in self.metrics:
+            tile = child.get_child()
+            inner = tile.get_child()
+            minimum = child.measure(Gtk.Orientation.HORIZONTAL, -1)[0]
+            padding = minimum - tile.measure(Gtk.Orientation.HORIZONTAL, -1)[0]
+            sample = tile.value.get_layout().copy()
+            sample.set_text("00:00", -1)
+            value_width = max(
+                tile.value.measure(Gtk.Orientation.HORIZONTAL, -1)[1],
+                sample.get_pixel_size()[0],
+            )
+            value_width += inner.get_margin_start() + inner.get_margin_end() + padding + 2
+            widths.append(max(minimum, value_width))
+        child_width = max(widths)
+        return columns * child_width + (columns - 1) * self.metrics.get_column_spacing()
+
+    def _dashboard_size(self) -> tuple[int, int]:
+        """Use the bin's allocation so a large child cannot inflate the fit budget."""
+        shell = self._adaptive.get_child()
+        width = self._adaptive.get_width() - shell.get_margin_start() - shell.get_margin_end()
+        height = self._adaptive.get_height() - shell.get_margin_top() - shell.get_margin_bottom()
+        height -= self._footer.get_height() + shell.get_spacing()
+        return max(1, width), max(1, height)
+
+    def _metric_grid_height(self, columns: int, width: int) -> int:
+        tile_width = max(1, (width - (columns - 1) * self.metrics.get_column_spacing()) // columns)
+        children = list(self.metrics)
+        tile_height = max(
+            child.measure(Gtk.Orientation.VERTICAL, tile_width)[1] for child in children
+        )
+        rows = (len(children) + columns - 1) // columns
+        return rows * tile_height + (rows - 1) * self.metrics.get_row_spacing()
+
+    def _stacked_gauge_height(self, width: int, height: int) -> int | None:
+        """Reserve readable timing/instructions before using spare height for the gauge."""
+        details = self._step_details.measure(Gtk.Orientation.VERTICAL, max(1, width))[1]
+        overhead = details + self._hero.get_spacing() + self.gauge.get_margin_top()
+        overhead += (
+            self.gauge.measure(Gtk.Orientation.VERTICAL, width)[1] - self.gauge.get_content_height()
+        )
+        if self.title_label.get_visible():
+            overhead += self.title_label.measure(Gtk.Orientation.VERTICAL, width)[1]
+            overhead += self.workout_panel.get_spacing()
+        available = height - overhead - _INLINE_ADJUSTMENTS_CLEARANCE
+        if available < round(64 * self._layout_density):
+            return None
+        preferred = max(self.gauge_height, round(110 * self._layout_density))
+        return min(preferred, available)
+
+    def _landscape_column_widths(self) -> tuple[int, int, int] | None:
+        """Budget minimum widths, prioritising mode wrapping over equal columns."""
+        guide = max(
+            self._step_details.measure(Gtk.Orientation.HORIZONTAL, -1)[0],
+            self._target_display.measure(Gtk.Orientation.HORIZONTAL, -1)[0],
+            round(200 * self._layout_density),
+        )
+        metrics = self._metric_column_width(2)
+        controls = self._adjustments_content.measure(Gtk.Orientation.HORIZONTAL, -1)[0]
+        viewport_width = self._dashboard_size()[0]
+        spare = viewport_width - 2 * self._body.get_spacing() - guide - metrics - controls
+        if spare < 0:
+            return None
+        mode_space = max(0, self.trainer_target_control.compact_width - controls)
+        if mode_space <= spare:
+            controls += mode_space
+        return guide, metrics, controls
+
+    def _try_trainer_rail(self) -> bool:
+        """Use a right column only when guidance, metrics and full controls all fit."""
+        if self.trainer_target_control is None:
+            return False
+        widths = self._landscape_column_widths()
+        if widths is None:
+            return False
+        spare = self._dashboard_size()[0] - 2 * self._body.get_spacing() - sum(widths)
+        share = spare // 3
+        guide, metrics, controls = (width + share for width in widths)
+        height = self._dashboard_size()[1]
+        gauge_height = self._stacked_gauge_height(guide, height)
+        controls_height = self._adjustments_content.measure(Gtk.Orientation.VERTICAL, controls)[1]
+        controls_height += self._adjustments_slot.get_margin_bottom()
+        if (
+            gauge_height is None
+            or controls_height + _INLINE_ADJUSTMENTS_CLEARANCE > height
+            or self._metric_grid_height(2, metrics) > height
+        ):
+            return False
+        self._set_trainer_rail(active=True)
+        self._set_adjustments_inline(inline=True)
+        for widget, width in zip(
+            (self._guidance, self._readings, self._side_controls),
+            widths,
+            strict=True,
+        ):
+            widget.set_size_request(width, -1)
+        self.metrics.set_min_children_per_line(2)
+        self.metrics.set_max_children_per_line(2)
+        self.metrics.set_vexpand(True)
+        self._hero.set_orientation(Gtk.Orientation.VERTICAL)
+        self._guidance.set_valign(Gtk.Align.FILL)
+        self.gauge.set_content_height(gauge_height)
+        return True
+
+    def _fit_landscape_workout(self) -> None:
+        """Stack guidance where it fits and retain two columns when a rail cannot fit."""
+        if self._try_trainer_rail():
+            return
+        self._set_trainer_rail(active=False)
+        self.metrics.set_min_children_per_line(self.metric_columns)
+        self.metrics.set_max_children_per_line(self.metric_columns)
+        available = self._dashboard_size()[0] - self._body.get_spacing()
+        readings = self._metric_column_width(self.metric_columns)
+        guide_minimum = max(
+            self._step_details.measure(Gtk.Orientation.HORIZONTAL, -1)[0],
+            self._target_display.measure(Gtk.Orientation.HORIZONTAL, -1)[0],
+        )
+        guide = guide_minimum + max(0, available - readings - guide_minimum) // 2
+        gauge_height = self._stacked_gauge_height(guide, self._dashboard_size()[1])
+        if gauge_height is None:
+            horizontal = (
+                self.gauge.get_content_width()
+                + self._step_details.measure(
+                    Gtk.Orientation.HORIZONTAL,
+                    -1,
+                )[0]
+                + self._hero.get_spacing()
+            )
+            if horizontal + readings <= available:
+                guide_minimum = max(guide_minimum, horizontal)
+                self._hero.set_orientation(Gtk.Orientation.HORIZONTAL)
+                self._guidance.set_valign(Gtk.Align.START)
+                self.gauge.set_content_height(self.gauge_height)
             else:
-                required_height = guidance_height + self._body.get_spacing() + readings_height
-            inline = required_height + _INLINE_ADJUSTMENTS_CLEARANCE <= self._scroller.get_height()
-        self._set_adjustments_inline(inline=inline)
-        return GLib.SOURCE_REMOVE
+                self._hero.set_orientation(Gtk.Orientation.VERTICAL)
+                self.gauge.set_content_height(round(64 * self._layout_density))
+        else:
+            self._hero.set_orientation(Gtk.Orientation.VERTICAL)
+            self._guidance.set_valign(Gtk.Align.FILL)
+            self.gauge.set_content_height(gauge_height)
+        self._guidance.set_size_request(guide_minimum, -1)
+        self._readings.set_size_request(readings, -1)
 
     def _set_adjustments_inline(self, *, inline: bool) -> None:
         """Move the existing controls without changing the selected trainer target."""
@@ -978,7 +1260,7 @@ class SessionView(Gtk.Box):
             self.btn_start.set_label("Start")
         else:
             self.btn_start.set_label("▶️  Start")
-        self._queue_adjustments_layout()
+        self._on_layout_changed()
 
     def set_title(self, title: str) -> None:
         """Update the workout title shown in the guidance panel."""

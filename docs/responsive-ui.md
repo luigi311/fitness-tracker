@@ -9,12 +9,13 @@ applies, so each layout specifies all of its deviations from the default.
 | Available session area | Presentation |
 | --- | --- |
 | Narrow portrait | Gauge above step details; two metric columns |
-| At least 480sp wide, near-square | Gauge beside step details; three metric columns |
+| At least 480sp wide, near-square portrait | Gauge beside step details; three metric columns |
 | 350–599 logical pixels wide and at most 560sp high | Compact gauge beside step details; three metric columns; title and next-step preview yield space |
 | At least 350 logical pixels wide, below 480sp wide and at most 600sp high, or at most 400sp high | The same compact layout covers intermediate text scales and rotated near-square displays |
 | Below 350 logical pixels wide and at most 560sp high | Compact hero, stacked timers, and two metric columns |
-| At least 600sp wide and aspect ratio at least 1.3 | Guidance beside metrics; two metric columns |
-| At least 700 logical pixels / 420sp wide, at most 440sp high, aspect ratio at least 1.6 | Guidance beside a compact three-column metric grid, including at enlarged text sizes |
+| Near-square workout with trainer or incline controls, when contents fit | Four quadrants: gauge and timers above metrics and controls |
+| At least 600sp wide and aspect ratio at least 1.3 | Gauge beside timers in the guidance panel; metrics and controls in the other panel |
+| At least 700 logical pixels / 420sp wide, at most 440sp high, aspect ratio at least 1.6 | Phone landscape stacks the gauge above timers; trainer controls use a right column when they fit |
 | At least 900×700 logical pixels, aspect ratio at most 1.3 | Double-size text and controls throughout the session, with the dashboard filling the available height |
 | 420–519 logical pixels wide and 300–560px high | A consistent 80% density for near-square high-scale allocations, with three metric columns |
 | Below 280 logical pixels wide | A consistent two-thirds density with the portrait hierarchy and two metric columns |
@@ -52,6 +53,20 @@ Workouts show Elapsed, Remaining, and Step (for example, `5/15`) together.
 The counter follows the executable step sequence through preview, automatic
 progression, and previous/next navigation. When width is limited, the two time
 values stack beside the step counter. Free sessions hide the workout readouts.
+Phone landscape workouts place the gauge above those readouts when their measured
+height fits. Trainer sessions add a right-hand control column when guidance,
+two metric columns, and the full controls fit together at the current density.
+Otherwise, controls stay below the right-hand metrics, with a disclosure only
+when needed. Column budgets preserve complete numeric readings. Very short
+allocations can retain the horizontal gauge/readout arrangement or scroll.
+Near-square allocations instead use four quadrants in both orientations: gauge
+at the top left, timing and step guidance at the top right, live metrics at the
+bottom left, and trainer or incline controls at the bottom right. The metric grid
+has two columns, and controls remain directly available. The layout measures text,
+touch controls, and row heights before enabling the quadrants; enlarged text or
+limited space restores the compact layout and disclosure. Comet at 1×, 2×, and
+2.5× retains its established text and touch density. Wider desktop and tablet
+workouts keep the earlier side-by-side gauge and timer arrangement.
 
 The gauge shows the current reading against the target band without a separate
 target-status row. Its complete painted bounds, including labels and needle,
@@ -75,7 +90,7 @@ the target, all metrics, and the full adjustment panel. On smaller allocations o
 with larger text, they use a disclosure row showing the current mode/value.
 Its touch size follows the session density.
 The same control widgets and selected bias survive this change without sending
-trainer commands. Incline adjustments retain their disclosure row. Disclosures
+trainer commands. Outside the quadrants, incline adjustments retain their disclosure row. Disclosures
 have space above the recording footer and scroll controls into view when expanded.
 Workout charts retain their previous visibility
 policy; free sessions place the chart after portrait metrics and beside landscape
@@ -102,6 +117,8 @@ The native tests cover portrait and landscape, reduced shell height, Comet sizes
 at 1×/2×/3×, free sessions, workouts, trainer and incline controls, outdoor sessions,
 larger text, rotation without state changes, stop-hold cancellation, drawn gauge
 text clearance, stop-fill centering, and direct trainer access when space allows.
+Landscape and near-square checks also verify quadrant placement, complete metric
+values, and workout/free transitions while the trainer widgets and selected bias persist.
 They also compare the physical text and recording-control sizes of the Comet's
 1× and 2× layouts and check chart label bounds at both densities.
 High-scale coverage includes Comet at 2.5× and Librem 5 at 3×, their physical text

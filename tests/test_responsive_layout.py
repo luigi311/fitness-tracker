@@ -191,6 +191,9 @@ def show_view(view, width, height, *, production_shell=False):
         window.set_child(toolbar)
     window.present()
     settle()
+    if isinstance(view, SessionView):
+        # Mapping refreshes hidden fonts before the measured layout is applied.
+        settle()
     return window
 
 
@@ -696,13 +699,13 @@ def test_expanded_controls_keep_recording_actions_visible(app_stub, width, heigh
         (1024, 768, True),
         (768, 1024, True),
         (360, 720, False),
-        (720, 360, False),
+        (720, 360, True),
         (1080, 1240, True),
         (1240, 1080, True),
         (540, 620, True),
-        (620, 540, False),
+        (620, 540, True),
         (432, 496, True),
-        (496, 432, False),
+        (496, 432, True),
     ],
 )
 def test_trainer_controls_are_directly_accessible_when_dashboard_fits(
@@ -749,11 +752,18 @@ def test_trainer_controls_preserve_bias_and_step_during_reflow(app_stub):
         callbacks.target.assert_called_once_with(TrainerMode.BIAS, 5.0)
         summary = control.summary
         callbacks.reset_mock()
-        allocations = ((620, 540, False), (1080, 1240, True), (540, 620, True))
-        for width, height, inline in allocations * 3:
+        allocations = (
+            (720, 360, True, True),
+            (720, 310, False, False),
+            (620, 540, True, False),
+            (1240, 1080, True, False),
+            (540, 620, True, False),
+        )
+        for width, height, inline, rail in allocations * 3:
             window.set_default_size(width, height)
             settle()
             assert view._adjustments_inline is inline
+            assert view._trainer_rail is rail
             assert view.trainer_target_control is control
             assert control.summary == summary
             assert view.timer_remaining.value.get_text() == "04:18"
@@ -763,6 +773,143 @@ def test_trainer_controls_preserve_bias_and_step_during_reflow(app_stub):
             assert not callbacks.mock_calls
     finally:
         window.destroy()
+        settle()
+
+
+@pytest.mark.parametrize(
+    ("width", "height", "rail"),
+    [
+        (720, 360, True),
+        (480, 240, True),
+        (720, 310, False),
+    ],
+)
+def test_phone_landscape_stacks_guidance_and_keeps_trainer_controls_on_the_right(
+    app_stub,
+    width,
+    height,
+    rail,
+):
+    view, callbacks = make_session(app_stub, "trainer")
+    window = show_view(view, width, height, production_shell=True)
+    try:
+        assert window.get_width() == width
+        assert window.get_height() == height
+        assert view._trainer_rail is rail
+        _, gauge = view.gauge.compute_bounds(view._body)
+        _, timers = view._timers.compute_bounds(view._body)
+        _, controls = view._adjustments_slot.compute_bounds(view._body)
+        _, metrics = view.metrics.compute_bounds(view._body)
+        assert gauge.get_y() + gauge.get_height() <= timers.get_y()
+        assert gauge.get_x() + gauge.get_width() <= metrics.get_x()
+        assert controls.get_x() >= metrics.get_x()
+        if rail:
+            assert metrics.get_x() + metrics.get_width() <= controls.get_x()
+        assert_inside(view.metrics, view._scroller)
+        assert_inside(view.gauge, view._scroller)
+        assert_inside(view._timers, view._scroller)
+        assert_inside(view._adjustments_slot, view._scroller)
+        for tile in view._status_tiles:
+            assert not tile.value.get_layout().is_ellipsized()
+        if view._adjustments_inline:
+            for button in view.trainer_target_control.touch_buttons:
+                assert_inside(button, view._scroller)
+        for button in (view.btn_start, view.btn_stop):
+            assert_inside(button, window)
+        assert not callbacks.mock_calls
+        save_screenshot(window, f"landscape-trainer-{width}x{height}")
+    finally:
+        window.destroy()
+        settle()
+
+
+@pytest.mark.parametrize("kind", ["trainer", "incline"])
+@pytest.mark.parametrize(
+    ("width", "height"),
+    [(540, 620), (620, 540), (432, 496), (496, 432), (1080, 1240), (1240, 1080)],
+)
+def test_comet_workouts_use_four_visible_quadrants(app_stub, width, height, kind):
+    view, callbacks = make_session(app_stub, kind)
+    window = show_view(view, width, height, production_shell=True)
+    try:
+        assert window.get_width() == width
+        assert window.get_height() == height
+        assert view._quadrants_active
+        assert view._adjustments_inline
+        _, gauge = view.gauge.compute_bounds(view._body)
+        _, details = view._step_details.compute_bounds(view._body)
+        _, metrics = view.metrics.compute_bounds(view._body)
+        _, controls = view._adjustments_slot.compute_bounds(view._body)
+        assert gauge.get_x() + gauge.get_width() <= details.get_x()
+        assert metrics.get_x() + metrics.get_width() <= controls.get_x()
+        assert gauge.get_y() + gauge.get_height() <= metrics.get_y()
+        assert details.get_y() + details.get_height() <= controls.get_y()
+        for widget in (view.gauge, view._step_details, view.metrics, view._adjustments_slot):
+            assert_inside(widget, view._scroller)
+        for tile in view._status_tiles:
+            assert not tile.value.get_layout().is_ellipsized()
+            assert_inside(tile.value, view._scroller)
+            assert_inside(tile.dot, view._scroller)
+        control = view.trainer_target_control or view.incline_control
+        for button in control.touch_buttons:
+            assert_inside(button, view._scroller)
+        assert view.step_position.value.get_text() == "5/15"
+        assert_inside(view.btn_stop, window)
+        assert_inside(view.btn_start, window)
+        assert not callbacks.mock_calls
+        save_screenshot(window, f"quadrants-{kind}-{width}x{height}")
+    finally:
+        window.destroy()
+        settle()
+
+
+@pytest.mark.parametrize(("width", "height"), [(1600, 900), (1280, 800), (1024, 768)])
+def test_wide_workouts_keep_gauge_and_timers_side_by_side(app_stub, width, height):
+    view, callbacks = make_session(app_stub, "trainer")
+    window = show_view(view, width, height, production_shell=True)
+    try:
+        _, gauge = view.gauge.compute_bounds(view._body)
+        _, timers = view._timers.compute_bounds(view._body)
+        assert gauge.get_x() + gauge.get_width() <= timers.get_x()
+        assert not view._quadrants_active
+        assert not view._trainer_rail
+        assert_inside(view.gauge, view._scroller)
+        assert_inside(view.metrics, view._scroller)
+        assert_inside(view.btn_stop, window)
+        assert_inside(view.btn_start, window)
+        assert not callbacks.mock_calls
+    finally:
+        window.destroy()
+        settle()
+
+
+@pytest.mark.parametrize(("width", "height"), [(620, 540), (496, 432), (1240, 1080)])
+def test_landscape_workout_to_free_transition_restores_the_chart_layout(app_stub, width, height):
+    settings = Gtk.Settings.get_default()
+    animations = settings.get_property("gtk-enable-animations")
+    settings.props.gtk_enable_animations = False
+    view, callbacks = make_session(app_stub, "trainer")
+    window = show_view(view, width, height, production_shell=True)
+    control = view.trainer_target_control
+    try:
+        for workout in (False, True, False, True):
+            view.set_workout_visible(visible=workout)
+            settle()
+            assert view.trainer_target_control is control
+            assert view._state is SessionState.RUNNING
+            assert view.step_position.value.get_text() == "5/15"
+            assert view._live_chart_frame.get_mapped() is not workout
+            assert view.gauge.get_mapped() is workout
+            assert_inside(view.metrics, view._scroller)
+            assert_inside(view.btn_start, window)
+            assert_inside(view.btn_stop, window)
+            if not workout:
+                assert not view._side_controls.get_visible()
+                assert view._body.get_orientation() is Gtk.Orientation.VERTICAL
+            assert not callbacks.mock_calls
+    finally:
+        window.destroy()
+        settings.set_property("gtk-enable-animations", animations)
         settle()
 
 

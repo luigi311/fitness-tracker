@@ -147,6 +147,22 @@ class TrainerTargetControl(Gtk.Frame):
         """Return the controls whose touch targets follow the session density."""
         return self._btn_down, self._btn_up, *self._mode_buttons.values()
 
+    @property
+    def compact_width(self) -> int:
+        """Suggest enough width for two mode buttons without changing their state."""
+        buttons = [button for button in self._mode_buttons.values() if button.get_visible()]
+        minimum = self.measure(Gtk.Orientation.HORIZONTAL, -1)[0]
+        if not buttons:
+            return minimum
+        row = buttons[0].get_parent().get_parent()
+        mode_width = max(
+            button.get_parent().measure(Gtk.Orientation.HORIZONTAL, -1)[0] for button in buttons
+        )
+        outer = self.get_child()
+        overhead = outer.get_margin_start() + outer.get_margin_end() + 2
+        mode_width = min(2, len(buttons)) * mode_width + row.get_column_spacing() + overhead
+        return max(minimum, mode_width)
+
     def _validate_modes(self, available_modes: tuple[TrainerMode, ...]) -> None:
         """Reject shared trainer modes that have no UI control configuration."""
         if not available_modes:
