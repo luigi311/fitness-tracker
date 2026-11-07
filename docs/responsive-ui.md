@@ -55,18 +55,20 @@ every arrangement, reclaiming its height without depending on display zoom.
 
 The same widgets remain alive during zoom, resize, and rotation. Reflow does not
 restart recording, reset step timers, change trainer targets, or invoke controls.
-Trainer bias and selected modes survive movement between panels. Trainer modes and
-adjustments remain directly available in every arrangement. Mode choices use up to
-three columns in portrait and two in other arrangements; enlarged text can use
+Trainer bias and selected modes survive movement between panels. Trainer modes,
+trainer adjustments, and incline controls remain directly available in every
+arrangement. Mode choices use up to three columns in portrait and two in other
+arrangements; enlarged text can use
 fewer columns inside the same panel. Compact mode-button padding, portrait
 metric-tile margins, and vertical gaps retain two
-metric columns, all six readings, and the full trainer panel. Portrait shows
+metric columns, all six readings, and the full equipment panel. Portrait shows
 source indicators and Live/Dead text beside each number. Square and landscape
-layouts keep that information underneath the value. Filled green Live markers
+layouts keep that information underneath the value. All sessions order metrics as
+Pace, Heart Rate, Distance, Cadence, Speed, and Power. Filled green Live markers
 mean connected; hollow Dead markers mean disconnected, with full connection details
 in tooltips and accessible labels. Numeric text sizes and 48-unit touch heights
-are retained. Portrait incline sessions keep a disclosure showing the current
-value. Enlarged text can scroll those same panels.
+are retained. Incline and trainer sessions use the same compact portrait spacing
+without a disclosure row. Enlarged text can scroll those same panels.
 
 Workouts show Elapsed, Remaining, and Step (for example `5/15`). The counter follows
 the executable step sequence through preview, automatic progression, and previous

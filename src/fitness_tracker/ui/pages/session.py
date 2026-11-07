@@ -12,7 +12,6 @@ from fitness_tracker.core.guidance import TargetDomain, format_target_deviation
 from fitness_tracker.core.layout import LayoutFamily
 from fitness_tracker.core.sensor_status import SensorKind, SensorStatus
 from fitness_tracker.core.session_state import SessionState
-from fitness_tracker.core.sports import SportTypesEnum
 from fitness_tracker.core.trainer_mode import TrainerMode, trainer_modes_for_session
 from fitness_tracker.core.units import (
     UnitSystem,
@@ -40,6 +39,7 @@ if TYPE_CHECKING:
     from fitness_tracker.core.guidance import StepGuidance
     from fitness_tracker.core.live_metrics import LiveMetrics
     from fitness_tracker.core.session_capabilities import SessionCapabilities
+    from fitness_tracker.core.sports import SportTypesEnum
     from fitness_tracker.ui.app import FitnessAppUI
 
 
@@ -53,6 +53,7 @@ _SESSION_CSS = b"""
 .session-view .compact-metrics .metric-value { font-size: 1.5em; }
 .session-view .compact-metrics .metric-status { font-size: 0.75em; }
 .session-view .compact-metrics flowboxchild { padding: 2px; }
+.session-view.portrait-equipment flowboxchild { padding: 1px 4px; }
 .session-view .session-footer { min-height: 104px; }
 .session-view .session-footer.horizontal { min-height: 48px; }
 .session-view .trainer-mode { padding: 0 4px; }
@@ -197,21 +198,21 @@ class SessionView(Gtk.Box):
         portrait = self.layout_family is LayoutFamily.PORTRAIT
         square = self.layout_family is LayoutFamily.SQUARE
         self.landscape = self.layout_family is LayoutFamily.LANDSCAPE
-        portrait_trainer = portrait and self.trainer_target_control is not None
+        equipment = self.trainer_target_control is not None or self.incline_control is not None
+        portrait_equipment = portrait and equipment
         if self.trainer_target_control is not None:
             self.trainer_target_control.set_mode_columns(3 if portrait else 2)
-        if portrait_trainer:
-            self.add_css_class("portrait-trainer")
+        if portrait_equipment:
+            self.add_css_class("portrait-equipment")
         else:
-            self.remove_css_class("portrait-trainer")
-        equipment = self.trainer_target_control is not None or self.incline_control is not None
+            self.remove_css_class("portrait-equipment")
         self._set_quadrants(active=square and self._workout_visible and equipment)
         self._set_trainer_rail(active=self.landscape and equipment)
         self._body.set_orientation(
             Gtk.Orientation.HORIZONTAL if self.landscape else Gtk.Orientation.VERTICAL,
         )
         self._body.set_homogeneous(False)
-        self._body.set_spacing(4 if portrait_trainer else 8)
+        self._body.set_spacing(4 if portrait_equipment else 8)
         self._hero.set_orientation(
             Gtk.Orientation.HORIZONTAL if square else Gtk.Orientation.VERTICAL,
         )
@@ -222,7 +223,7 @@ class SessionView(Gtk.Box):
         self.metric_columns = 3 if square and not equipment else 2
         self.metrics.set_min_children_per_line(self.metric_columns)
         self.metrics.set_max_children_per_line(self.metric_columns)
-        self.metrics.set_row_spacing(2 if portrait_trainer else 4)
+        self.metrics.set_row_spacing(2 if portrait_equipment else 4)
         self.metrics.set_vexpand(not portrait)
         self._readings.set_vexpand(not portrait)
         self._controls.set_orientation(
@@ -243,11 +244,11 @@ class SessionView(Gtk.Box):
         self._body.set_css_classes(["compact-metrics"] if self.landscape else [])
         for tile in self._status_tiles:
             tile.set_status_inline(inline=portrait)
-            tile.get_child().set_margin_top(2 if self.landscape or portrait_trainer else 4)
-            tile.get_child().set_margin_bottom(2 if self.landscape or portrait_trainer else 4)
+            tile.get_child().set_margin_top(2 if self.landscape or portrait_equipment else 4)
+            tile.get_child().set_margin_bottom(2 if self.landscape or portrait_equipment else 4)
         if equipment:
-            self._set_adjustments_inline(inline=not portrait or portrait_trainer)
-        self._readings.set_spacing(4 if portrait_trainer else 8)
+            self._set_adjustments_inline(inline=True)
+        self._readings.set_spacing(4 if portrait_equipment else 8)
 
     def _build_workout_navigation(
         self,
@@ -386,23 +387,12 @@ class SessionView(Gtk.Box):
             self.card_power,
         )
         tiles = (
-            (
-                self.card_pace,
-                self.card_hr,
-                self.card_distance,
-                self.card_cadence,
-                self.card_speed,
-                self.card_power,
-            )
-            if self.sport_type is SportTypesEnum.running
-            else (
-                self.card_power,
-                self.card_speed,
-                self.card_hr,
-                self.card_cadence,
-                self.card_distance,
-                self.card_pace,
-            )
+            self.card_pace,
+            self.card_hr,
+            self.card_distance,
+            self.card_cadence,
+            self.card_speed,
+            self.card_power,
         )
         for tile in tiles:
             metrics.insert(tile, -1)

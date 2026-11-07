@@ -246,7 +246,7 @@ def assert_fixed_placement(view):
         assert view._body.get_orientation() is Gtk.Orientation.VERTICAL
         assert view._hero.get_orientation() is Gtk.Orientation.VERTICAL
         assert not view._trainer_rail
-        assert view._adjustments_inline is (view.trainer_target_control is not None)
+        assert view._adjustments_inline is equipment
     elif view.layout_family is LayoutFamily.LANDSCAPE:
         assert view._body.get_orientation() is Gtk.Orientation.HORIZONTAL
         assert view._hero.get_orientation() is Gtk.Orientation.VERTICAL
@@ -448,12 +448,13 @@ def test_enlarged_text_keeps_actions_visible(app_stub, width, height, text_scale
         settle()
 
 
-@pytest.mark.parametrize("kind", ["trainer", "free"])
+@pytest.mark.parametrize("kind", ["trainer", "incline", "free"])
 def test_rotation_preserves_session_state_and_cancels_stop_hold(app_stub, kind):
     """Cancel pending stops on rotation while retaining session widgets and state."""
     view, callbacks = make_session(app_stub, kind)
     window = show_view(view, 360, 720, production_shell=True)
-    timer, gauge, control = view.timer_remaining, view.gauge, view.trainer_target_control
+    timer, gauge = view.timer_remaining, view.gauge
+    control = view.trainer_target_control or view.incline_control
     try:
         for width, height in (
             (720, 360),
@@ -475,7 +476,7 @@ def test_rotation_preserves_session_state_and_cancels_stop_hold(app_stub, kind):
             assert view._stop_hold_started_at is None
             assert view.timer_remaining is timer
             assert view.gauge is gauge
-            assert view.trainer_target_control is control
+            assert (view.trainer_target_control or view.incline_control) is control
             assert timer.value.get_text() == "04:18"
             assert view._state is SessionState.RUNNING
             assert view._profile_ready
@@ -1096,11 +1097,12 @@ def test_trainer_controls_preserve_bias_and_step_during_reflow(app_stub):
     ("width", "height"),
     [(720, 1440), (626, 1252), (360, 720), (288, 576), (240, 480), (360, 610)],
 )
-def test_portrait_trainer_shows_bias_and_all_readings(app_stub, width, height):
-    """Keep trainer controls open, metrics compact, and step navigation in the footer."""
-    view, callbacks = make_session(app_stub, "trainer")
+@pytest.mark.parametrize("kind", ["trainer", "incline"])
+def test_portrait_equipment_shows_controls_and_all_readings(app_stub, width, height, kind):
+    """Keep equipment controls open, metrics compact, and step navigation in the footer."""
+    view, callbacks = make_session(app_stub, kind)
     window = show_view(view, width, height, production_shell=True)
-    control = view.trainer_target_control
+    control = view.trainer_target_control or view.incline_control
     try:
         assert view._adjustments_inline
         assert not view._adjustments_expander.get_mapped()
@@ -1140,21 +1142,53 @@ def test_portrait_trainer_shows_bias_and_all_readings(app_stub, width, height):
             assert tile.value.measure(Gtk.Orientation.HORIZONTAL, -1)[1] <= tile.value.get_width()
         assert not callbacks.mock_calls
         control._btn_up.emit("clicked")
-        callbacks.target.assert_called_once_with(TrainerMode.BIAS, 5.0)
+        if kind == "trainer":
+            callbacks.target.assert_called_once_with(TrainerMode.BIAS, 5.0)
+        else:
+            callbacks.incline.assert_called_once_with(1.0)
         view.btn_next.emit("clicked")
         callbacks.next.assert_called_once_with()
         view.btn_prev.emit("clicked")
         callbacks.previous.assert_called_once_with()
-        for mode in (TrainerMode.POWER, TrainerMode.RESISTANCE, TrainerMode.BIAS):
-            control._mode_buttons[mode].emit("clicked")
-            settle()
-            assert_inside(control, view._scroller)
-            for button in control._mode_buttons.values():
-                assert button.has_css_class("trainer-mode")
-                assert_inside(button, view._scroller)
-        save_screenshot(window, f"portrait-trainer-inline-{width}x{height}")
+        if kind == "trainer":
+            for mode in (TrainerMode.POWER, TrainerMode.RESISTANCE, TrainerMode.BIAS):
+                control._mode_buttons[mode].emit("clicked")
+                settle()
+                assert_inside(control, view._scroller)
+                for button in control._mode_buttons.values():
+                    assert button.has_css_class("trainer-mode")
+                    assert_inside(button, view._scroller)
+        save_screenshot(window, f"portrait-{kind}-inline-{width}x{height}")
     finally:
         window.destroy()
+        settle()
+
+
+@pytest.mark.parametrize("kind", ["trainer", "incline"])
+@pytest.mark.parametrize("font_name", ["Sans 11", "Adwaita Sans 11"])
+def test_oneplus_six_portrait_avoids_scroll_with_eleven_point_font(app_stub, kind, font_name):
+    """Fit the OnePlus 6 preview's content area with a standard larger system font."""
+    settings = Gtk.Settings.get_default()
+    original_font = settings.get_property("gtk-font-name")
+    view, callbacks = make_session(app_stub, kind)
+    # The 360x760 preset reserves 32px above and 18px below the application.
+    window = show_view(view, 360, 710, production_shell=True)
+    try:
+        settings.set_property("gtk-font-name", font_name)
+        settle()
+        settle()
+        adjustment = view._scroller.get_vadjustment()
+        assert adjustment.get_upper() <= adjustment.get_page_size()
+        control = view.trainer_target_control or view.incline_control
+        for widget in (view.gauge, view._step_details, view.metrics, control):
+            assert_inside(widget, view._scroller)
+        for button in (view.btn_prev, view.btn_next, view.btn_stop, view.btn_start):
+            assert_inside(button, window)
+        assert not callbacks.mock_calls
+        save_screenshot(window, f"oneplus-six-portrait-{kind}")
+    finally:
+        window.destroy()
+        settings.set_property("gtk-font-name", original_font)
         settle()
 
 
@@ -1328,7 +1362,7 @@ def test_large_portrait_sessions_stack_the_sections(app_stub, width, height, kin
         if view.capabilities.incline or view.capabilities.trainer_targets:
             _, controls = view._adjustments_slot.compute_bounds(view._body)
             assert metrics.get_y() + metrics.get_height() <= controls.get_y()
-            assert view._adjustments_inline is (kind == "trainer")
+            assert view._adjustments_inline
             assert_inside(view._adjustments_slot, view._scroller)
         for tile in view._status_tiles:
             assert_inside(tile.value, view._scroller)
