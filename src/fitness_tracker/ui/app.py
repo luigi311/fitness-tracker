@@ -40,7 +40,7 @@ from gi.repository import Adw, Gdk, Gio, GLib, GObject, Gtk  # noqa: E402  # ty:
 
 _NAVIGATION_CSS = b"""
 .roomy-navigation { font-size: 2em; }
-.roomy-navigation viewswitcher box.narrow { font-size: 0.75em; }
+.roomy-navigation viewswitcher box.narrow { font-size: 1em; }
 .roomy-navigation button { min-height: 80px; }
 .roomy-navigation image { -gtk-icon-size: 32px; }
 .reduced-navigation { font-size: 0.8em; }
@@ -830,15 +830,19 @@ class FitnessAppUI(Adw.Application):
             "emblem-system-symbolic",
         )
 
-        header_switcher = Adw.ViewSwitcher()
-        header_switcher.set_stack(self.stack)
-        header_bar.set_title_widget(header_switcher)
-
         switcher_bar = Adw.ViewSwitcherBar()
         switcher_bar.set_stack(self.stack)
         switcher_bar.set_reveal(True)
+        self._navigation_bar = switcher_bar
 
-        toolbar_view.set_content(self.stack)
+        content = Adw.BreakpointBin()
+        content.set_size_request(1, 1)
+        # Page minimums must not push the shared navigation outside the window.
+        content.add_breakpoint(
+            Adw.Breakpoint.new(Adw.BreakpointCondition.parse("min-width: 0px")),
+        )
+        content.set_child(self.stack)
+        toolbar_view.set_content(content)
         toolbar_view.add_bottom_bar(switcher_bar)
         self._build_shell_breakpoints(header_bar, switcher_bar)
 
@@ -847,11 +851,14 @@ class FitnessAppUI(Adw.Application):
         header_bar: "Adw.HeaderBar",
         switcher_bar: "Adw.ViewSwitcherBar",
     ) -> None:
-        """Choose one navigation bar and enlarge it on large near-square windows."""
+        """Keep navigation at the bottom and scale it with the session density."""
+        header_bar.set_title_widget(None)
+        self.header_revealer.set_visible(False)
+        switcher_bar.set_reveal(True)
         cond = Adw.BreakpointCondition.parse("min-width: 700sp and min-height: 560sp")
         bp = Adw.Breakpoint.new(cond)
         bp.add_setter(self.header_revealer, "reveal-child", value=True)
-        bp.add_setter(switcher_bar, "reveal", value=False)
+        bp.add_setter(self.header_revealer, "visible", value=True)
         self.window.add_breakpoint(bp)
         roomy = Adw.Breakpoint.new(
             Adw.BreakpointCondition.parse(
@@ -859,9 +866,9 @@ class FitnessAppUI(Adw.Application):
             ),
         )
         roomy.add_setter(self.header_revealer, "reveal-child", value=True)
-        roomy.add_setter(switcher_bar, "reveal", value=False)
+        roomy.add_setter(self.header_revealer, "visible", value=True)
         roomy.add_setter(
-            header_bar,
+            switcher_bar,
             "css-classes",
             GObject.Value(GObject.TYPE_STRV, ["roomy-navigation"]),
         )
@@ -882,6 +889,7 @@ class FitnessAppUI(Adw.Application):
         ):
             compact = Adw.Breakpoint.new(Adw.BreakpointCondition.parse(condition))
             compact.add_setter(self.header_revealer, "reveal-child", value=False)
+            compact.add_setter(self.header_revealer, "visible", value=False)
             compact.add_setter(switcher_bar, "reveal", value=True)
             compact.add_setter(
                 switcher_bar,

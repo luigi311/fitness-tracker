@@ -14,9 +14,11 @@ applies, so each layout specifies all of its deviations from the default.
 | At least 350 logical pixels wide, below 480sp wide and at most 600sp high, or at most 400sp high | The same compact layout covers intermediate text scales and rotated near-square displays |
 | Below 350 logical pixels wide and at most 560sp high | Compact hero, stacked timers, and two metric columns |
 | Near-square workout with trainer or incline controls, when contents fit | Four quadrants: gauge and timers above metrics and controls |
+| Large portrait windows, at least 720px wide and aspect below 0.8 | Gauge, timing, live metrics, and controls stack vertically |
+| Large landscape windows, at least 720×480px | Four workout quadrants when controls fit; guidance above metrics without controls |
 | At least 600sp wide and aspect ratio at least 1.3 | Gauge beside timers in the guidance panel; metrics and controls in the other panel |
 | At least 700 logical pixels / 420sp wide, at most 440sp high, aspect ratio at least 1.6 | Phone landscape stacks the gauge above timers; trainer controls use a right column when they fit |
-| At least 900×700 logical pixels, aspect ratio at most 1.3 | Double-size text and controls throughout the session, with the dashboard filling the available height |
+| At least 900×800 logical pixels, session aspect ratio at most 1.5 | Double-size text and controls throughout the session, with the dashboard filling the available height |
 | 420–519 logical pixels wide and 300–560px high | A consistent 80% density for near-square high-scale allocations, with three metric columns |
 | Below 280 logical pixels wide | A consistent two-thirds density with the portrait hierarchy and two metric columns |
 | 400–599px wide, at most 280px high, aspect ratio at least 1.6 | The same two-thirds density with guidance beside three metric columns |
@@ -65,8 +67,9 @@ bottom left, and trainer or incline controls at the bottom right. The metric gri
 has two columns, and controls remain directly available. The layout measures text,
 touch controls, and row heights before enabling the quadrants; enlarged text or
 limited space restores the compact layout and disclosure. Comet at 1×, 2×, and
-2.5× retains its established text and touch density. Wider desktop and tablet
-workouts keep the earlier side-by-side gauge and timer arrangement.
+2.5× retains its established text and touch density. Desktop and tablet portrait
+windows stack the sections vertically, with a bounded gauge height to leave space
+for metrics and controls. Their landscape workouts use the same four quadrants.
 
 The gauge shows the current reading against the target band without a separate
 target-status row. Its complete painted bounds, including labels and needle,
@@ -90,14 +93,16 @@ the target, all metrics, and the full adjustment panel. On smaller allocations o
 with larger text, they use a disclosure row showing the current mode/value.
 Its touch size follows the session density.
 The same control widgets and selected bias survive this change without sending
-trainer commands. Outside the quadrants, incline adjustments retain their disclosure row. Disclosures
+trainer commands. Incline controls remain directly available in the quadrants and
+large portrait layouts when they fit; compact layouts retain their disclosure. Disclosures
 have space above the recording footer and scroll controls into view when expanded.
 Workout charts retain their previous visibility
 policy; free sessions place the chart after portrait metrics and beside landscape
 metrics. Chart margins update on resize, keeping layout work out of each live redraw.
-Larger windows use header navigation
-instead of displaying both navigation bars. Short landscape windows keep the
-compact bottom navigation. Activity setup also uses side-by-side panes in wide
+Tracker, History, and Settings always appear in the bottom navigation, including
+large windows. The header contains only the window title and window controls.
+Navigation follows the session's density at Comet and Librem scaling levels.
+Activity setup also uses side-by-side panes in wide
 or short landscape windows, with keyboard-accessible environment toggles.
 Smaller vertical gaps and card padding leave more room for the workout list.
 Environment cards retain the original house, tree and lightning emoji icons.

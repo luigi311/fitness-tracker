@@ -238,10 +238,18 @@ def save_screenshot(window, name):
         return
     destination = Path(directory)
     destination.mkdir(parents=True, exist_ok=True)
-    snapshot = Gtk.Snapshot()
-    Gtk.WidgetPaintable.new(window).snapshot(snapshot, window.get_width(), window.get_height())
+    node = None
+    for _ in range(5):
+        snapshot = Gtk.Snapshot()
+        Gtk.WidgetPaintable.new(window).snapshot(snapshot, window.get_width(), window.get_height())
+        node = snapshot.to_node()
+        if node is not None:
+            break
+        window.queue_draw()
+        settle()
+    assert node is not None, "Window did not produce a painted frame"
     bounds = Graphene.Rect().init(0, 0, window.get_width(), window.get_height())
-    texture = window.get_renderer().render_texture(snapshot.to_node(), bounds)
+    texture = window.get_renderer().render_texture(node, bounds)
     assert texture.save_to_png(str(destination / f"{name}.png"))
 
 
@@ -326,6 +334,10 @@ def test_rotation_preserves_session_state_and_cancels_stop_hold(app_stub, kind):
             (496, 432),
             (240, 480),
             (480, 240),
+            (800, 1280),
+            (1280, 800),
+            (900, 1600),
+            (1600, 900),
             (360, 720),
         ):
             view._begin_stop_hold()
@@ -549,11 +561,17 @@ def test_full_application_shell_fits_short_landscape(app_stub, monkeypatch, tmp_
             assert_inside(view.btn_stop, app.window)
             assert_inside(view.btn_start, app.window)
             assert_inside(view.metrics, view._scroller)
-            header = app.header_revealer.get_child()
-            if header.has_css_class("roomy-navigation"):
+            navigation = app._navigation_bar
+            assert navigation.get_reveal()
+            assert_inside(navigation, app.window)
+            assert app.header_revealer.get_child().get_title_widget() is None
+            _, actions = view._controls.compute_bounds(app.window)
+            _, nav_bounds = navigation.compute_bounds(app.window)
+            assert actions.get_y() + actions.get_height() <= nav_bounds.get_y()
+            if navigation.has_css_class("roomy-navigation"):
                 labels = [
                     label
-                    for label in descendant_labels(header)
+                    for label in descendant_labels(navigation)
                     if label.get_mapped() and label.get_text() in {"Tracker", "History", "Settings"}
                 ]
                 assert {label.get_text() for label in labels} == {"Tracker", "History", "Settings"}
@@ -599,6 +617,43 @@ def shell_app(app_stub, monkeypatch, tmp_path):
         GLib.source_remove(app.tracker._status_timer_id)
         settings.set_property("gtk-enable-animations", animations)
         settle()
+
+
+@pytest.mark.parametrize("page", ["tracker", "history", "settings"])
+def test_application_navigation_stays_at_the_bottom_on_every_page(shell_app, page):
+    shell_app.stack.set_visible_child_name(page)
+    navigation = shell_app._navigation_bar
+    for width, height in (
+        (240, 480),
+        (480, 240),
+        (360, 720),
+        (720, 360),
+        (540, 620),
+        (620, 540),
+        (1080, 1240),
+        (1240, 1080),
+        (800, 1280),
+        (1280, 800),
+        (900, 1600),
+        (1600, 900),
+    ):
+        shell_app.window.set_default_size(width, height)
+        settle()
+        assert shell_app.window.get_surface().get_width() == width
+        assert shell_app.window.get_surface().get_height() == height
+        assert navigation.get_reveal()
+        assert_inside(navigation, shell_app.window)
+        assert shell_app.header_revealer.get_child().get_title_widget() is None
+        _, bounds = navigation.compute_bounds(shell_app.window)
+        assert bounds.get_y() > shell_app.window.get_height() / 2
+        labels = [
+            label
+            for label in descendant_labels(navigation)
+            if label.get_mapped() and label.get_text() in {"Tracker", "History", "Settings"}
+        ]
+        assert {label.get_text() for label in labels} == {"Tracker", "History", "Settings"}
+        for label in labels:
+            assert_inside(label, shell_app.window)
 
 
 def test_real_application_setup_fits_librem_three_x(shell_app):
@@ -863,21 +918,69 @@ def test_comet_workouts_use_four_visible_quadrants(app_stub, width, height, kind
         settle()
 
 
+@pytest.mark.parametrize("kind", ["trainer", "incline"])
 @pytest.mark.parametrize(("width", "height"), [(1600, 900), (1280, 800), (1024, 768)])
-def test_wide_workouts_keep_gauge_and_timers_side_by_side(app_stub, width, height):
-    view, callbacks = make_session(app_stub, "trainer")
+def test_large_landscape_workouts_use_four_quadrants(app_stub, width, height, kind):
+    view, callbacks = make_session(app_stub, kind)
     window = show_view(view, width, height, production_shell=True)
     try:
         _, gauge = view.gauge.compute_bounds(view._body)
         _, timers = view._timers.compute_bounds(view._body)
         assert gauge.get_x() + gauge.get_width() <= timers.get_x()
-        assert not view._quadrants_active
+        assert view._quadrants_active
         assert not view._trainer_rail
         assert_inside(view.gauge, view._scroller)
         assert_inside(view.metrics, view._scroller)
         assert_inside(view.btn_stop, window)
         assert_inside(view.btn_start, window)
+        _, metrics = view.metrics.compute_bounds(view._body)
+        _, controls = view._adjustments_slot.compute_bounds(view._body)
+        assert gauge.get_y() + gauge.get_height() <= metrics.get_y()
+        assert metrics.get_x() + metrics.get_width() <= controls.get_x()
+        assert_inside(view._adjustments_slot, view._scroller)
         assert not callbacks.mock_calls
+        save_screenshot(window, f"large-landscape-{kind}-{width}x{height}")
+    finally:
+        window.destroy()
+        settle()
+
+
+@pytest.mark.parametrize("kind", ["workout", "trainer", "incline", "free"])
+@pytest.mark.parametrize(("width", "height"), [(800, 1280), (768, 1024), (900, 1600)])
+def test_large_portrait_sessions_stack_the_sections(app_stub, width, height, kind):
+    view, callbacks = make_session(app_stub, kind)
+    window = show_view(view, width, height, production_shell=True)
+    try:
+        assert view._large_layout is Gtk.Orientation.VERTICAL
+        assert not view._quadrants_active
+        assert view._body.get_orientation() is Gtk.Orientation.VERTICAL
+        _, metrics = view.metrics.compute_bounds(view._body)
+        if kind == "free":
+            assert_inside(view.timer, view._scroller)
+            _, timer = view.timer.compute_bounds(view._body)
+            assert timer.get_y() + timer.get_height() <= metrics.get_y()
+            _, chart = view._live_chart_frame.compute_bounds(view._body)
+            assert metrics.get_y() + metrics.get_height() <= chart.get_y()
+        else:
+            _, gauge = view.gauge.compute_bounds(view._body)
+            _, details = view._step_details.compute_bounds(view._body)
+            assert gauge.get_y() + gauge.get_height() <= details.get_y()
+            assert details.get_y() + details.get_height() <= metrics.get_y()
+            assert view.gauge.get_height() < view._scroller.get_height() / 2
+            assert_inside(view.gauge, view._scroller)
+            assert_inside(view._step_details, view._scroller)
+        if view.capabilities.incline or view.capabilities.trainer_targets:
+            _, controls = view._adjustments_slot.compute_bounds(view._body)
+            assert metrics.get_y() + metrics.get_height() <= controls.get_y()
+            assert view._adjustments_inline
+            assert_inside(view._adjustments_slot, view._scroller)
+        for tile in view._status_tiles:
+            assert_inside(tile.value, view._scroller)
+            assert_inside(tile.dot, view._scroller)
+        assert_inside(view.btn_stop, window)
+        assert_inside(view.btn_start, window)
+        assert not callbacks.mock_calls
+        save_screenshot(window, f"large-portrait-{kind}-{width}x{height}")
     finally:
         window.destroy()
         settle()
@@ -1075,7 +1178,7 @@ def test_high_scale_large_text_keeps_actions_and_scrolling_usable(
 @pytest.mark.parametrize(("width", "height"), [(540, 620), (620, 540)])
 def test_comet_one_x_matches_two_x_text_readability(app_stub, width, height):
     view, callbacks = make_session(app_stub, "trainer")
-    window = show_view(view, width, height)
+    window = show_view(view, width, height, production_shell=True)
     control = view.trainer_target_control
     labels = (
         view.title_label,

@@ -47,6 +47,9 @@ _STOP_HOLD_TICK_MS = 32
 _INLINE_ADJUSTMENTS_CLEARANCE = 8
 _QUADRANT_ASPECT_MIN = 0.75
 _QUADRANT_ASPECT_MAX = 1.35
+_LARGE_LAYOUT_MIN_WIDTH = 720
+_LARGE_LANDSCAPE_MIN_HEIGHT = 480
+_LARGE_PORTRAIT_ASPECT_MAX = 0.8
 _SESSION_CSS = b"""
 .session-view .session-actions button { min-height: 48px; padding: 0 10px; }
 .session-view .metric-value { font-size: 1.8em; font-weight: 700; }
@@ -371,7 +374,9 @@ class SessionView(Gtk.Box):
 
     def _build_roomy_breakpoint(self) -> None:
         """Give the whole dashboard the readable density of a 2x session."""
-        condition = "min-width: 900px and min-height: 700px and max-aspect-ratio: 13/10"
+        # Include Comet after navigation consumes space, while keeping a
+        # 1024x768 tablet at its normal density even without a title bar.
+        condition = "min-width: 900px and min-height: 800px and max-aspect-ratio: 3/2"
         roomy = Adw.Breakpoint.new(Adw.BreakpointCondition.parse(condition))
         roomy.add_setter(self, "horizontal-hero", value=True)
         roomy.add_setter(self.gauge, "content-width", 320)
@@ -449,7 +454,10 @@ class SessionView(Gtk.Box):
     def _apply_base_layout(self) -> None:
         """Apply the breakpoint preference before measuring the available space."""
         self._set_quadrants(active=False)
-        landscape = self.landscape
+        self._large_layout = self._large_layout_orientation()
+        portrait = self._large_layout is Gtk.Orientation.VERTICAL
+        wide_workout = self._large_layout is Gtk.Orientation.HORIZONTAL and self._workout_visible
+        landscape = self.landscape and not (portrait or wide_workout)
         self._body.set_orientation(
             Gtk.Orientation.HORIZONTAL if landscape else Gtk.Orientation.VERTICAL,
         )
@@ -459,11 +467,40 @@ class SessionView(Gtk.Box):
         self.metrics.set_max_children_per_line(self.metric_columns)
         self._hero.set_orientation(
             Gtk.Orientation.HORIZONTAL
-            if self.horizontal_hero and not (self.stacked_landscape and self._workout_visible)
+            if self.horizontal_hero
+            and not (portrait or (self.stacked_landscape and self._workout_visible))
             else Gtk.Orientation.VERTICAL,
         )
         self.gauge.set_content_height(self.gauge_height)
-        self._guidance.set_valign(Gtk.Align.START if landscape else Gtk.Align.FILL)
+        self._guidance.set_vexpand(self._workout_visible and not portrait)
+        self._guidance.set_valign(
+            Gtk.Align.START if landscape or portrait else Gtk.Align.FILL,
+        )
+        if portrait:
+            self._fit_large_portrait()
+            self.metrics.set_vexpand(True)
+            self._readings.set_vexpand(True)
+
+    def _fit_large_portrait(self) -> None:
+        """Give a stacked gauge space without stretching it down the entire screen."""
+        width, height = self._dashboard_size()
+        self.gauge.set_content_height(
+            max(self.gauge_height, min(round(width * 0.42), round(height * 0.25))),
+        )
+
+    def _large_layout_orientation(self) -> Gtk.Orientation | None:
+        """Use window dimensions so navigation height cannot flip the layout policy."""
+        root = self.get_root()
+        if root is None:
+            return None
+        width, height = root.get_width(), root.get_height()
+        if width < _LARGE_LAYOUT_MIN_WIDTH:
+            return None
+        if width / max(1, height) < _LARGE_PORTRAIT_ASPECT_MAX:
+            return Gtk.Orientation.VERTICAL
+        if width > height >= _LARGE_LANDSCAPE_MIN_HEIGHT:
+            return Gtk.Orientation.HORIZONTAL
+        return None
 
     def _build_workout_navigation(
         self,
@@ -632,6 +669,7 @@ class SessionView(Gtk.Box):
         self._adjustments_inline = False
         self._trainer_rail = False
         self._quadrants_active = False
+        self._large_layout: Gtk.Orientation | None = None
         self._layout_density = 1.0
         self._adjustments_layout_source_id: int | None = None
         adjustments = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
@@ -726,6 +764,11 @@ class SessionView(Gtk.Box):
         self._adjustments_layout_source_id = None
         if not self.get_mapped():
             return GLib.SOURCE_REMOVE
+        if self._large_layout_orientation() is not self._large_layout:
+            self._on_layout_changed()
+            return GLib.SOURCE_REMOVE
+        if self._large_layout is Gtk.Orientation.VERTICAL:
+            self._fit_large_portrait()
         if self._try_quadrant_workout():
             return GLib.SOURCE_REMOVE
         if self._quadrants_active:
@@ -734,7 +777,10 @@ class SessionView(Gtk.Box):
             self._fit_landscape_workout()
         if not self.capabilities.trainer_targets:
             if self.capabilities.incline:
-                self._set_adjustments_inline(inline=False)
+                self._set_adjustments_inline(
+                    inline=self._large_layout is Gtk.Orientation.VERTICAL
+                    and self._adjustments_fit(),
+                )
             return GLib.SOURCE_REMOVE
         if not self._trainer_rail:
             self._set_adjustments_inline(inline=self._adjustments_fit())
@@ -796,7 +842,12 @@ class SessionView(Gtk.Box):
         ):
             return False
         aspect = self._adaptive.get_width() / max(1, self._adaptive.get_height())
-        if not _QUADRANT_ASPECT_MIN <= aspect <= _QUADRANT_ASPECT_MAX:
+        if self._large_layout is Gtk.Orientation.VERTICAL:
+            return False
+        if (
+            not _QUADRANT_ASPECT_MIN <= aspect <= _QUADRANT_ASPECT_MAX
+            and self._large_layout is not Gtk.Orientation.HORIZONTAL
+        ):
             return False
         width, height = self._dashboard_size()
         column = (width - max(self._hero.get_spacing(), self._readings.get_spacing())) // 2
