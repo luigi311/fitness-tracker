@@ -26,6 +26,7 @@ import gi
 import numpy as np
 from fitness_tracker.core.environment import Environment
 from fitness_tracker.core.guidance import PebbleTargetKind, StepGuidance, TargetDomain
+from fitness_tracker.core.layout import LayoutFamily
 from fitness_tracker.core.sensor_status import SensorStatus
 from fitness_tracker.core.session_capabilities import SessionCapabilities
 from fitness_tracker.core.session_state import SessionState
@@ -37,15 +38,17 @@ from fitness_tracker.core.zones import ChartTheme, HeartRateZones
 from fitness_tracker.hardware.recorder import FinalizationClaim, FinalizationStatus
 from fitness_tracker.services.jobs import DuplicateJobError, JobRunnerShutdownError
 
-from gtk_test_helpers import assert_inside, descendant_labels, save_screenshot, settle
+from gtk_test_helpers import assert_inside, descendant_labels, descendants, save_screenshot, settle
 
 gi.require_versions({"Gtk": "4.0", "Adw": "1", "Graphene": "1.0"})
 from fitness_tracker.ui.pages.mode import ModeSelectView
 from fitness_tracker.ui.pages.session import SessionView
 from fitness_tracker.ui.widgets import session_controls as session_controls_module
+from fitness_tracker.ui.widgets.scaled_view import ScaledView
 from gi.repository import Adw, Gio, GLib, Graphene, Gtk  # ty:ignore[unresolved-import]
 
 MIN_TOUCH_HEIGHT = 48
+CHART_REFERENCE_FONT_SIZE = 10
 MIN_COMPACT_WIDTH = 300
 GAUGE_LABEL_COUNT = 2
 MIN_FILL_CONTRAST = 3
@@ -187,6 +190,9 @@ def show_view(view, width, height, *, production_shell=False):
         )
     else:
         window.set_child(toolbar)
+    child = window.get_child()
+    window.set_child(None)
+    window.set_child(ScaledView(child))
     window.present()
     settle()
     if isinstance(view, SessionView):
@@ -215,6 +221,156 @@ def assert_gauge_centered(bounds, width, height):
     assert bottom < height
 
 
+def panel_placement(view):
+    """Capture actual panel parents and orientations across a scale change."""
+    return (
+        view.layout_family,
+        view._body.get_orientation(),
+        view._hero.get_orientation(),
+        view._readings.get_orientation(),
+        view._adjustments_slot.get_parent()
+        if view.capabilities.trainer_targets or view.capabilities.incline
+        else None,
+        view._adjustments_inline,
+        view.metrics.get_max_children_per_line(),
+        view._controls.get_orientation(),
+    )
+
+
+def assert_fixed_placement(view):
+    """Verify fixed positions independently of the interface's physical scale."""
+    equipment = view.capabilities.trainer_targets or view.capabilities.incline
+    if view.layout_family is LayoutFamily.PORTRAIT:
+        assert view._body.get_orientation() is Gtk.Orientation.VERTICAL
+        assert view._hero.get_orientation() is Gtk.Orientation.VERTICAL
+        assert not view._trainer_rail
+        assert not view._adjustments_inline
+    elif view.layout_family is LayoutFamily.LANDSCAPE:
+        assert view._body.get_orientation() is Gtk.Orientation.HORIZONTAL
+        assert view._hero.get_orientation() is Gtk.Orientation.VERTICAL
+        assert view._trainer_rail is equipment
+        if equipment:
+            assert view._adjustments_slot.get_parent() is view._side_controls
+            _, metrics = view.metrics.compute_bounds(view._body)
+            _, controls = view._adjustments_slot.compute_bounds(view._body)
+            assert metrics.get_x() + metrics.get_width() <= controls.get_x()
+    elif equipment and view._workout_visible:
+        assert view._quadrants_active
+        assert view._hero.get_orientation() is Gtk.Orientation.HORIZONTAL
+        assert view._readings.get_orientation() is Gtk.Orientation.HORIZONTAL
+        assert not view._trainer_rail
+
+
+def assert_reachable(widget, scroller):
+    """Scroll enlarged secondary content into view without relocating its panels."""
+    if widget.get_height() > scroller.get_height() or widget.get_width() > scroller.get_width():
+        children = list(widget)
+        if children:
+            for child in children:
+                assert_reachable(child, scroller)
+            return
+    success, bounds = widget.compute_bounds(scroller.get_child())
+    assert success
+    scroller.get_hadjustment().clamp_page(bounds.get_x(), bounds.get_x() + bounds.get_width())
+    scroller.get_vadjustment().clamp_page(bounds.get_y(), bounds.get_y() + bounds.get_height())
+    settle()
+    assert_inside(widget, scroller)
+
+
+@pytest.mark.parametrize("kind", ["trainer", "incline", "free"])
+@pytest.mark.parametrize(
+    ("panel_width", "panel_height"),
+    [(720, 1440), (1440, 720), (1080, 1240), (1240, 1080)],
+)
+def test_zoom_preserves_actual_panel_positions_and_physical_sizes(
+    app_stub,
+    kind,
+    panel_width,
+    panel_height,
+):
+    """Verify real allocations, fonts, targets, and callbacks across fractional zoom."""
+    view, callbacks = make_session(app_stub, kind)
+    window = show_view(view, panel_width, panel_height, production_shell=True)
+    placement = panel_placement(view)
+    widgets = (view.btn_stop, view.btn_start, view.card_power.value, view.card_power.dot)
+    reference_heights = [widget.compute_bounds(window)[1].get_height() for widget in widgets]
+    try:
+        for percent in (100, 115, 125, 150, 175, 200, 250, 300):
+            zoom = percent / 100
+            if zoom != 1:
+                view._begin_stop_hold()
+            window.set_default_size(round(panel_width / zoom), round(panel_height / zoom))
+            settle()
+            assert panel_placement(view) == placement
+            assert_fixed_placement(view)
+            assert view._stop_hold_started_at is None
+            for widget, reference in zip(widgets, reference_heights, strict=True):
+                assert_inside(widget, window)
+                assert widget.compute_bounds(window)[1].get_height() * zoom == pytest.approx(
+                    reference,
+                    abs=2,
+                )
+            for tile in view._status_tiles:
+                assert_inside(tile.value, view._scroller)
+                assert_inside(tile.dot, view._scroller)
+            assert view.timer_remaining.value.get_text() == "04:18"
+            assert view._state is SessionState.RUNNING
+            assert not callbacks.mock_calls
+    finally:
+        window.destroy()
+        settle()
+
+
+def test_native_popup_matches_the_scaled_interface(app_stub):
+    """Scale native popup contents and retain their live selection callbacks."""
+    del app_stub
+    selected = Mock()
+    button = Gtk.MenuButton(label="Options")
+    choice = Gtk.Button(label="Select this option")
+    choice.connect("clicked", selected)
+    popup = Gtk.Popover(child=choice)
+    button.set_popover(popup)
+    window = show_view(button, 360, 720)
+    allocations = ((720, 1440), (313, 626), (360, 720), (240, 480))
+    try:
+        for width, height in allocations:
+            window.set_default_size(width, height)
+            settle()
+            button.popup()
+            settle()
+            scale = window.get_child().layout_frame.scale
+            success, bounds = choice.compute_bounds(popup)
+            assert success
+            allocation = choice.get_allocation()
+            assert bounds.get_width() == pytest.approx(allocation.width * scale, abs=1)
+            assert bounds.get_height() == pytest.approx(allocation.height * scale, abs=1)
+            assert (
+                popup.get_surface().get_width() >= button.compute_bounds(window)[1].get_width() - 1
+            )
+            choice.emit("clicked")
+            popup.popdown()
+            settle()
+        assert selected.call_count == len(allocations)
+    finally:
+        window.destroy()
+        settle()
+
+
+@pytest.mark.parametrize(
+    ("width", "height", "family"),
+    [(800, 1000, LayoutFamily.SQUARE), (1350, 1000, LayoutFamily.SQUARE)],
+)
+def test_first_allocation_obeys_exact_aspect_boundaries(app_stub, width, height, family):
+    """Apply hysteresis only after an actual allocation establishes the layout."""
+    view, _callbacks = make_session(app_stub, "trainer")
+    window = show_view(view, width, height)
+    try:
+        assert view.layout_family is family
+    finally:
+        window.destroy()
+        settle()
+
+
 @pytest.mark.parametrize(("width", "height"), VIEWPORTS)
 @pytest.mark.parametrize("kind", SESSION_KINDS)
 def test_session_allocations(app_stub, width, height, kind):
@@ -232,7 +388,7 @@ def test_session_allocations(app_stub, width, height, kind):
         stop_label = overlay.get_last_child()
         assert_inside(stop_label, overlay)
         assert stop_label.measure(Gtk.Orientation.HORIZONTAL, -1)[1] <= stop_label.get_width()
-        assert view._body.get_width() <= width
+        assert view._body.get_width() <= view._scroller.get_width()
         if kind == "free":
             assert not view.step_position.get_mapped()
         if width >= MIN_COMPACT_WIDTH:
@@ -256,27 +412,24 @@ def test_session_allocations(app_stub, width, height, kind):
     [(360, 648), (360, 720), (720, 310), (540, 620), (620, 540), (708, 617)],
 )
 def test_enlarged_text_keeps_actions_visible(app_stub, width, height, text_scale):
-    """Preserve readable workout content and complete action labels at larger text sizes."""
+    """Keep actions pinned and enlarged content reachable without relocating panels."""
     settings = Gtk.Settings.get_default()
     original = settings.get_property("gtk-xft-dpi")
-    settings.set_property("gtk-xft-dpi", round(96 * text_scale * 1024))
-    view, _callbacks = make_session(app_stub, "trainer")
+    view, callbacks = make_session(app_stub, "trainer")
     window = show_view(view, width, height)
+    placement = panel_placement(view)
     try:
+        settings.set_property("gtk-xft-dpi", round(96 * text_scale * 1024))
+        settle()
+        assert panel_placement(view) == placement
         assert_inside(view.btn_stop, window)
         assert_inside(view.btn_start, window)
-        assert view._body.get_width() <= width
-        assert_inside(view.metrics, view._scroller)
-        assert_inside(view.gauge, view._scroller)
-        assert_inside(view.step_position, view._scroller)
-        assert_inside(view.step_position.value, view._timers)
-        if view._adjustments_inline:
-            assert_inside(view.trainer_target_control._btn_down, view._scroller)
-            assert_inside(view.trainer_target_control._btn_up, view._scroller)
+        assert_reachable(view.metrics, view._scroller)
+        assert_reachable(view.gauge, view._scroller)
+        assert_reachable(view.step_position, view._scroller)
         overlay = view.btn_stop.get_child()
-        stop_label = overlay.get_last_child()
-        assert_inside(stop_label, overlay)
-        assert stop_label.measure(Gtk.Orientation.HORIZONTAL, -1)[1] <= stop_label.get_width()
+        assert_inside(overlay.get_last_child(), overlay)
+        assert not callbacks.mock_calls
         save_screenshot(window, f"text{round(text_scale * 100)}-workout-{width}x{height}")
     finally:
         window.destroy()
@@ -361,8 +514,8 @@ def test_activity_setup_reflows_and_remains_accessible(app_stub, tmp_path, width
     view = ModeSelectView(tmp_path, tmp_path, start_free, Mock(), unit_system=UnitSystem.METRIC)
     window = show_view(view, width, height)
     try:
-        assert view._setup.get_width() <= width
-        assert view._library.get_width() <= width
+        assert view._setup.get_width() <= view.get_width()
+        assert view._library.get_width() <= view.get_width()
         assert_inside(view._btn_start_free, window)
         assert_inside(view._btn_start_free, view)
         assert_inside(view._btn_start_free, view._setup_pane)
@@ -393,7 +546,7 @@ def test_activity_setup_reflows_and_remains_accessible(app_stub, tmp_path, width
 
 @pytest.mark.parametrize(
     ("width", "height", "visible_rows"),
-    [(540, 620, 6), (620, 540, 4), (432, 496, 4), (496, 432, 2)],
+    [(540, 620, 5), (620, 540, 4), (432, 496, 5), (496, 432, 4)],
 )
 def test_comet_setup_leaves_room_for_workouts(app_stub, tmp_path, width, height, visible_rows):
     """Reserve visible workout rows beside usable setup controls on Comet layouts."""
@@ -450,9 +603,12 @@ def test_librem_three_x_setup_keeps_selections_and_starts_visible(
     window = show_view(view, width, height, production_shell=True)
     try:
         assert window.get_width() == width
-        assert view.get_width() <= width
+        assert_inside(view, window)
         setup_scroll = view._setup.get_parent()
-        assert view.has_css_class("mini-setup")
+        assert window.get_child().layout_frame.family in (
+            LayoutFamily.PORTRAIT,
+            LayoutFamily.LANDSCAPE,
+        )
         assert_inside(view._btn_run, setup_scroll)
         assert_inside(view._btn_cycle, setup_scroll)
         view._btn_cycle.set_active(True)
@@ -513,7 +669,7 @@ def test_session_font_handlers_disconnect_and_reconnect_on_remap(app_stub, monke
     view, _callbacks = make_session(app_stub, "trainer")
     assert not view._settings_handler_ids
     window = show_view(view, 432, 496)
-    stack = window.get_child().get_content()
+    stack = window.get_child().get_first_child().get_content()
     watched_settings = ("gtk-xft-dpi", "gtk-font-name")
     try:
         for _ in range(3):
@@ -535,7 +691,7 @@ def test_session_font_handlers_disconnect_and_reconnect_on_remap(app_stub, monke
             settle()
             settle()
             assert updates
-            assert not view._adjustments_inline
+            assert view._adjustments_inline
             for setting in watched_settings:
                 updates.clear()
                 settings.notify(setting)
@@ -580,6 +736,8 @@ def test_full_application_shell_fits_short_landscape(shell_app):
             assert navigation.get_reveal()
             assert_inside(navigation, app.window)
             assert app.header_revealer.get_child().get_title_widget() is None
+            assert not app.header_revealer.get_visible()
+            assert not app.header_revealer.get_child().get_mapped()
             _, actions = view._controls.compute_bounds(app.window)
             _, nav_bounds = navigation.compute_bounds(app.window)
             assert actions.get_y() + actions.get_height() <= nav_bounds.get_y()
@@ -658,6 +816,8 @@ def test_application_navigation_stays_at_the_bottom_on_every_page(shell_app, pag
         assert navigation.get_reveal()
         assert_inside(navigation, shell_app.window)
         assert shell_app.header_revealer.get_child().get_title_widget() is None
+        assert not shell_app.header_revealer.get_visible()
+        assert not shell_app.header_revealer.get_child().get_mapped()
         _, bounds = navigation.compute_bounds(shell_app.window)
         assert bounds.get_y() > shell_app.window.get_height() / 2
         labels = [
@@ -687,7 +847,7 @@ def test_real_application_setup_fits_librem_three_x(shell_app):
         app.window.set_default_size(width, height)
         settle()
         setup_scroll = view._setup.get_parent()
-        assert view.get_width() <= width
+        assert_inside(view, app.window)
         for card in view._env_cards.values():
             assert_inside(card, setup_scroll)
         assert_inside(view._btn_start_free, app.window)
@@ -819,7 +979,7 @@ def test_expanded_controls_keep_recording_actions_visible(app_stub, width, heigh
         assert_inside(view.btn_start, window)
         assert_inside(control._btn_up, view._scroller)
         assert_inside(control._btn_down, view._scroller)
-        assert view._body.get_width() <= width
+        assert view._body.get_width() <= view._scroller.get_width()
         assert not callbacks.mock_calls
         save_screenshot(window, f"expanded-{kind}-{width}x{height}")
     finally:
@@ -831,9 +991,9 @@ def test_expanded_controls_keep_recording_actions_visible(app_stub, width, heigh
     ("width", "height", "inline"),
     [
         (1440, 900, True),
-        (900, 1440, True),
+        (900, 1440, False),
         (1024, 768, True),
-        (768, 1024, True),
+        (768, 1024, False),
         (360, 720, False),
         (720, 360, True),
         (1080, 1240, True),
@@ -892,7 +1052,7 @@ def test_trainer_controls_preserve_bias_and_step_during_reflow(app_stub):
         callbacks.reset_mock()
         allocations = (
             (720, 360, True, True),
-            (720, 310, False, False),
+            (720, 310, True, True),
             (620, 540, True, False),
             (1240, 1080, True, False),
             (540, 620, True, False),
@@ -919,7 +1079,7 @@ def test_trainer_controls_preserve_bias_and_step_during_reflow(app_stub):
     [
         (720, 360, True),
         (480, 240, True),
-        (720, 310, False),
+        (720, 310, True),
     ],
 )
 def test_phone_landscape_stacks_guidance_and_keeps_trainer_controls_on_the_right(
@@ -934,7 +1094,7 @@ def test_phone_landscape_stacks_guidance_and_keeps_trainer_controls_on_the_right
     try:
         assert window.get_width() == width
         assert window.get_height() == height
-        assert view._trainer_rail is rail
+        assert view._trainer_rail
         _, gauge = view.gauge.compute_bounds(view._body)
         _, timers = view._timers.compute_bounds(view._body)
         _, controls = view._adjustments_slot.compute_bounds(view._body)
@@ -1005,25 +1165,17 @@ def test_comet_workouts_use_four_visible_quadrants(app_stub, width, height, kind
 
 @pytest.mark.parametrize("kind", ["trainer", "incline"])
 @pytest.mark.parametrize(("width", "height"), [(1600, 900), (1280, 800), (1024, 768)])
-def test_large_landscape_workouts_use_four_quadrants(app_stub, width, height, kind):
-    """Use four visible workout quadrants on large landscape allocations."""
+def test_large_workouts_use_their_aspect_arrangement(app_stub, width, height, kind):
+    """Use the same aspect-defined placement on a desktop and a handheld window."""
     view, callbacks = make_session(app_stub, kind)
     window = show_view(view, width, height, production_shell=True)
     try:
-        _, gauge = view.gauge.compute_bounds(view._body)
-        _, timers = view._timers.compute_bounds(view._body)
-        assert gauge.get_x() + gauge.get_width() <= timers.get_x()
-        assert view._quadrants_active
-        assert not view._trainer_rail
+        assert_fixed_placement(view)
         assert_inside(view.gauge, view._scroller)
         assert_inside(view.metrics, view._scroller)
+        assert_inside(view._adjustments_slot, view._scroller)
         assert_inside(view.btn_stop, window)
         assert_inside(view.btn_start, window)
-        _, metrics = view.metrics.compute_bounds(view._body)
-        _, controls = view._adjustments_slot.compute_bounds(view._body)
-        assert gauge.get_y() + gauge.get_height() <= metrics.get_y()
-        assert metrics.get_x() + metrics.get_width() <= controls.get_x()
-        assert_inside(view._adjustments_slot, view._scroller)
         assert not callbacks.mock_calls
         save_screenshot(window, f"large-landscape-{kind}-{width}x{height}")
     finally:
@@ -1038,7 +1190,7 @@ def test_large_portrait_sessions_stack_the_sections(app_stub, width, height, kin
     view, callbacks = make_session(app_stub, kind)
     window = show_view(view, width, height, production_shell=True)
     try:
-        assert view._large_layout is Gtk.Orientation.VERTICAL
+        assert view.layout_family is LayoutFamily.PORTRAIT
         assert not view._quadrants_active
         assert view._body.get_orientation() is Gtk.Orientation.VERTICAL
         _, metrics = view.metrics.compute_bounds(view._body)
@@ -1059,7 +1211,7 @@ def test_large_portrait_sessions_stack_the_sections(app_stub, width, height, kin
         if view.capabilities.incline or view.capabilities.trainer_targets:
             _, controls = view._adjustments_slot.compute_bounds(view._body)
             assert metrics.get_y() + metrics.get_height() <= controls.get_y()
-            assert view._adjustments_inline
+            assert not view._adjustments_inline
             assert_inside(view._adjustments_slot, view._scroller)
         for tile in view._status_tiles:
             assert_inside(tile.value, view._scroller)
@@ -1105,19 +1257,19 @@ def test_landscape_workout_to_free_transition_restores_the_chart_layout(app_stub
 
 
 def test_trainer_disclosure_adapts_to_text_size_without_resize(app_stub):
-    """Reconsider inline trainer controls when text size changes at a fixed viewport."""
+    """Keep trainer placement stable while larger text makes content scrollable."""
     settings = Gtk.Settings.get_default()
     original_dpi = settings.get_property("gtk-xft-dpi")
     view, callbacks = make_session(app_stub, "trainer")
     window = show_view(view, 432, 496)
+    placement = panel_placement(view)
     try:
-        assert view._adjustments_inline
-        for text_scale, inline in ((1.5, False), (1.0, True)):
+        for text_scale in (1.5, 1.0):
             settings.set_property("gtk-xft-dpi", round(96 * text_scale * 1024))
             settle()
-            assert view._adjustments_inline is inline
-            assert_inside(view.metrics, view._scroller)
-            assert_inside(view.gauge, view._scroller)
+            assert panel_placement(view) == placement
+            assert view._adjustments_inline
+            assert_reachable(view.trainer_target_control._btn_up, view._scroller)
             assert_inside(view.btn_stop, window)
             assert not callbacks.mock_calls
     finally:
@@ -1159,7 +1311,7 @@ def test_high_scale_devices_keep_the_dashboard_visible(
             assert_inside(view.step_position, view._scroller)
         for button in (view.btn_start, view.btn_stop):
             assert_inside(button, window)
-            assert button.get_height() == pytest.approx(48 * scale, abs=2)
+            assert button.compute_bounds(window)[1].get_height() == pytest.approx(48 * scale, abs=2)
         overlay = view.btn_stop.get_child()
         assert_inside(overlay.get_last_child(), overlay)
         if view.trainer_target_control and view._adjustments_inline:
@@ -1185,7 +1337,7 @@ def test_high_scale_text_matches_the_two_x_reference(
     reference_width,
     reference_height,
 ):
-    """Scale dashboard text against its reference and restore it after reflow."""
+    """Scale actual painted labels uniformly while retaining reference font metrics."""
     view, callbacks = make_session(app_stub, "trainer")
     window = show_view(view, reference_width, reference_height, production_shell=True)
     labels = (
@@ -1201,23 +1353,25 @@ def test_high_scale_text_matches_the_two_x_reference(
         view.btn_stop.get_child().get_last_child(),
     )
     fonts = [label.get_pango_context().get_font_description().get_size() for label in labels]
+    bounds = [label.compute_bounds(window)[1].get_height() for label in labels]
+    placement = panel_placement(view)
     try:
         window.set_default_size(width, height)
         settle()
-        for label, reference in zip(labels, fonts, strict=True):
-            assert label.get_pango_context().get_font_description().get_size() == pytest.approx(
+        assert panel_placement(view) == placement
+        for label, font, reference in zip(labels, fonts, bounds, strict=True):
+            assert label.get_pango_context().get_font_description().get_size() == font
+            assert label.compute_bounds(window)[1].get_height() == pytest.approx(
                 reference * scale,
-                rel=0.01,
+                abs=1,
             )
         assert_inside(view.metrics, view._scroller)
         assert view._state is SessionState.RUNNING
         assert view.timer_remaining.value.get_text() == "04:18"
-        assert not callbacks.mock_calls
         window.set_default_size(reference_width, reference_height)
         settle()
-        for label, reference in zip(labels, fonts, strict=True):
-            assert label.get_pango_context().get_font_description().get_size() == reference
-        assert view.btn_start.get_height() == MIN_TOUCH_HEIGHT
+        for label, reference in zip(labels, bounds, strict=True):
+            assert label.compute_bounds(window)[1].get_height() == pytest.approx(reference, abs=1)
         assert not callbacks.mock_calls
     finally:
         window.destroy()
@@ -1269,55 +1423,44 @@ def test_high_scale_large_text_keeps_actions_and_scrolling_usable(
 
 @pytest.mark.parametrize(("width", "height"), [(540, 620), (620, 540)])
 def test_comet_one_x_matches_two_x_text_readability(app_stub, width, height):
-    """Match Comet text and action sizing across one-times and two-times scaling."""
+    """Match painted text and controls across Comet zoom without changing placement."""
     view, callbacks = make_session(app_stub, "trainer")
     window = show_view(view, width, height, production_shell=True)
-    control = view.trainer_target_control
     labels = (
-        view.title_label,
         view.lbl_target,
-        view.lbl_next,
         view.timer_elapsed.value,
-        view.timer_elapsed.get_child().get_first_child(),
         view.step_position.value,
         view.card_power.label,
         view.card_power.value,
         view.card_power.unit,
         view.card_power.dot,
-        control._lbl_value,
-        control._mode_buttons[TrainerMode.BIAS].get_child(),
+        view.trainer_target_control._lbl_value,
         view.btn_start.get_child(),
         view.btn_stop.get_child().get_last_child(),
     )
-    reference_fonts = [
-        label.get_pango_context().get_font_description().get_size() for label in labels
-    ]
-    reference_button_height = view.btn_start.get_height()
+    heights = [label.compute_bounds(window)[1].get_height() for label in labels]
+    button_height = view.btn_start.compute_bounds(window)[1].get_height()
+    placement = panel_placement(view)
     try:
         window.set_default_size(width * 2, height * 2)
         settle()
-        for label, reference in zip(labels, reference_fonts, strict=True):
-            assert label.get_pango_context().get_font_description().get_size() == pytest.approx(
+        assert panel_placement(view) == placement
+        for label, reference in zip(labels, heights, strict=True):
+            assert label.compute_bounds(window)[1].get_height() == pytest.approx(
                 reference * 2,
-                rel=0.001,
+                abs=1,
             )
-        assert view.btn_start.get_height() == reference_button_height * 2
+        assert view.btn_start.compute_bounds(window)[1].get_height() == pytest.approx(
+            button_height * 2,
+        )
         assert_inside(view.metrics, view._scroller)
         assert_inside(view.gauge, view._scroller)
-        assert_inside(view.btn_stop, window)
-        assert_inside(view.btn_start, window)
-        if view._adjustments_inline:
-            assert_inside(control._btn_down, view._scroller)
-            assert_inside(control._btn_up, view._scroller)
-        assert view.timer_remaining.value.get_text() == "04:18"
         assert not callbacks.mock_calls
         save_screenshot(window, f"readable-trainer-{width * 2}x{height * 2}")
         window.set_default_size(width, height)
         settle()
-        for label, reference in zip(labels, reference_fonts, strict=True):
-            assert label.get_pango_context().get_font_description().get_size() == reference
-        assert view.btn_start.get_height() == reference_button_height
-        assert not callbacks.mock_calls
+        assert panel_placement(view) == placement
+        assert view.btn_start.compute_bounds(window)[1].get_height() == pytest.approx(button_height)
     finally:
         window.destroy()
         settle()
@@ -1344,9 +1487,10 @@ def test_comet_chart_labels_match_dashboard_density(app_stub, width, height, sca
         chart.canvas.draw()
         settle()
         label = chart.hr_axes.xaxis.label
-        assert label.get_fontsize() == 10 * scale
+        assert label.get_fontsize() == CHART_REFERENCE_FONT_SIZE
+        assert chart.canvas.device_pixel_ratio == pytest.approx(scale, rel=0.01)
         for tick in chart.hr_axes.get_xticklabels():
-            assert tick.get_fontsize() == 10 * scale
+            assert tick.get_fontsize() == CHART_REFERENCE_FONT_SIZE
         bounds = label.get_window_extent(chart.canvas.get_renderer())
         assert bounds.x0 >= 0
         assert bounds.y0 >= 0
@@ -1471,24 +1615,23 @@ def test_gauge_text_stays_clear_of_arc_and_other_line(
 
 @pytest.mark.parametrize("available", [True, False])
 @pytest.mark.parametrize(
-    ("width", "height", "compact"),
+    ("width", "height"),
     [
-        (360, 720, True),
-        (720, 360, True),
-        (432, 496, True),
-        (240, 480, True),
-        (1080, 1240, False),
-        (1440, 900, False),
+        (360, 720),
+        (720, 360),
+        (432, 496),
+        (240, 480),
+        (1080, 1240),
+        (1440, 900),
     ],
 )
-def test_gauge_is_smaller_and_centered_in_compact_sessions(
+def test_gauge_is_centered_at_its_reference_size(
     app_stub,
     width,
     height,
-    compact,
     available,
 ):
-    """Shrink compact gauges while preserving centering and large-layout geometry."""
+    """Keep the same centered gauge proportions throughout interface scaling."""
     view, callbacks = make_session(app_stub, "trainer")
     window = show_view(view, width, height, production_shell=True)
     gauge = view.gauge
@@ -1503,11 +1646,8 @@ def test_gauge_is_smaller_and_centered_in_compact_sessions(
         reference = cairo.ImageSurface(cairo.FORMAT_A8, gauge_width, gauge_height)
         gauge._on_draw(gauge, cairo.Context(reference), gauge_width, gauge_height)
         reference_bounds = gauge_ink_bounds(reference, gauge_width, gauge_height)
-        if compact:
-            assert bounds[2] - bounds[0] <= (reference_bounds[2] - reference_bounds[0]) * 0.94
-            assert bounds[3] - bounds[1] < reference_bounds[3] - reference_bounds[1]
-        else:
-            assert bounds == reference_bounds
+        assert bounds[2] - bounds[0] <= (reference_bounds[2] - reference_bounds[0]) * 0.94
+        assert bounds[3] - bounds[1] < reference_bounds[3] - reference_bounds[1]
         assert not callbacks.mock_calls
     finally:
         window.destroy()
@@ -1689,10 +1829,16 @@ def x_pointer():
         x11.XCloseDisplay(display)
 
 
-def test_real_pointer_dragging_off_stop_cancels_until_a_fresh_press(app_stub, x_pointer):
+@pytest.mark.parametrize(("width", "height"), [(240, 480), (360, 720), (720, 1440)])
+def test_real_pointer_dragging_off_stop_cancels_until_a_fresh_press(
+    app_stub,
+    x_pointer,
+    width,
+    height,
+):
     """Cancel a dragged-off stop hold and require a fresh press before stopping."""
     view, callbacks = make_session(app_stub, "workout")
-    window = show_view(view, 360, 720, production_shell=True)
+    window = show_view(view, width, height, production_shell=True)
     try:
         root_x, root_y = x_pointer.origin(window)
         success, bounds = view.btn_stop.compute_bounds(window)
@@ -1720,5 +1866,62 @@ def test_real_pointer_dragging_off_stop_cancels_until_a_fresh_press(app_stub, x_
         callbacks.stop.assert_called_once_with()
     finally:
         x_pointer.button(pressed=False)
+        window.destroy()
+        settle()
+
+
+@pytest.mark.parametrize("kind", ["dropdown", "combo"])
+@pytest.mark.parametrize(("width", "height"), [(240, 480), (720, 1440)])
+def test_real_pointer_scaled_gtk_choices(app_stub, x_pointer, kind, width, height):
+    """Preserve GTK-owned popup structure and native pointer selection at each scale."""
+    del app_stub
+    choices = ["First option", "Second option", "Third option"]
+    if kind == "dropdown":
+        control = Gtk.DropDown.new_from_strings(choices)
+    else:
+        control = Gtk.ComboBoxText()
+        for choice in choices:
+            control.append_text(choice)
+        control.set_active(0)
+    box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+    box.append(control)
+    window = show_view(box, width, height)
+    popups = list(descendants(control, Gtk.Popover))
+    original_children = [popup.get_child() for popup in popups]
+    try:
+        root_x, root_y = x_pointer.origin(window)
+        _, bounds = control.compute_bounds(window)
+        x_pointer.move(
+            root_x + bounds.get_x() + bounds.get_width() / 2,
+            root_y + bounds.get_y() + bounds.get_height() / 2,
+        )
+        x_pointer.button(pressed=True)
+        x_pointer.button(pressed=False)
+        settle()
+        assert [popup.get_child() for popup in popups] == original_children
+        popup = next(popup for popup in popups if popup.get_mapped())
+        popup_x, popup_y = x_pointer.origin(popup)
+        if kind == "dropdown":
+            label = next(
+                label
+                for label in descendant_labels(popup)
+                if label.get_text() == choices[1] and label.get_mapped()
+            )
+            _, bounds = label.compute_bounds(popup)
+            scale = window.get_child().layout_frame.scale
+            assert bounds.get_height() == pytest.approx(label.get_height() * scale, abs=1)
+            x = bounds.get_x() + bounds.get_width() / 2
+            y = bounds.get_y() + bounds.get_height() / 2
+        else:
+            rows = [row for row in descendants(popup, Gtk.CellView) if row.get_mapped()]
+            _, bounds = rows[1].compute_bounds(popup)
+            x = bounds.get_x() + bounds.get_width() / 2
+            y = bounds.get_y() + bounds.get_height() / 2
+        x_pointer.move(popup_x + x, popup_y + y)
+        x_pointer.button(pressed=True)
+        x_pointer.button(pressed=False)
+        settle()
+        assert (control.get_selected() if kind == "dropdown" else control.get_active()) == 1
+    finally:
         window.destroy()
         settle()

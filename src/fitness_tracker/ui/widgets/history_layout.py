@@ -7,6 +7,9 @@ from typing import TYPE_CHECKING, ClassVar
 
 import gi
 
+from fitness_tracker.core.layout import LayoutFamily
+from fitness_tracker.ui.layout import layout_frame, layout_owner
+
 gi.require_versions({"Gtk": "4.0", "Adw": "1"})
 from gi.repository import Adw, Gdk, GLib, GObject, Gtk, Pango  # noqa: E402  # ty:ignore[unresolved-import]
 
@@ -19,21 +22,6 @@ _CSS = b"""
 .history-body .history-summary-value { font-size: 1.35em; font-weight: 700; }
 .history-body .history-sparkline { min-height: 44px; }
 .history-body flowboxchild { padding: 2px; }
-.history-body.roomy { font-size: 2em; }
-.history-body.roomy button, .history-body.roomy dropdown,
-.history-body.roomy checkbutton { min-height: 96px; }
-.history-body.roomy button image { -gtk-icon-size: 32px; }
-.history-body.roomy .history-sparkline { min-height: 88px; }
-.history-body.reduced { font-size: 0.8em; }
-.history-body.reduced button, .history-body.reduced dropdown,
-.history-body.reduced checkbutton { min-height: 40px; }
-.history-body.reduced button image { -gtk-icon-size: 13px; }
-.history-body.reduced .history-sparkline { min-height: 35px; }
-.history-body.mini { font-size: 0.666667em; }
-.history-body.mini button, .history-body.mini dropdown,
-.history-body.mini checkbutton { min-height: 32px; }
-.history-body.mini button image { -gtk-icon-size: 11px; }
-.history-body.mini .history-sparkline { min-height: 29px; }
 """
 
 
@@ -108,7 +96,7 @@ class HistoryChoice(Gtk.DropDown):
 
 
 class HistoryLayout(Gtk.Box):
-    """Keep history widgets alive while changing density and panel placement."""
+    """Keep history widgets alive while applying the window's aspect arrangement."""
 
     def __init__(
         self,
@@ -149,13 +137,37 @@ class HistoryLayout(Gtk.Box):
         self._build_comparison(compare_frame)
         self._build_breakpoints()
         self.stack.connect("notify::visible-child-name", self._on_page_changed)
-        self.connect("map", self._on_layout_changed)
+        self._layout_owner = None
+        self._layout_handler_id = None
+        self._settings_handler_id = None
+        self.connect("map", self._on_map)
+        self.connect("unmap", self._on_unmap)
         self._on_page_changed()
-        self.get_settings().connect_object(
+
+    def _on_map(self, *_args: object) -> None:
+        """Subscribe to the shared layout only while the page is visible."""
+        self._layout_owner = layout_owner(self)
+        if self._layout_owner is not None:
+            self._layout_handler_id = self._layout_owner.connect(
+                "layout-changed",
+                self._on_layout_changed,
+            )
+        self._settings_handler_id = self.get_settings().connect_object(
             "notify::gtk-xft-dpi",
             HistoryLayout._on_layout_changed,
             self,
         )
+        self._on_layout_changed()
+
+    def _on_unmap(self, *_args: object) -> None:
+        """Release layout and font callbacks when leaving History."""
+        if self._layout_handler_id is not None:
+            self._layout_owner.disconnect(self._layout_handler_id)
+            self._layout_handler_id = None
+        self._layout_owner = None
+        if self._settings_handler_id is not None:
+            self.get_settings().disconnect(self._settings_handler_id)
+            self._settings_handler_id = None
 
     def _build_modes(self) -> None:
         """Add linked controls for switching between activities and comparison."""
@@ -212,56 +224,10 @@ class HistoryLayout(Gtk.Box):
         return scroller
 
     def _build_breakpoints(self) -> None:
-        """Choose panel placement and density from the available logical size."""
-        rules = [
-            ("min-width: 560px and min-aspect-ratio: 6/5", None, True),
-            ("min-width: 900px and min-height: 800px and max-aspect-ratio: 3/2", "roomy", False),
-            (
-                (
-                    "min-width: 900px and min-height: 800px and min-aspect-ratio: 6/5 "
-                    "and max-aspect-ratio: 3/2"
-                ),
-                "roomy",
-                True,
-            ),
-            (
-                "min-width: 420px and max-width: 519px and min-height: 300px and max-height: 560px",
-                "reduced",
-                False,
-            ),
-            (
-                (
-                    "min-width: 420px and max-width: 519px and min-height: 300px "
-                    "and max-height: 560px and min-aspect-ratio: 6/5"
-                ),
-                "reduced",
-                True,
-            ),
-            ("max-width: 279px", "mini", False),
-            (
-                (
-                    "min-width: 400px and max-width: 599px and max-height: 280px "
-                    "and min-aspect-ratio: 8/5"
-                ),
-                "mini",
-                True,
-            ),
-        ]
-        for condition, density, landscape in rules:
-            layout_rule = Adw.Breakpoint.new(Adw.BreakpointCondition.parse(condition))
-            layout_rule.add_setter(
-                self.activity_panes,
-                "orientation",
-                Gtk.Orientation.HORIZONTAL if landscape else Gtk.Orientation.VERTICAL,
-            )
-            classes = ["history-body", density] if density else ["history-body"]
-            layout_rule.add_setter(
-                self.body,
-                "css-classes",
-                GObject.Value(GObject.TYPE_STRV, classes),
-            )
-            self._adaptive.add_breakpoint(layout_rule)
-        self._adaptive.connect("notify::current-breakpoint", self._on_layout_changed)
+        """Contain page minima while the shared window aspect controls its panes."""
+        self._adaptive.add_breakpoint(
+            Adw.Breakpoint.new(Adw.BreakpointCondition.parse("min-width: 0px")),
+        )
 
     def _on_page_changed(self, *_args: object) -> None:
         """Keep the mode buttons synchronized with the visible history page."""
@@ -269,53 +235,38 @@ class HistoryLayout(Gtk.Box):
         (self.btn_compare if comparing else self.btn_activities).set_active(True)
 
     def _on_width_changed(self, *_args: object) -> None:
-        """Choose summary columns that fit the current pane and density."""
-        columns = (
-            2 if self._landscape else (4 if self._adaptive.get_width() >= 480 * self.density else 2)
-        )
+        """Keep summary columns stable within each aspect-defined arrangement."""
+        frame = layout_frame(self)
+        columns = 4 if frame.family is LayoutFamily.SQUARE and not self._landscape else 2
         self.summary_metrics.set_min_children_per_line(columns)
         self.summary_metrics.set_max_children_per_line(columns)
 
     def _on_layout_changed(self, *_args: object) -> None:
-        """Apply density, pane placement, and DPI-aware chart sizing."""
-        scale = next(
-            (
-                value
-                for name, value in (("roomy", 2.0), ("reduced", 0.8), ("mini", 2 / 3))
-                if self.body.has_css_class(name)
-            ),
-            1.0,
+        """Keep filters and chart controls in an aspect-defined arrangement."""
+        frame = layout_frame(self)
+        landscape = frame.family is LayoutFamily.LANDSCAPE or (
+            frame.family is LayoutFamily.SQUARE and frame.width >= frame.height
         )
-        landscape = self.activity_panes.get_orientation() is Gtk.Orientation.HORIZONTAL
         if landscape != self._landscape:
             self._move_activity_list(landscape=landscape)
-        self._landscape, self.density = landscape, scale
-        for widget in (
-            self.body,
-            self.sidebar,
-            self.activity_panes,
-            self.activity_content,
-            self.compare_panes,
-            self.compare_controls,
-        ):
-            widget.set_spacing(round(8 * scale))
-        for side in ("top", "bottom", "start", "end"):
-            getattr(self.body, f"set_margin_{side}")(round(8 * scale))
-        self.activity_scroll.set_size_request(round(210 * scale) if landscape else -1, -1)
+        self._landscape = landscape
+        self.activity_panes.set_orientation(
+            Gtk.Orientation.HORIZONTAL if landscape else Gtk.Orientation.VERTICAL,
+        )
+        self.activity_scroll.set_size_request(210 if landscape else -1, -1)
         self.activity_scroll.set_hexpand(not landscape)
         filters = self.sidebar.get_first_child()
-        columns = 2 if not landscape or self._adaptive.get_height() < 360 * scale else 1
-        filters.set_min_children_per_line(columns)
-        filters.set_max_children_per_line(columns)
+        filters.set_min_children_per_line(1 if landscape else 2)
+        filters.set_max_children_per_line(1 if landscape else 2)
         self.compare_panes.set_orientation(
             Gtk.Orientation.HORIZONTAL if landscape else Gtk.Orientation.VERTICAL,
         )
-        self.compare_controls.set_size_request(round(210 * scale) if landscape else -1, -1)
+        self.compare_controls.set_size_request(210 if landscape else -1, -1)
         self.compare_controls.set_hexpand(not landscape)
         self.legend.set_visible(landscape)
-        self.legend.set_size_request(-1, round(64 * scale))
+        self.legend.set_size_request(-1, 64)
         self.legend_menu.set_visible(not landscape)
-        self.chart.canvas.set_size_request(round(140 * scale), round(160 * scale))
+        self.chart.canvas.set_size_request(140, 160)
         self.chart.set_display_scale(self.chart_display_scale)
         self._on_width_changed()
 
