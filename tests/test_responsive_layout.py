@@ -4,7 +4,7 @@ FITNESS_TRACKER_GTK_TESTS=1 uv run pytest tests/test_responsive_layout.py
 Set FITNESS_TRACKER_SCREENSHOTS to a directory to save the rendered sample views.
 """
 
-# ruff: noqa: SLF001
+# ruff: noqa: E402, SLF001  # Opt in before importing native GTK dependencies.
 
 from __future__ import annotations
 
@@ -13,15 +13,17 @@ import ctypes.util
 import json
 import math
 import os
-import time
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
+
+import pytest
+
+if os.environ.get("FITNESS_TRACKER_GTK_TESTS") != "1":
+    pytest.skip("Opt in with FITNESS_TRACKER_GTK_TESTS=1 and a display", allow_module_level=True)
 
 import cairo
 import gi
 import numpy as np
-import pytest
 from fitness_tracker.core.environment import Environment
 from fitness_tracker.core.guidance import PebbleTargetKind, StepGuidance, TargetDomain
 from fitness_tracker.core.sensor_status import SensorStatus
@@ -35,16 +37,14 @@ from fitness_tracker.core.zones import ChartTheme, HeartRateZones
 from fitness_tracker.hardware.recorder import FinalizationClaim, FinalizationStatus
 from fitness_tracker.services.jobs import DuplicateJobError, JobRunnerShutdownError
 
-gi.require_versions({"Gtk": "4.0", "Adw": "1", "Graphene": "1.0"})
-from fitness_tracker.ui.pages.mode import ModeSelectView  # noqa: E402
-from fitness_tracker.ui.pages.session import SessionView  # noqa: E402
-from fitness_tracker.ui.widgets import session_controls as session_controls_module  # noqa: E402
-from gi.repository import Adw, Gio, GLib, Graphene, Gtk  # noqa: E402  # ty:ignore[unresolved-import]
+from gtk_test_helpers import assert_inside, descendant_labels, save_screenshot, settle
 
-pytestmark = pytest.mark.skipif(
-    os.environ.get("FITNESS_TRACKER_GTK_TESTS") != "1",
-    reason="Opt in with FITNESS_TRACKER_GTK_TESTS=1 and a display (or Xvfb)",
-)
+gi.require_versions({"Gtk": "4.0", "Adw": "1", "Graphene": "1.0"})
+from fitness_tracker.ui.pages.mode import ModeSelectView
+from fitness_tracker.ui.pages.session import SessionView
+from fitness_tracker.ui.widgets import session_controls as session_controls_module
+from gi.repository import Adw, Gio, GLib, Graphene, Gtk  # ty:ignore[unresolved-import]
+
 MIN_TOUCH_HEIGHT = 48
 MIN_COMPACT_WIDTH = 300
 GAUGE_LABEL_COUNT = 2
@@ -57,6 +57,8 @@ SMALL_DENSITIES = (
     (240, 480, 2 / 3, 360, 720),
     (480, 240, 2 / 3, 720, 360),
 )
+# Outdoor workouts share this view; GPS behavior has separate lifecycle tests.
+SESSION_KINDS = ("workout", "trainer", "incline", "free")
 
 VIEWPORTS = (
     (360, 720),
@@ -74,15 +76,6 @@ VIEWPORTS = (
     (1080, 1240),
     (1240, 1080),
 )
-
-
-def settle():
-    context = GLib.MainContext.default()
-    deadline = time.monotonic() + 0.12
-    while time.monotonic() < deadline:
-        while context.pending():
-            context.iteration(may_block=False)
-        time.sleep(0.005)
 
 
 @pytest.fixture
@@ -199,23 +192,6 @@ def show_view(view, width, height, *, production_shell=False):
     return window
 
 
-def assert_inside(widget, container):
-    success, bounds = widget.compute_bounds(container)
-    assert success
-    assert widget.get_mapped()
-    assert bounds.get_x() >= -1
-    assert bounds.get_y() >= -1
-    assert bounds.get_x() + bounds.get_width() <= container.get_width() + 1
-    assert bounds.get_y() + bounds.get_height() <= container.get_height() + 1
-
-
-def descendant_labels(widget):
-    if isinstance(widget, Gtk.Label):
-        yield widget
-    for child in widget:
-        yield from descendant_labels(child)
-
-
 def gauge_ink_bounds(surface, width, height):
     surface.flush()
     pixels = np.frombuffer(surface.get_data(), dtype=np.uint8).reshape(height, surface.get_stride())
@@ -234,29 +210,8 @@ def assert_gauge_centered(bounds, width, height):
     assert bottom < height
 
 
-def save_screenshot(window, name):
-    directory = os.environ.get("FITNESS_TRACKER_SCREENSHOTS")
-    if not directory:
-        return
-    destination = Path(directory)
-    destination.mkdir(parents=True, exist_ok=True)
-    node = None
-    for _ in range(5):
-        snapshot = Gtk.Snapshot()
-        Gtk.WidgetPaintable.new(window).snapshot(snapshot, window.get_width(), window.get_height())
-        node = snapshot.to_node()
-        if node is not None:
-            break
-        window.queue_draw()
-        settle()
-    assert node is not None, "Window did not produce a painted frame"
-    bounds = Graphene.Rect().init(0, 0, window.get_width(), window.get_height())
-    texture = window.get_renderer().render_texture(node, bounds)
-    assert texture.save_to_png(str(destination / f"{name}.png"))
-
-
 @pytest.mark.parametrize(("width", "height"), VIEWPORTS)
-@pytest.mark.parametrize("kind", ["workout", "trainer", "incline", "free", "outdoor"])
+@pytest.mark.parametrize("kind", SESSION_KINDS)
 def test_session_allocations(app_stub, width, height, kind):
     view, callbacks = make_session(app_stub, kind)
     window = show_view(view, width, height)
@@ -584,21 +539,10 @@ def test_session_font_handlers_disconnect_and_reconnect_on_remap(app_stub, monke
         assert not updates
 
 
-def test_full_application_shell_fits_short_landscape(app_stub, monkeypatch, tmp_path):
-    from fitness_tracker.ui.app import FitnessAppUI  # noqa: PLC0415
-
-    del app_stub
-    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
-    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
-    app = FitnessAppUI(test_mode=True)
-    app.set_flags(Gio.ApplicationFlags.NON_UNIQUE)
-    app.set_application_id(f"com.luigi311.fitness-tracker.test_{tmp_path.name}")
-    app.register(None)
-    app._build_ui()
+def test_full_application_shell_fits_short_landscape(shell_app):
+    app = shell_app
     view, _callbacks = make_session(app, "workout")
     app.tracker.nav.push(Adw.NavigationPage.new(view, "Workout"))
-    app.window.set_decorated(False)
-    app.window.present()
     try:
         for width, height in (
             (360, 650),
@@ -642,10 +586,7 @@ def test_full_application_shell_fits_short_landscape(app_stub, monkeypatch, tmp_
                 )
             save_screenshot(app.window, f"shell-{width}x{height}")
     finally:
-        app.window.destroy()
-        app.jobs.shutdown()
-        GLib.source_remove(app.tracker._status_timer_id)
-        settle()
+        view.set_visible(False)
 
 
 @pytest.fixture
@@ -1158,7 +1099,7 @@ def test_trainer_disclosure_adapts_to_text_size_without_resize(app_stub):
         settle()
 
 
-@pytest.mark.parametrize("kind", ["workout", "trainer", "incline", "free", "outdoor"])
+@pytest.mark.parametrize("kind", SESSION_KINDS)
 @pytest.mark.parametrize(
     ("width", "height", "scale", "reference_width", "reference_height"),
     SMALL_DENSITIES,

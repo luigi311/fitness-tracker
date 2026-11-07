@@ -1,6 +1,6 @@
 """Opt-in native GTK history checks with a populated private database."""
 
-# ruff: noqa: SLF001
+# ruff: noqa: E402, SLF001  # Opt in before importing native GTK dependencies.
 
 from __future__ import annotations
 
@@ -9,21 +9,20 @@ import os
 from pathlib import Path
 from unittest.mock import patch
 
-import gi
 import pytest
+
+if os.environ.get("FITNESS_TRACKER_GTK_TESTS") != "1":
+    pytest.skip("Opt in with FITNESS_TRACKER_GTK_TESTS=1 and a display", allow_module_level=True)
+
+import gi
 from fitness_tracker.core.units import UnitSystem
 from fitness_tracker.services.history_query import CompareChartData
 
-from test_responsive_layout import assert_inside, descendant_labels, save_screenshot, settle
+from gtk_test_helpers import assert_inside, descendant_labels, descendants, save_screenshot, settle
 
 gi.require_versions({"Gtk": "4.0", "Adw": "1"})
-from fitness_tracker.ui.app import FitnessAppUI  # noqa: E402
-from gi.repository import Adw, Gio, GLib, Gtk  # noqa: E402  # ty:ignore[unresolved-import]
-
-pytestmark = pytest.mark.skipif(
-    os.environ.get("FITNESS_TRACKER_GTK_TESTS") != "1",
-    reason="Opt in with FITNESS_TRACKER_GTK_TESTS=1 and a display",
-)
+from fitness_tracker.ui.app import FitnessAppUI
+from gi.repository import Adw, Gio, GLib, Gtk  # ty:ignore[unresolved-import]
 
 VIEWPORTS = (
     (240, 480),
@@ -65,7 +64,9 @@ def populated_app(tmp_path_factory):
         },
     ):
         Adw.init()
-        Gtk.Settings.get_default().props.gtk_enable_animations = False
+        settings = Gtk.Settings.get_default()
+        animations = settings.props.gtk_enable_animations
+        settings.props.gtk_enable_animations = False
         app = FitnessAppUI(test_mode=True)
         app.set_flags(Gio.ApplicationFlags.NON_UNIQUE)
         app.register(None)
@@ -95,6 +96,7 @@ def populated_app(tmp_path_factory):
         app.jobs.shutdown()
         app.database.engine.dispose()
         GLib.source_remove(app.tracker._status_timer_id)
+        settings.props.gtk_enable_animations = animations
         settle()
 
 
@@ -132,13 +134,6 @@ def select_pair(page):
     for row in page._displayed[:2]:
         page._on_select_toggle(row.activity_id, active=True)
     wait_for(lambda: page._compare_job is None and len(page._compare_legend_items) == COMPARE_COUNT)
-
-
-def descendants(widget, kind):
-    if isinstance(widget, kind):
-        yield widget
-    for child in widget:
-        yield from descendants(child, kind)
 
 
 @pytest.mark.parametrize(("width", "height"), VIEWPORTS)

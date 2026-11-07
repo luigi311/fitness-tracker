@@ -130,7 +130,8 @@ queries, and export retain their existing behavior.
 ## Verification
 
 Run the normal suite with `uv run pytest`. Native GTK tests opt in so CI without a
-display can continue running the existing headless tests:
+display can continue running the existing headless tests. Without the opt-in,
+each native test module skips during collection, before importing GTK or the app:
 
 ```sh
 xvfb-run -a env FITNESS_TRACKER_GTK_TESTS=1 uv run pytest tests/test_responsive_layout.py
@@ -140,7 +141,7 @@ xvfb-run -a env FITNESS_TRACKER_GTK_TESTS=1 uv run pytest tests/test_history_res
 On an existing display, omit `xvfb-run -a`. Add
 `FITNESS_TRACKER_SCREENSHOTS=/tmp/fitness-layouts` to save sample dashboard renders.
 The native tests cover portrait and landscape, reduced shell height, Comet sizes
-at 1×/2×/3×, free sessions, workouts, trainer and incline controls, outdoor sessions,
+at 1×/2×/3×, free sessions, workouts, trainer and incline controls,
 larger text, rotation without state changes, stop-hold cancellation, drawn gauge
 text clearance, stop-fill centering, and direct trainer access when space allows.
 Landscape and near-square checks also verify quadrant placement, complete metric
@@ -152,6 +153,12 @@ sizes against 2× references, enlarged-text scrolling, and rotation through all
 four high-scale allocations without recording-control callbacks.
 Additional checks cover toast hit-testing in the production shell and populated
 Librem 3× setup in both orientations. Stop feedback is checked for contrast.
+Shared event-loop, allocation, and screenshot helpers live in
+`tests/gtk_test_helpers.py`; neither native test module imports the other.
+The viewport and text-size matrices retain the boundaries that exposed layout
+regressions. Outdoor workouts use the same dashboard configuration as other
+workouts, while GPS and outdoor recording behavior have separate location and
+recorder lifecycle coverage.
 To exercise real pointer cancellation on an isolated X server, also set
 `FITNESS_TRACKER_XINPUT_TESTS=1`; this requires the X11 and XTEST libraries.
 
