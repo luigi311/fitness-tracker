@@ -313,7 +313,8 @@ class SessionView(Gtk.Box):
         self.gauge = TargetGauge()
         self.gauge.size_scale = 0.9
         self.gauge.set_vexpand(True)
-        self.gauge.set_margin_top(4)
+        self.gauge.set_margin_top(0)
+        self.gauge.set_margin_bottom(0)
         target_display.append(self.gauge)
 
         self._build_workout_navigation(on_prev, on_next)
