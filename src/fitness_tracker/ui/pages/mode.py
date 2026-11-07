@@ -8,12 +8,14 @@ from loguru import logger
 from workout_parser import WorkoutParserError, load_workout
 
 from fitness_tracker.core.environment import Environment, EnvironmentSpec
+from fitness_tracker.core.layout import LayoutFamily
 from fitness_tracker.core.sports import SportTypesEnum
+from fitness_tracker.ui.layout import layout_frame, layout_owner
 from fitness_tracker.workouts import discover_workouts, format_workout_summary
 
 gi.require_versions({"Gtk": "4.0", "Adw": "1"})
 
-from gi.repository import Adw, Gdk, GLib, GObject, Gtk  # noqa: E402  # ty:ignore[unresolved-import]
+from gi.repository import Adw, Gdk, GLib, Gtk  # noqa: E402  # ty:ignore[unresolved-import]
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -195,14 +197,6 @@ _CSS = b"""
 .workout-frame row {
     padding: 0;
 }
-.mode-select.mini-setup { font-size: 0.666667em; }
-.mode-select.mini-setup button { min-height: 32px; padding: 0 6px; }
-.mode-select.mini-setup .env-card { padding: 1px 3px; }
-.mode-select.mini-setup .env-icon { font-size: 15px; }
-.mode-select.mini-setup .env-name { font-size: 9px; }
-.mode-select.mini-setup .badge { font-size: 7px; padding: 1px 5px; }
-.mode-select.mini-setup .section-label { font-size: 8px; }
-.mode-select.mini-setup .start-free-btn { font-size: 10px; padding: 0 6px; }
 """
 
 
@@ -284,16 +278,6 @@ class ModeSelectView(Gtk.Box):
         adaptive.set_vexpand(True)
         adaptive.set_child(body)
         self.append(adaptive)
-        wide = Adw.Breakpoint.new(
-            Adw.BreakpointCondition.parse(
-                "min-width: 720sp or (min-width: 600sp and max-height: 440sp)",
-            ),
-        )
-        wide.add_setter(body, "orientation", Gtk.Orientation.HORIZONTAL)
-        wide.add_setter(body, "homogeneous", value=True)
-        wide.add_setter(setup_scroll, "vexpand", value=True)
-        adaptive.add_breakpoint(wide)
-
         self._setup.append(self._build_sport_switch())
         self._build_environment_selector()
         self._build_start_button()
@@ -310,33 +294,44 @@ class ModeSelectView(Gtk.Box):
         body: Gtk.Box,
         setup_scroll: Gtk.ScrolledWindow,
     ) -> None:
-        """Keep environment selection and workout starts usable at 3x density."""
-        for condition, landscape in (
-            ("max-width: 279px", False),
-            ("min-width: 400px and max-width: 599px and max-height: 280px", True),
-        ):
-            compact = Adw.Breakpoint.new(Adw.BreakpointCondition.parse(condition))
-            compact.add_setter(
-                self,
-                "css-classes",
-                GObject.Value(GObject.TYPE_STRV, ["mode-select", "mini-setup"]),
+        """Use a shared reference size and choose setup panes only from aspect."""
+        self._body, self._setup_scroll = body, setup_scroll
+        self._layout_owner = None
+        self._layout_handler_id = None
+        adaptive.add_breakpoint(
+            Adw.Breakpoint.new(Adw.BreakpointCondition.parse("min-width: 0px")),
+        )
+        self.connect("map", self._on_map)
+        self.connect("unmap", self._on_unmap)
+
+    def _on_map(self, *_args: object) -> None:
+        """Observe the window's aspect policy while the selector is visible."""
+        self._layout_owner = layout_owner(self)
+        if self._layout_owner is not None:
+            self._layout_handler_id = self._layout_owner.connect(
+                "layout-changed",
+                self._on_layout_changed,
             )
-            for box in (body, self._setup, self._setup_pane, self._library):
-                compact.add_setter(box, "spacing", 5)
-            compact.add_setter(self, "margin-top", 4)
-            compact.add_setter(self, "margin-bottom", 4)
-            for button in (self._btn_run, self._btn_cycle):
-                compact.add_setter(button, "height-request", 32)
-            for card in self._env_cards.values():
-                inner = card.get_child()
-                compact.add_setter(inner, "spacing", 3)
-                compact.add_setter(inner, "margin-top", 4)
-                compact.add_setter(inner, "margin-bottom", 4)
-            if landscape:
-                compact.add_setter(body, "orientation", Gtk.Orientation.HORIZONTAL)
-                compact.add_setter(body, "homogeneous", value=True)
-                compact.add_setter(setup_scroll, "vexpand", value=True)
-            adaptive.add_breakpoint(compact)
+        self._on_layout_changed()
+
+    def _on_unmap(self, *_args: object) -> None:
+        """Disconnect the shared policy before this selector leaves the screen."""
+        if self._layout_handler_id is not None:
+            self._layout_owner.disconnect(self._layout_handler_id)
+            self._layout_handler_id = None
+        self._layout_owner = None
+
+    def _on_layout_changed(self, *_args: object) -> None:
+        """Place selection beside the workout list on landscape-shaped windows."""
+        frame = layout_frame(self)
+        landscape = frame.family is LayoutFamily.LANDSCAPE or (
+            frame.family is LayoutFamily.SQUARE and frame.width >= frame.height
+        )
+        self._body.set_orientation(
+            Gtk.Orientation.HORIZONTAL if landscape else Gtk.Orientation.VERTICAL,
+        )
+        self._body.set_homogeneous(landscape)
+        self._setup_scroll.set_vexpand(landscape)
 
     def _build_sport_switch(self) -> Gtk.Box:
         """Build the Run/Bike segmented switcher."""
@@ -473,6 +468,8 @@ class ModeSelectView(Gtk.Box):
             row = Adw.ActionRow()
             row.set_use_markup(False)
             row.set_title(workout.name)
+            row.set_title_lines(1)
+            row.set_subtitle_lines(1)
 
             # Workout information
             subtitle_parts: list[str] = []

@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 
 import gi
 import numpy as np
-from matplotlib.backends.backend_gtk4agg import FigureCanvasGTK4Agg as FigureCanvas
+from matplotlib.backends.backend_gtk4agg import FigureCanvasGTK4Agg
 from matplotlib.figure import Figure
 from matplotlib.ticker import MultipleLocator
 
@@ -27,6 +27,29 @@ if TYPE_CHECKING:
 _ZONE_ALPHA = 0.25
 _SPARKLINE_MAX_POINTS = 160
 _SPARKLINE_MIN_DIMENSION = 4
+
+
+class FigureCanvas(FigureCanvasGTK4Agg):
+    """Render charts at the physical resolution of their transformed GTK allocation."""
+
+    def _update_device_pixel_ratio(self, *_args: object, **_kwargs: object) -> None:
+        """Include the ancestor transform when choosing the Agg backing resolution."""
+        native = self.get_native()
+        if native is None or self.get_width() <= 0:
+            return
+        surface = native.get_surface()
+        if surface is None:
+            return
+        success, bounds = self.compute_bounds(native)
+        transform = bounds.get_width() / self.get_width() if success else 1
+        scale = surface.get_scale() if hasattr(surface, "get_scale") else self.get_scale_factor()
+        if self._set_device_pixel_ratio(scale * transform):
+            self.draw()
+
+    def on_draw_event(self, widget: Gtk.Widget, ctx: Context) -> bool:
+        """Refresh resolution even when zoom leaves the reference allocation unchanged."""
+        self._update_device_pixel_ratio()
+        return super().on_draw_event(widget, ctx)
 
 
 def style_axes(

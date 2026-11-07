@@ -35,6 +35,12 @@ class _HeadlessWidget:
     def set_subtitle(self, value: str) -> None:
         self.subtitle = value
 
+    def set_title_lines(self, _lines: int) -> None:
+        """Accept the native action row's single-line title configuration."""
+
+    def set_subtitle_lines(self, _lines: int) -> None:
+        """Accept the native action row's single-line summary configuration."""
+
     def set_active(self, value: object) -> None:
         self.active = bool(value)
 

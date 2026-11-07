@@ -79,6 +79,9 @@ class TrainerTargetControl(Gtk.Frame):
             ),
         }
         self._mode_buttons = {}
+        self._mode_grid = None
+        self._mode_columns = 3
+        self._max_mode_columns = 3
 
         outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
         for margin in ("top", "bottom"):
@@ -88,22 +91,23 @@ class TrainerTargetControl(Gtk.Frame):
             getattr(outer, f"set_margin_{margin}")(4)
 
         if len(available_modes) > 1:
-            mode_row = Gtk.FlowBox()
-            mode_row.set_selection_mode(Gtk.SelectionMode.NONE)
-            mode_row.set_min_children_per_line(1)
-            mode_row.set_max_children_per_line(3)
+            mode_row = Gtk.Grid()
+            self._mode_grid = mode_row
             mode_row.set_column_spacing(4)
             mode_row.set_row_spacing(4)
-            mode_row.set_homogeneous(True)
+            mode_row.set_column_homogeneous(True)
+            mode_row.set_row_homogeneous(True)
             mode_row.set_hexpand(True)
             for mode in available_modes:
                 button = Gtk.Button(label=mode.value)
+                button.add_css_class("trainer-mode")
                 button.set_size_request(-1, _MODE_BUTTON_HEIGHT)
+                button.set_hexpand(True)
                 if mode == self._mode:
                     button.add_css_class("suggested-action")
                 button.connect("clicked", self._on_mode_clicked, mode)
                 self._mode_buttons[mode] = button
-                mode_row.insert(button, -1)
+            self._layout_modes()
             outer.append(mode_row)
         else:
             title = Gtk.Label(label=self._mode.value)
@@ -113,6 +117,44 @@ class TrainerTargetControl(Gtk.Frame):
         outer.append(self._build_adjustment_row())
         self.set_child(outer)
         self._refresh()
+
+    def set_mode_columns(self, columns: int) -> None:
+        """Use aspect-defined columns without changing the selected trainer target."""
+        self._max_mode_columns = columns
+        if self._mode_grid is not None and columns != self._mode_columns:
+            self._mode_columns = columns
+            self._layout_modes()
+
+    def fit_mode_columns(self, available_width: int) -> None:
+        """Allow enlarged text fewer mode columns within the same equipment panel."""
+        buttons = [button for button in self._mode_buttons.values() if button.get_visible()]
+        if not buttons or available_width <= 0:
+            return
+        outer = self.get_child()
+        overhead = outer.get_margin_start() + outer.get_margin_end() + 2
+        spacing = self._mode_grid.get_column_spacing()
+        width = max(button.measure(Gtk.Orientation.HORIZONTAL, -1)[0] for button in buttons)
+        fitted = (available_width - overhead + spacing) // (width + spacing)
+        columns = max(1, min(self._max_mode_columns, fitted))
+        if columns != self._mode_columns:
+            self._mode_columns = columns
+            self._layout_modes()
+
+    def _layout_modes(self) -> None:
+        """Keep visible mode buttons in a measured grid with no empty cells."""
+        for child in list(self._mode_grid):
+            self._mode_grid.remove(child)
+        index = 0
+        for button in self._mode_buttons.values():
+            if button.get_visible():
+                self._mode_grid.attach(
+                    button,
+                    index % self._mode_columns,
+                    index // self._mode_columns,
+                    1,
+                    1,
+                )
+                index += 1
 
     def _build_adjustment_row(self) -> Gtk.Box:
         """Build the target value and touch-sized adjustment buttons."""
@@ -155,9 +197,9 @@ class TrainerTargetControl(Gtk.Frame):
         minimum = self.measure(Gtk.Orientation.HORIZONTAL, -1)[0]
         if not buttons:
             return minimum
-        row = buttons[0].get_parent().get_parent()
+        row = self._mode_grid
         mode_width = max(
-            button.get_parent().measure(Gtk.Orientation.HORIZONTAL, -1)[0] for button in buttons
+            button.measure(Gtk.Orientation.HORIZONTAL, -1)[0] for button in buttons
         )
         outer = self.get_child()
         overhead = outer.get_margin_start() + outer.get_margin_end() + 2
@@ -201,7 +243,7 @@ class TrainerTargetControl(Gtk.Frame):
         button = self._mode_buttons.get(mode)
         if button:
             button.set_visible(available)
-            button.get_parent().set_visible(available)
+            self._layout_modes()
         if not available:
             fallback = fallback_trainer_mode(
                 self._mode_buttons,
@@ -245,7 +287,10 @@ class TrainerTargetControl(Gtk.Frame):
         """Select a mode without emitting a target-change callback."""
         self._mode = mode
         for button_mode, button in self._mode_buttons.items():
-            button.set_css_classes(["suggested-action"] if button_mode == mode else [])
+            if button_mode == mode:
+                button.add_css_class("suggested-action")
+            else:
+                button.remove_css_class("suggested-action")
         self._refresh()
 
     def _refresh(self) -> None:

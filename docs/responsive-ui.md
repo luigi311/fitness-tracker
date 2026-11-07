@@ -1,166 +1,128 @@
-# Responsive session UI
+# Responsive interface
 
-The same session widgets remain alive during a resize or rotation. Layout changes
-do not restart recording, reset the step timer, or send trainer commands. Layouts
-use libadwaita breakpoints in logical pixels (`px`) and text-scaled pixels (`sp`),
-rather than physical display resolutions or device names. Only the last matching breakpoint
-applies, so each layout specifies all of its deviations from the default.
+Layout selection uses the aspect ratio of the application window before any
+internal scaling. Display zoom, device names, absolute pixel dimensions, and font
+size do not choose different panel arrangements.
 
-| Available session area | Presentation |
-| --- | --- |
-| Narrow portrait | Gauge above step details; two metric columns |
-| At least 480sp wide, near-square portrait | Gauge beside step details; three metric columns |
-| 350–599 logical pixels wide and at most 560sp high | Compact gauge beside step details; three metric columns; title and next-step preview yield space |
-| At least 350 logical pixels wide, below 480sp wide and at most 600sp high, or at most 400sp high | The same compact layout covers intermediate text scales and rotated near-square displays |
-| Below 350 logical pixels wide and at most 560sp high | Compact hero, stacked timers, and two metric columns |
-| Near-square workout with trainer or incline controls, when contents fit | Four quadrants: gauge and timers above metrics and controls |
-| Large portrait windows, at least 720px wide and aspect below 0.8 | Gauge, timing, live metrics, and controls stack vertically |
-| Large landscape windows, at least 720×480px | Four workout quadrants when controls fit; guidance above metrics without controls |
-| At least 600sp wide and aspect ratio at least 1.3 | Gauge beside timers in the guidance panel; metrics and controls in the other panel |
-| At least 700 logical pixels / 420sp wide, at most 440sp high, aspect ratio at least 1.6 | Phone landscape stacks the gauge above timers; trainer controls use a right column when they fit |
-| At least 900×800 logical pixels, session aspect ratio at most 1.5 | Double-size text and controls throughout the session, with the dashboard filling the available height |
-| 420–519 logical pixels wide and 300–560px high | A consistent 80% density for near-square high-scale allocations, with three metric columns |
-| Below 280 logical pixels wide | A consistent two-thirds density with the portrait hierarchy and two metric columns |
-| 400–599px wide, at most 280px high, aspect ratio at least 1.6 | The same two-thirds density with guidance beside three metric columns |
+| Window width / height | Session arrangement | Reference canvas |
+| --- | --- | --- |
+| Below 0.80 | Gauge, timers and step counter, live metrics, then equipment controls | 360×720 |
+| 0.80 through 1.35 | Gauge and timers side by side; metrics and equipment controls side by side below | 540×620 portrait; 620×540 landscape |
+| Above 1.35 | Gauge above timers on the left, live metrics in the middle, equipment controls on the right | 720×360 |
 
-For example, a 1080×1240 display can provide roughly 540×620 logical pixels at
-2× scaling or 360×413 at 3× scaling, before shell bars. The compact layout also
-handles reduced height from those bars. At unusually narrow sizes or enlarged
-text, scrolling takes priority over shrinking touch targets. The recording footer
-stays outside the scroll area. Its actions share a row from 300sp upward and stack
-below that width. Very narrow windows can also keep a single row when the text
-fits, and stack actions when text is enlarged.
+Balanced sessions without equipment use the lower area for the metrics. Free
+sessions hide workout guidance and show elapsed time and the live chart; portrait
+places metrics before the chart, while landscape puts the chart beside metrics.
+Setup and History stack their sections in portrait, including balanced portrait,
+and use side-by-side panes in landscape, including balanced landscape.
 
-The large near-square layout uses the 540×620 Comet layout at 2× as its readability
-reference. At 1080×1240 and 1×, captions, timers, target text, metric values, units,
-sensor labels, trainer controls and recording actions all grow together. Recording
-actions are 96 logical pixels high, giving the same panel-pixel height as 48px at
-2×. Gauge labels and chart labels scale with the dashboard while retaining their
-overlap and clipping checks. Large near-square windows also enlarge navigation.
-Returning to a smaller allocation restores the regular text and control sizes.
+A small aspect-ratio hysteresis of 0.015 keeps integer allocation rounding from
+switching layouts at a boundary. Crossing an aspect boundary or rotating a window
+can change the arrangement. Changing zoom while preserving aspect does not.
 
-Comet at 2.5× uses an 80% density, and Librem 5 at 3× uses a two-thirds density.
-Text, gauge geometry, chart labels, tile padding, navigation and touch targets
-scale together. This keeps their physical sizes close to the 2× reference:
-40px controls at 2.5× occupy 100 panel pixels, while 32px at 3× occupy 96 panel
-pixels, compared with 48px at 2× occupying 96. The application minimum width is
-200px, allowing a 240px Librem portrait viewport without horizontal clipping.
-All six metrics and target guidance remain visible at normal text size in both
-orientations. Enlarged text can scroll while recording actions remain visible.
-Activity setup also uses the two-thirds density at the Librem's 3× allocations.
-Portrait keeps the environment cards within the narrow window; short landscape
-places selection beside the workout list, with the free-session action visible.
+## Uniform scaling
 
-Workouts show Elapsed, Remaining, and Step (for example, `5/15`) together.
-The counter follows the executable step sequence through preview, automatic
-progression, and previous/next navigation. When width is limited, the two time
-values stack beside the step counter. Free sessions hide the workout readouts.
-Phone landscape workouts place the gauge above those readouts when their measured
-height fits. Trainer sessions add a right-hand control column when guidance,
-two metric columns, and the full controls fit together at the current density.
-Otherwise, controls stay below the right-hand metrics, with a disclosure only
-when needed. Column budgets preserve complete numeric readings. Very short
-allocations can retain the horizontal gauge/readout arrangement or scroll.
-Near-square allocations instead use four quadrants in both orientations: gauge
-at the top left, timing and step guidance at the top right, live metrics at the
-bottom left, and trainer or incline controls at the bottom right. The metric grid
-has two columns, and controls remain directly available. The layout measures text,
-touch controls, and row heights before enabling the quadrants; enlarged text or
-limited space restores the compact layout and disclosure. Comet at 1×, 2×, and
-2.5× retains its established text and touch density. Desktop and tablet portrait
-windows stack the sections vertically, with a bounded gauge height to leave space
-for metrics and controls. Their landscape workouts use the same four quadrants.
+`core/layout.py` selects the layout and fits its reference canvas inside the
+window. The remaining axis extends to fill the available area. The `ScaledView`
+GTK container allocates the existing application in those reference coordinates
+and applies one uniform transform to it. Text, gauge drawing, chart axes, spacing,
+controls and bottom navigation therefore scale together. Native popover
+contents receive the same transform within their own surfaces. Charts render
+at the combined native and interface scale to keep their backing images sharp.
+
+For example, a 720×1440 Librem display provides approximately 720×1440 logical
+pixels at 100%, 360×720 at 200%, and 240×480 at 300%. The interface transforms are
+respectively 2, 1, and two-thirds, so a 48-unit control paints at approximately 96
+panel pixels at all three zoom settings. Intermediate percentages follow the same
+calculation. A 1080×1240 Comet uses the balanced reference and gives the same
+physical geometry at 100%, 200%, and 250%.
+
+GTK handles input through the same transform, keeping hit testing aligned with
+painted controls. System window borders, compositor bars, and external system
+dialogs retain system sizing. If those bars change the available window aspect,
+a layout change is possible. Physical devices still need verification of compositor
+behavior, touch input, and rendering performance.
+
+Accessibility font enlargement remains independent of display zoom. It enlarges
+text within the chosen arrangement; content can scroll horizontally or vertically
+rather than moving equipment controls to another panel. Recording actions remain
+outside that scroll area. Previous/Next remain in the recording footer. Portrait
+uses two footer rows; balanced and landscape use one row. Global Tracker, History,
+and Settings navigation stays at the bottom. The in-app title bar stays hidden in
+every arrangement, reclaiming its height without depending on display zoom.
+
+## Session behavior
+
+The same widgets remain alive during zoom, resize, and rotation. Reflow does not
+restart recording, reset step timers, change trainer targets, or invoke controls.
+Trainer bias and selected modes survive movement between panels. Trainer modes,
+trainer adjustments, and incline controls remain directly available in every
+arrangement. Mode choices use up to three columns in portrait and two in other
+arrangements; enlarged text can use
+fewer columns inside the same panel. Compact mode-button padding, portrait
+metric-tile margins, and vertical gaps retain two
+metric columns, all six readings, and the full equipment panel. Portrait shows
+source indicators and Live/Dead text beside each number. Square and landscape
+layouts keep that information underneath the value. All sessions order metrics as
+Pace, Heart Rate, Distance, Cadence, Speed, and Power. Filled green Live markers
+mean connected; hollow Dead markers mean disconnected, with full connection details
+in tooltips and accessible labels. Numeric text sizes and 48-unit touch heights
+are retained. Incline and trainer sessions use the same compact portrait spacing
+without a disclosure row. Enlarged text can scroll those same panels.
+
+Workouts show Elapsed, Remaining, and Step (for example `5/15`). The counter follows
+the executable step sequence through preview, automatic progression, and previous
+or next navigation. The workout heading, current target, and next-step preview
+remain visible in every aspect layout, using the height reclaimed from the title
+bar. Longer previews wrap; enlarged text can scroll without moving the panels.
+Free sessions hide workout readouts. Step changes retain the
+full desktop notification without an in-app step toast. Other session notices stay
+above the recording footer.
 
 The gauge shows the current reading against the target band without a separate
-target-status row. Its complete painted bounds, including labels and needle,
-are centered horizontally and vertically inside the frame. Compact layouts draw
-the gauge about 10% smaller. Both text lines scale together to stay clear of the
-arc and each other. The hold-to-stop fill stays vertically centered within its button.
-The gauge's accessible description includes deviation from the closest
-band edge, using seconds per selected distance unit for pace. An untargeted step
-clears the previous gauge. A disconnected target source hides the reading and
-needle. Offline live metrics show a dash; accumulated distance remains readable.
-Location tracking uses the same live metric indicators without a separate status row.
-Session toasts appear within the dashboard's scroll area, above the recording
-footer. Step announcements use a short step/count message; the target remains
-in the guidance area and the full desktop notification.
-Moving a held pointer or touch outside Stop cancels the countdown, including
-during GTK's implicit grab. Moving back inside requires a fresh press. The fill
-and label retain contrast in light and dark themes.
+status badge. Its painted bounds stay centered, and its text is fitted clear of
+the arc and the other label. Its accessible description includes deviation from
+the closest band edge. Untargeted steps clear previous guidance. A disconnected
+source hides the reading and needle. Offline metrics show dashes while accumulated
+distance remains readable. Location has no separate debugging status row.
 
-Trainer controls appear directly when the available width and height can fit
-the target, all metrics, and the full adjustment panel. On smaller allocations or
-with larger text, they use a disclosure row showing the current mode/value.
-Its touch size follows the session density.
-The same control widgets and selected bias survive this change without sending
-trainer commands. Incline controls remain directly available in the quadrants and
-large portrait layouts when they fit; compact layouts retain their disclosure. Disclosures
-have space above the recording footer and scroll controls into view when expanded.
-Workout charts retain their previous visibility
-policy; free sessions place the chart after portrait metrics and beside landscape
-metrics. Chart margins update on resize, keeping layout work out of each live redraw.
-Tracker, History, and Settings always appear in the bottom navigation, including
-large windows. The header contains only the window title and window controls.
-Navigation follows the session's density at Comet and Librem scaling levels.
-Activity setup also uses side-by-side panes in wide
-or short landscape windows, with keyboard-accessible environment toggles.
-Smaller vertical gaps and card padding leave more room for the workout list.
-Environment cards retain the original house, tree and lightning emoji icons.
+Hold-to-stop remains a 1.5-second hold. Resize, zoom, rotation, unmapping, release,
+and movement outside the button cancel a pending hold. The progress fill remains
+centered and contrasted in light and dark themes. Workout chart visibility and
+the existing live-chart redraw cadence are unchanged.
 
-## History
+## History and setup
 
-History uses the same normal, Comet 1×, Comet 2.5×, and Librem 3× text and touch
-densities as the session page. Activities and Compare are compact view controls
-above the page; global navigation remains at the bottom.
+History keeps Activities and Compare controls above its content, with global
+navigation below. Portrait places filters, totals, and cards in one scroll area.
+Landscape places filters and totals beside an independently scrolling list.
+Selection, filters, sorting, unit conversion, asynchronous queries, and export
+retain their behavior across reflow. Comparison controls and legends sit beside
+the plot in landscape and use the selected-activities menu in portrait. Chart
+margins update on resize rather than performing a layout calculation every redraw.
 
-Portrait places filters, a wrapping totals grid, and activity cards in one scroll
-area. Landscape moves filters and totals beside an independently scrolling list.
-Activity dates have their own line, metrics wrap, and sparklines yield width to
-the explicit Compare checkbox and TCX export action. Export does not change the
-comparison selection. Selection and choice widgets survive rotation.
-
-Comparison gives the plot the remaining space. Metric selection and colored
-activity labels sit beside the plot in landscape; portrait puts the legend in
-the selected-activities menu. Long legends do not cover the data. Axes use the
-history density and text scaling, reserve label margins on resize, and show
-elapsed-time ticks at readable intervals. Empty and filtered-out states explain
-how to choose activities. Filtering, sorting, unit conversion, asynchronous
-queries, and export retain their existing behavior.
+Activity setup keeps its keyboard-accessible sport and environment selectors and
+the original house, tree, and lightning icons. Its free-session action stays
+outside the setup scroller, while the workout library scrolls independently.
 
 ## Verification
 
-Run the normal suite with `uv run pytest`. Native GTK tests opt in so CI without a
-display can continue running the existing headless tests. Without the opt-in,
-each native test module skips during collection, before importing GTK or the app:
+Run the regular suite with `uv run pytest`. Native GTK checks opt in before
+importing GTK, so environments without a display skip those modules:
 
 ```sh
-xvfb-run -a env FITNESS_TRACKER_GTK_TESTS=1 uv run pytest tests/test_responsive_layout.py
-xvfb-run -a env FITNESS_TRACKER_GTK_TESTS=1 uv run pytest tests/test_history_responsive_layout.py
+xvfb-run -a env FITNESS_TRACKER_GTK_TESTS=1 uv run pytest tests/test_responsive_layout.py tests/test_history_responsive_layout.py
 ```
 
-On an existing display, omit `xvfb-run -a`. Add
-`FITNESS_TRACKER_SCREENSHOTS=/tmp/fitness-layouts` to save sample dashboard renders.
-The native tests cover portrait and landscape, reduced shell height, Comet sizes
-at 1×/2×/3×, free sessions, workouts, trainer and incline controls,
-larger text, rotation without state changes, stop-hold cancellation, drawn gauge
-text clearance, stop-fill centering, and direct trainer access when space allows.
-Landscape and near-square checks also verify quadrant placement, complete metric
-values, and workout/free transitions while the trainer widgets and selected bias persist.
-They also compare the physical text and recording-control sizes of the Comet's
-1× and 2× layouts and check chart label bounds at both densities.
-High-scale coverage includes Comet at 2.5× and Librem 5 at 3×, their physical text
-sizes against 2× references, enlarged-text scrolling, and rotation through all
-four high-scale allocations without recording-control callbacks.
-Additional checks cover toast hit-testing in the production shell and populated
-Librem 3× setup in both orientations. Stop feedback is checked for contrast.
-Shared event-loop, allocation, and screenshot helpers live in
-`tests/gtk_test_helpers.py`; neither native test module imports the other.
-The viewport and text-size matrices retain the boundaries that exposed layout
-regressions. Outdoor workouts use the same dashboard configuration as other
-workouts, while GPS and outdoor recording behavior have separate location and
-recorder lifecycle coverage.
-To exercise real pointer cancellation on an isolated X server, also set
-`FITNESS_TRACKER_XINPUT_TESTS=1`; this requires the X11 and XTEST libraries.
+Pure policy tests cover every integer display percentage from 100% through 300%,
+aspect boundaries, and allocation rounding. Native tests check actual transformed
+allocations across 100%, 115%, 125%, 150%, 175%, 200%, 250%, and 300%; fonts, touch
+bounds, panel parents, sensor status, callbacks, and stop cancellation must remain
+consistent. Other cases cover free sessions, workouts, incline and trainer controls,
+enlarged text, rotation, no-signal states, chart labels, gauge clearance and
+centering, navigation, setup, History, selection, and notification hit testing.
 
-These are desktop GTK allocation and behavior checks. Compositor scaling, touch
-input, and rendering performance still need confirmation on physical devices.
+Set `FITNESS_TRACKER_SCREENSHOTS=/tmp/fitness-layouts` to save sample native renders.
+To exercise real pointer cancellation on an isolated X server, also set
+`FITNESS_TRACKER_XINPUT_TESTS=1`; this requires X11 and XTEST libraries. These desktop
+checks do not replace physical-device testing.
