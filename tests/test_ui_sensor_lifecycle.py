@@ -207,7 +207,7 @@ class SensorSettingsLifecycleTests(unittest.TestCase):
     def _run_idle(self):
         _GLib.callbacks.get(timeout=2)()
 
-    def test_workout_step_notification_uses_toast_and_desktop_notification(self):
+    def test_workout_step_notification_uses_desktop_notification_without_toast(self):
         app = FitnessAppUI.__new__(FitnessAppUI)
         toasts = []
         notifications = []
@@ -224,7 +224,8 @@ class SensorSettingsLifecycleTests(unittest.TestCase):
         app.show_workout_step_notification(2, 5, "Target: 150 - 175 W")
 
         self.assertEqual(pebble_steps, [1])
-        self.assertEqual(toasts, ["Workout step 2 of 5"])
+        self.assertEqual(toasts, [])
+        self.assertEqual(len(notifications), 1)
         self.assertEqual(notifications[0][0], "workout-step-change")
         self.assertEqual(notifications[0][1].title, "Workout step 2 of 5")
         self.assertEqual(notifications[0][1].body, "Target: 150 - 175 W")
@@ -260,7 +261,7 @@ class SensorSettingsLifecycleTests(unittest.TestCase):
         app.show_workout_step_notification(2, 5, "Target: 150 - 175 W")
 
         self.assertEqual(pebble_steps, [1])
-        self.assertEqual(toasts, ["Workout step 2 of 5"])
+        self.assertEqual(toasts, [])
 
     def test_changed_pebble_settings_restart_bridge_for_active_recording(self):
         app = FitnessAppUI.__new__(FitnessAppUI)

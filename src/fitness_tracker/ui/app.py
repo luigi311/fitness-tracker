@@ -395,7 +395,7 @@ class FitnessAppUI(Adw.Application):
         *,
         announce: bool = True,
     ) -> None:
-        """Update step integrations and optionally announce a workout step change."""
+        """Update step integrations and optionally notify users in the background."""
         if self.pebble_bridge:
             self.pebble_bridge.update(
                 workout_step=step_number - 1,
@@ -405,7 +405,6 @@ class FitnessAppUI(Adw.Application):
             return
 
         title = f"Workout step {step_number} of {step_count}"
-        self.show_toast(title)
         self._send_background_notification(
             "workout-step-change",
             title,
