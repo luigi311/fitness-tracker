@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 
 import gi
 from loguru import logger
+from matplotlib.colors import to_hex
 from matplotlib.ticker import FuncFormatter
 
 from fitness_tracker.core.sports import SportTypesEnum
@@ -31,6 +32,7 @@ from fitness_tracker.services.history_query import (
 )
 from fitness_tracker.services.jobs import CancellationToken, DuplicateJobError, JobHandle
 from fitness_tracker.ui.widgets.chart import CompareChart, Sparkline, style_axes
+from fitness_tracker.ui.widgets.history_layout import HistoryChoice, HistoryLayout
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -41,7 +43,7 @@ if TYPE_CHECKING:
     from fitness_tracker.ui.app import FitnessAppUI
 
 gi.require_versions({"Gtk": "4.0", "Adw": "1"})
-from gi.repository import Adw, Gio, GLib, Gtk, Pango  # noqa: E402  # ty:ignore[unresolved-import]
+from gi.repository import Gio, GLib, Gtk, Pango  # noqa: E402  # ty:ignore[unresolved-import]
 
 
 def _format_float(v: float | None, unit: str = "", digits: int = 0) -> str:
@@ -106,6 +108,7 @@ class HistoryPageUI:
     """Render activity history, summaries, comparisons, and exports."""
 
     def __init__(self, app: FitnessAppUI) -> None:
+        """Initialize history selection, chart state, and display preferences."""
         self.app = app
 
         # State
@@ -127,7 +130,8 @@ class HistoryPageUI:
         self._cmp_canvas = None
         self._cmp_metric_id = "hr"
         self.lbl_scope: Gtk.Label | None = None
-        self.cmp_metric_combo: Gtk.ComboBoxText | None = None
+        self.cmp_metric_combo: HistoryChoice | None = None
+        self._compare_legend_items: list[tuple[str, str]] = []
         self._updating_cmp_metric_combo = False
         self._compare_generation = 0
         self._compare_job: JobHandle | None = None
@@ -193,7 +197,7 @@ class HistoryPageUI:
     def _build_history_controls(self) -> Gtk.FlowBox:
         """Build the filter and sort controls."""
         # Top controls (filter + sort), grouped so they wrap as pairs
-        self.filter_combo = Gtk.ComboBoxText()
+        self.filter_combo = HistoryChoice()
         self.filter_combo.append("week", "Last 7 Days")
         self.filter_combo.append("month", "Last 30 Days")
         self.filter_combo.append("all", "All Time")
@@ -201,42 +205,31 @@ class HistoryPageUI:
         self.filter_combo.set_active_id(self.filter_id)
         self.filter_combo.connect("changed", self._on_filter_changed)
 
-        self.sort_combo = Gtk.ComboBoxText()
-        self.sort_combo.append("date_desc", "Date (newest)")
-        self.sort_combo.append("date_asc", "Date (oldest)")
-        self.sort_combo.append("dur_desc", "Duration (longest)")
-        self.sort_combo.append("dist_desc", "Distance (longest)")
-        self.sort_combo.append("avghr_desc", "Avg HR (highest)")
+        self.sort_combo = HistoryChoice()
+        self.sort_combo.append("date_desc", "Newest first")
+        self.sort_combo.append("date_asc", "Oldest first")
+        self.sort_combo.append("dur_desc", "Longest time")
+        self.sort_combo.append("dist_desc", "Longest distance")
+        self.sort_combo.append("avghr_desc", "Highest HR")
         self.sort_combo.set_active_id(self.sort_id)
         self.sort_combo.connect("changed", self._on_sort_changed)
 
-        def control_pair(label_text: str, widget: Gtk.Widget) -> Gtk.FlowBoxChild:
-            row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-            # tighten margins so pairs feel compact and aligned
-            for m in ("top", "bottom", "start", "end"):
-                getattr(row, f"set_margin_{m}")(0)
-
-            lbl = Gtk.Label(label=label_text)
-            lbl.add_css_class("dim-label")
-            lbl.set_xalign(0)
-
-            # keep the combo from stretching the whole width
-            widget.set_hexpand(False)
-            # give it a sensible width so both pairs can sit on one line on wider phones
-            if hasattr(widget, "set_width_chars"):
-                widget.set_width_chars(14)
-            widget.set_size_request(160, -1)
-
-            row.append(lbl)
+        def control_pair(label_text: str, widget: Gtk.Widget) -> Gtk.Widget:
+            """Group an accessible choice control with its caption."""
+            row = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+            label = Gtk.Label(label=label_text, xalign=0)
+            label.add_css_class("caption")
+            label.add_css_class("dim-label")
+            widget.update_property([Gtk.AccessibleProperty.LABEL], [label_text])
+            row.append(label)
             row.append(widget)
-
-            child = Gtk.FlowBoxChild()
-            child.set_child(row)
-            return child
+            return row
 
         ctrl_wrap = Gtk.FlowBox()
         ctrl_wrap.set_selection_mode(Gtk.SelectionMode.NONE)
-        ctrl_wrap.set_max_children_per_line(2)  # 2 pairs per row when there's room
+        ctrl_wrap.set_min_children_per_line(2)
+        ctrl_wrap.set_max_children_per_line(2)
+        ctrl_wrap.set_homogeneous(True)
         ctrl_wrap.set_row_spacing(8)
         ctrl_wrap.set_column_spacing(4)
 
@@ -244,146 +237,159 @@ class HistoryPageUI:
         ctrl_wrap.insert(control_pair("Sort", self.sort_combo), -1)
         return ctrl_wrap
 
-    def _build_activities_tab(self) -> Gtk.Box:
-        """Build the activity list tab."""
-        activities_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
-        scroller = Gtk.ScrolledWindow()
-        scroller.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
-        scroller.set_vexpand(True)
+    def _build_activities_tab(self) -> Gtk.ListBox:
+        """Build the activity list; the adaptive view owns its scrolling."""
         self._listbox = Gtk.ListBox()
         self._listbox.set_selection_mode(Gtk.SelectionMode.NONE)
-        scroller.set_child(self._listbox)
-        activities_box.append(scroller)
-        return activities_box
+        return self._listbox
 
-    def _build_compare_tab(self) -> Gtk.Box:
-        """Build the comparison controls and chart."""
-        compare_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
-        ctrl_cmp = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        lbl_metric = Gtk.Label(label="Metric")
-        lbl_metric.add_css_class("dim-label")
-        lbl_metric.set_xalign(0)
-        self.cmp_metric_combo = Gtk.ComboBoxText()
-        metric_combo = self.cmp_metric_combo
+    def _build_compare_tab(self) -> tuple[Gtk.Box, Gtk.Frame]:
+        """Build compact metric selection, a legend, and an expanding chart."""
+        controls = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        self.cmp_metric_combo = HistoryChoice()
         self._populate_compare_metric_combo()
-        metric_combo.connect("changed", self._on_cmp_metric_changed)
-        ctrl_cmp.append(lbl_metric)
-        ctrl_cmp.append(metric_combo)
-        compare_box.append(ctrl_cmp)
+        self.cmp_metric_combo.connect("changed", self._on_cmp_metric_changed)
+        self.cmp_metric_combo.update_property(
+            [Gtk.AccessibleProperty.LABEL],
+            ["Comparison metric"],
+        )
+        row.append(self.cmp_metric_combo)
+        self._legend_menu = Gtk.MenuButton(label="0 selected")
+        self._legend_menu.set_tooltip_text("Activities and line colors in this comparison")
+        popover = Gtk.Popover()
+        self._legend_popup_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        popover.set_child(self._legend_scroller(self._legend_popup_box))
+        self._legend_menu.set_popover(popover)
+        row.append(self._legend_menu)
+        controls.append(row)
+        self._legend_inline_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        self._legend_inline = self._legend_scroller(self._legend_inline_box)
+        controls.append(self._legend_inline)
 
-        cmp_frame = Gtk.Frame()
         self._cmp_chart = CompareChart()
         self._cmp_ax = self._cmp_chart.axes
-
-        # Initial style (HR as default)
-        self._cmp_chart.style(
-            self.app.chart_theme,
-            zones=self.app.calculate_hr_zones(),
-        )
-        self._cmp_ax.set_xlabel("Time (s)", color=self.app.chart_theme.foreground)
-        # Y label will be set by _redraw_compare_chart() based on metric
-
+        self._cmp_chart.style(self.app.chart_theme, zones=self.app.calculate_hr_zones())
         self._cmp_canvas = self._cmp_chart.canvas
-        cmp_frame.set_child(self._cmp_canvas)
-        compare_box.append(cmp_frame)
-        return compare_box
+        self._compare_plot = Gtk.Stack()
+        self._compare_plot.set_vexpand(True)
+        self._compare_plot.set_hexpand(True)
+        self._compare_plot.add_named(self._cmp_canvas, "chart")
+        self._compare_message = Gtk.Label(label="Select activities to compare.", wrap=True)
+        self._compare_message.set_wrap_mode(Pango.WrapMode.WORD_CHAR)
+        self._compare_message.set_justify(Gtk.Justification.CENTER)
+        self._compare_message.set_margin_start(12)
+        self._compare_message.set_margin_end(12)
+        self._compare_plot.add_named(self._compare_message, "message")
+        self._compare_plot.set_visible_child_name("message")
+        frame = Gtk.Frame()
+        frame.set_hexpand(True)
+        frame.set_vexpand(True)
+        frame.set_child(self._compare_plot)
+        return controls, frame
+
+    @staticmethod
+    def _legend_scroller(child: Gtk.Widget) -> Gtk.ScrolledWindow:
+        """Keep comparison identities readable within a bounded scroll area."""
+        scroller = Gtk.ScrolledWindow()
+        scroller.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        scroller.set_min_content_height(64)
+        scroller.set_max_content_height(320)
+        scroller.set_propagate_natural_height(True)
+        scroller.set_vexpand(True)
+        scroller.set_child(child)
+        return scroller
 
     def build_page(self) -> Gtk.Widget:
-        """Build and return the history and comparison tabs."""
-        outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
-        outer.set_margin_top(12)
-        outer.set_margin_bottom(12)
-        outer.set_margin_start(4)
-        outer.set_margin_end(4)
-
-        top_controls = self._build_history_controls()
-        outer.append(top_controls)
-
+        """Build history with one portrait scroll area or independent landscape panes."""
+        self._top_controls = self._build_history_controls()
         self.summary_box = self._build_summary_header()
-        outer.append(self.summary_box)
-
-        self.stack = Adw.ViewStack()
-        self.stack.set_vexpand(True)
-        self._top_controls = top_controls
-        self.stack.connect("notify::visible-child-name", self._on_stack_page_changed)
-
-        activities_box = self._build_activities_tab()
-        compare_box = self._build_compare_tab()
-
-        page = self.stack.add_titled(activities_box, "activities", "Activities")
-        page.set_icon_name("view-list-symbolic")
-
-        page = self.stack.add_titled(compare_box, "compare", "Compare")
-        page.set_icon_name("media-playlist-consecutive-symbolic")
-
-        # Switcher for small screens
-        switch = Adw.ViewSwitcherBar()
-        switch.set_stack(self.stack)
-        switch.set_reveal(True)
-
-        outer.append(self.stack)
-        outer.append(switch)
-
-        # Initial load
+        sidebar = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        sidebar.append(self._top_controls)
+        sidebar.append(self.summary_box)
+        activities = self._build_activities_tab()
+        controls, frame = self._build_compare_tab()
+        self.layout = HistoryLayout(
+            sidebar=sidebar,
+            activities=activities,
+            summary_metrics=self._summary_metrics,
+            compare_controls=controls,
+            compare_frame=frame,
+            legend=self._legend_inline,
+            legend_menu=self._legend_menu,
+            chart=cast("CompareChart", self._cmp_chart),
+        )
+        self.stack = self.layout.stack
         GLib.idle_add(self._reload_everything)
-        return outer
-
-    def _on_stack_page_changed(
-        self,
-        stack: Adw.ViewStack,
-        _pspec: object,
-    ) -> None:
-        is_compare = stack.get_visible_child_name() == "compare"
-        self._top_controls.set_visible(not is_compare)
-        self.summary_box.set_visible(not is_compare)
+        return self.layout
 
     # ---- Summary header (totals) ----
     def _build_summary_header(self) -> Gtk.Widget:
+        """Build the activity count and aggregate metrics for the current view."""
         frame = Gtk.Frame()
-        grid = Gtk.Grid(column_spacing=6, row_spacing=6)
-        for margin in ("top", "bottom"):
-            getattr(grid, f"set_margin_{margin}")(6)
-
-        for margin in ("start", "end"):
-            getattr(grid, f"set_margin_{margin}")(4)
-
-        self.lbl_scope = Gtk.Label(label="In view:")
-        self.lbl_scope.set_xalign(0)
-
-        self.lbl_total_acts = Gtk.Label(label="0 activities")
-        self.lbl_total_acts.set_xalign(0)
-        self.lbl_total_dur = Gtk.Label(label="0:00")
-        self.lbl_total_dur.set_xalign(0)
-        self.lbl_total_dist = Gtk.Label(label="—")
-        self.lbl_total_dist.set_xalign(0)
-        self.lbl_avg_hr = Gtk.Label(label="—")
-        self.lbl_avg_hr.set_xalign(0)
-
-        grid.attach(self.lbl_scope, 0, 0, 1, 1)
-        grid.attach(self.lbl_total_acts, 1, 0, 1, 1)
-        grid.attach(Gtk.Label(label="Time:"), 0, 1, 1, 1)
-        grid.attach(self.lbl_total_dur, 1, 1, 1, 1)
-        grid.attach(Gtk.Label(label="Distance:"), 0, 2, 1, 1)
-        grid.attach(self.lbl_total_dist, 1, 2, 1, 1)
-        grid.attach(Gtk.Label(label="Avg HR:"), 0, 3, 1, 1)
-        grid.attach(self.lbl_avg_hr, 1, 3, 1, 1)
-
-        frame.set_child(grid)
+        body = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        for side in ("top", "bottom", "start", "end"):
+            getattr(body, f"set_margin_{side}")(6)
+        heading = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        self.lbl_scope = Gtk.Label(label="In view:", xalign=0, wrap=True)
+        self.lbl_scope.set_wrap_mode(Pango.WrapMode.WORD_CHAR)
+        self.lbl_total_acts = Gtk.Label(label="0 activities", xalign=0, wrap=True)
+        self.lbl_total_acts.set_wrap_mode(Pango.WrapMode.WORD_CHAR)
+        heading.append(self.lbl_scope)
+        body.append(heading)
+        self._summary_metrics = Gtk.FlowBox()
+        self._summary_metrics.set_selection_mode(Gtk.SelectionMode.NONE)
+        self._summary_metrics.set_homogeneous(True)
+        self._summary_metrics.set_min_children_per_line(2)
+        self._summary_metrics.set_max_children_per_line(2)
+        self.lbl_total_dur = Gtk.Label(label="0:00", xalign=0)
+        self.lbl_total_dist = Gtk.Label(label="—", xalign=0)
+        self.lbl_avg_hr = Gtk.Label(label="—", xalign=0)
+        for name, value in (
+            ("Activities", self.lbl_total_acts),
+            ("Time", self.lbl_total_dur),
+            ("Distance", self.lbl_total_dist),
+            ("Avg HR", self.lbl_avg_hr),
+        ):
+            cell = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+            caption = Gtk.Label(label=name, xalign=0)
+            caption.add_css_class("caption")
+            caption.add_css_class("dim-label")
+            value.add_css_class("history-summary-value")
+            value.set_wrap(True)
+            value.set_wrap_mode(Pango.WrapMode.WORD_CHAR)
+            cell.append(caption)
+            cell.append(value)
+            self._summary_metrics.insert(cell, -1)
+        body.append(self._summary_metrics)
+        frame.set_child(body)
         return frame
 
     # ---- Event handlers ----
-    def _on_filter_changed(self, combo: Gtk.ComboBoxText) -> None:
-        self.filter_id = combo.get_active_id()
+    def _on_filter_changed(self, combo: HistoryChoice) -> None:
+        """Reload history when a valid activity filter is selected."""
+        choice = combo.get_active_id()
+        if choice is None:
+            return
+        self.filter_id = choice
         GLib.idle_add(self._reload_everything)
 
-    def _on_sort_changed(self, combo: Gtk.ComboBoxText) -> None:
-        self.sort_id = combo.get_active_id()
+    def _on_sort_changed(self, combo: HistoryChoice) -> None:
+        """Reorder displayed activities using the selected sort choice."""
+        choice = combo.get_active_id()
+        if choice is None:
+            return
+        self.sort_id = choice
         GLib.idle_add(self._resort_and_rebind)
 
-    def _on_cmp_metric_changed(self, combo: Gtk.ComboBoxText) -> None:
+    def _on_cmp_metric_changed(self, combo: HistoryChoice) -> None:
+        """Rebuild comparison data for the selected metric."""
         if self._updating_cmp_metric_combo:
             return
-        self._cmp_metric_id = combo.get_active_id()
+        choice = combo.get_active_id()
+        if choice is None:
+            return
+        self._cmp_metric_id = choice
         self._redraw_compare_chart()
 
     # ---- Data fetchers ----
@@ -499,13 +505,14 @@ class HistoryPageUI:
 
     # ---- Bind summary ----
     def _bind_summary(self, rows: list[ActivityStatsRow]) -> None:
+        """Show aggregates for selected activities or the entire filtered view."""
         if self.lbl_scope is None:
             return
         subset = (
             [r for r in rows if r.activity_id in self.selected_ids] if self.selected_ids else rows
         )
         self.lbl_scope.set_text("Selected:" if self.selected_ids else "In view:")
-        self.lbl_total_acts.set_text(f"{len(subset)} activities")
+        self.lbl_total_acts.set_text(str(len(subset)))
 
         total_dur = sum(r.duration_s or 0 for r in subset)
         self.lbl_total_dur.set_text(
@@ -559,47 +566,49 @@ class HistoryPageUI:
             self._listbox.append(row)
 
     def _append_activity_header(self, box: Gtk.Box, stats: ActivityStatsRow) -> None:
-        """Append the title, export action, and compare toggle to an activity row."""
-        # Header line: date/time + compare toggle
-        head = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        """Keep the full date above the activity's metrics and actions."""
         local_start = _tz_aware_localize(stats.start_time)
         title = Gtk.Label(label=local_start.strftime("%a, %b %d • %I:%M %p"))
         _configure_activity_title(title)
-        head.append(title)
+        title.set_tooltip_text(local_start.strftime("%Y-%m-%d %H:%M:%S %Z"))
+        box.append(title)
 
-        # Export button
-        export_btn = Gtk.Button.new_with_label("Export")
-        export_btn.add_css_class("flat")
-        export_btn.set_has_frame(False)
-        export_btn.set_tooltip_text("Export this activity to a TCX file")
-        export_btn.connect(
-            "clicked",
-            lambda _b, aid=stats.activity_id: self._on_export_clicked(aid),
-        )
-        head.append(export_btn)
-
-        chk = Gtk.CheckButton()
+    def _append_activity_actions(
+        self,
+        box: Gtk.Box,
+        stats: ActivityStatsRow,
+        samples: list[tuple[int, int]],
+    ) -> None:
+        """Keep compare selection and export separate from each other."""
+        footer = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        spark = self._build_sparkline(samples)
+        filler = spark if spark is not None else Gtk.Box()
+        filler.set_hexpand(True)
+        footer.append(filler)
+        chk = Gtk.CheckButton(label="Compare")
         chk.set_active(stats.activity_id in self.selected_ids)
-        chk.set_tooltip_text("Select for Compare")
+        chk.set_tooltip_text("Include this activity in the comparison")
+        chk.update_property(
+            [Gtk.AccessibleProperty.LABEL],
+            [f"Compare activity from {_tz_aware_localize(stats.start_time):%Y-%m-%d %H:%M}"],
+        )
         chk.connect(
             "toggled",
-            lambda cb, aid=stats.activity_id: self._on_select_toggle(
+            lambda current, aid=stats.activity_id: self._on_select_toggle(
                 aid,
-                active=cb.get_active(),
+                active=current.get_active(),
             ),
         )
-        head.append(chk)
-        box.append(head)
-
-        # Add a click gesture to the whole row box
-        gesture = Gtk.GestureClick.new()
-        gesture.connect(
-            "released",
-            lambda _g, _n, _x, _y, cb=chk: cb.set_active(
-                not cb.get_active(),
-            ),
+        footer.append(chk)
+        export_btn = Gtk.Button.new_from_icon_name("document-save-symbolic")
+        export_btn.set_tooltip_text("Export this activity to a TCX file")
+        export_btn.update_property([Gtk.AccessibleProperty.LABEL], ["Export activity as TCX"])
+        export_btn.connect(
+            "clicked",
+            lambda _button, aid=stats.activity_id: self._on_export_clicked(aid),
         )
-        box.add_controller(gesture)
+        footer.append(export_btn)
+        box.append(footer)
 
     def _activity_metric_parts(
         self,
@@ -656,7 +665,7 @@ class HistoryPageUI:
         metrics_lbl = Gtk.Label(label="  ·  ".join(parts))
         metrics_lbl.add_css_class("dim-label")
         metrics_lbl.set_wrap(True)
-        metrics_lbl.set_wrap_mode(Pango.WrapMode.WORD)
+        metrics_lbl.set_wrap_mode(Pango.WrapMode.WORD_CHAR)
         metrics_lbl.set_xalign(0)
         metrics_lbl.set_can_focus(False)
         metrics_lbl.set_focusable(False)
@@ -668,6 +677,7 @@ class HistoryPageUI:
         stats: ActivityStatsRow,
         heart_rate_series: list[tuple[int, int]],
     ) -> Gtk.ListBoxRow:
+        """Build an activity card with metrics, comparison selection, and export."""
         sport = SportTypesEnum(stats.sport_type_id)
         row = Gtk.ListBoxRow()
         frame = Gtk.Frame()
@@ -680,10 +690,7 @@ class HistoryPageUI:
         self._append_activity_header(box, stats)
         self._append_activity_metrics(box, stats, sport)
 
-        # Tiny sparkline (HR)
-        spark = self._build_sparkline(heart_rate_series)
-        if spark:
-            box.append(spark)
+        self._append_activity_actions(box, stats, heart_rate_series)
 
         frame.set_child(box)
         row.set_child(frame)
@@ -699,6 +706,12 @@ class HistoryPageUI:
         ys = [bpm for _timestamp_ms, bpm in samples]
 
         sparkline = Sparkline(xs, ys, self.app.chart_theme)
+        sparkline.canvas.set_size_request(40, -1)
+        sparkline.canvas.add_css_class("history-sparkline")
+        sparkline.canvas.update_property(
+            [Gtk.AccessibleProperty.LABEL],
+            ["Heart rate during activity"],
+        )
         self._sparkline_charts.append(sparkline)
         return sparkline.canvas
 
@@ -724,6 +737,7 @@ class HistoryPageUI:
             self._compare_job = None
 
     def _redraw_compare_chart(self) -> None:
+        """Request comparison data for the current selection and metric."""
         if self._cmp_ax is None or self._cmp_canvas is None:
             return
         ax = self._cmp_ax
@@ -732,7 +746,7 @@ class HistoryPageUI:
         # Draw HR zones only for the HR metric
         hr_mode = self._cmp_metric_id == "hr"
         self._apply_chart_style(ax, draw_hr_zones=hr_mode)
-        ax.set_xlabel("Time (s)", color=self.app.chart_theme.foreground)
+        ax.set_xlabel("Elapsed time", color=self.app.chart_theme.foreground)
         canvas.draw_idle()
 
         self._compare_generation += 1
@@ -797,11 +811,37 @@ class HistoryPageUI:
         )
 
     def _render_compare_message(self, message: str) -> None:
-        if self._cmp_ax is not None:
-            self._cmp_ax.set_title(message, color=self.app.chart_theme.foreground)
+        """Replace the comparison plot with an explanatory message."""
+        self._compare_message.set_text(message)
+        self._compare_plot.set_visible_child_name("message")
+        self._set_compare_legend([])
+
+    def _set_compare_legend(self, items: list[tuple[str, str]]) -> None:
+        """Expose line identities without placing long legends over the data."""
+        self._compare_legend_items = items
+        count = sum(row.activity_id in self.selected_ids for row in self._displayed)
+        self._legend_menu.set_label(f"{count} selected")
+        for box in (self._legend_inline_box, self._legend_popup_box):
+            while child := box.get_first_child():
+                box.remove(child)
+            for title, color in items:
+                label = Gtk.Label(xalign=0, wrap=True)
+                label.set_wrap_mode(Pango.WrapMode.WORD_CHAR)
+                label.set_max_width_chars(28)
+                label.set_markup(
+                    f'<span foreground="{color}">━</span> {GLib.markup_escape_text(title)}',
+                )
+                label.update_property([Gtk.AccessibleProperty.LABEL], [title])
+                box.append(label)
+            if not items and count == 0:
+                label = Gtk.Label(label="Select activities on the Activities tab.", wrap=True)
+                label.set_wrap_mode(Pango.WrapMode.WORD_CHAR)
+                label.set_max_width_chars(24)
+                box.append(label)
 
     def _render_compare_chart(self, data: CompareChartData) -> None:
-        if self._cmp_ax is None or self._cmp_canvas is None:
+        """Render prepared series with external legends and consistent scaling."""
+        if self._cmp_ax is None or self._cmp_canvas is None or self._cmp_chart is None:
             return
         ax = self._cmp_ax
         canvas = self._cmp_canvas
@@ -813,20 +853,19 @@ class HistoryPageUI:
         def mmss(x: float, _pos: float) -> str:
             return format_duration(x, DurationStyle.COUNTDOWN, pad_minutes=False)
 
+        legend_items = []
         for series in data.series:
             label = _tz_aware_localize(series.start_time).strftime("%Y-%m-%d %H:%M")
             plot_ys = [float("nan") if y is None else y for y in series.ys]
-            ax.plot(series.xs, plot_ys, lw=2, label=label)
+            (line,) = ax.plot(series.xs, plot_ys, lw=2, label=label)
+            legend_items.append((label, to_hex(line.get_color())))
 
         if data.max_time_s > 0:
             ax.set_xlim(0, data.max_time_s)
             ax.xaxis.set_major_formatter(FuncFormatter(mmss))
-            leg = ax.legend(loc="lower right", frameon=True, ncol=1)
-            leg.get_frame().set_facecolor(self.app.chart_theme.background)
-            leg.get_frame().set_edgecolor(self.app.chart_theme.grid)
-            for text in leg.get_texts():
-                text.set_color(self.app.chart_theme.foreground)
 
+        self._set_compare_legend(legend_items)
+        self._compare_plot.set_visible_child_name("chart")
         ylabels = {
             "hr": "BPM",
             "pace": f"Pace (min/{unit_label('pace', self.app.unit_system)})",
@@ -841,6 +880,7 @@ class HistoryPageUI:
 
         if data.metric == "pace":
             ax.invert_yaxis()
+        self._cmp_chart.set_display_scale(self.layout.chart_display_scale)
         canvas.draw_idle()
 
     # Export

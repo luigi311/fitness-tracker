@@ -24,6 +24,33 @@ class TargetDomain(StrEnum):
     HEART_RATE = "heart_rate"
 
 
+def format_target_deviation(
+    domain: TargetDomain,
+    current: float,
+    low: float,
+    high: float,
+    unit_system: UnitSystem,
+) -> str:
+    """Describe distance from the nearest target edge, using speed for pace membership."""
+    if domain is TargetDomain.NONE:
+        return "No target"
+    boundary = max(low, min(high, current))
+    delta = current - boundary
+    if delta == 0:
+        return "In target"
+    if domain is TargetDomain.PACE:
+        if current <= 0 or boundary <= 0:
+            return "Below target · not moving"
+        distance = 1000 if unit_system is UnitSystem.METRIC else 1609.344
+        seconds = abs(distance / current - distance / boundary)
+        return (
+            f"{max(1, round(seconds))} s/{unit_label('pace', unit_system)} "
+            f"{'slower' if delta < 0 else 'faster'}"
+        )
+    unit = "W" if domain is TargetDomain.POWER else "bpm"
+    return f"{max(1, round(abs(delta)))} {unit} {'below' if delta < 0 else 'above'}"
+
+
 class PebbleTargetKind(IntEnum):
     """Wire values used to describe the active workout target to Pebble."""
 

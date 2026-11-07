@@ -9,16 +9,18 @@ from gi.repository import Gtk  # noqa: E402  # ty:ignore[unresolved-import]
 
 
 class SessionTimer(Gtk.Frame):
-    """Display a session timer with an optional caption."""
+    """Display a session value with an optional caption."""
 
     def __init__(self, caption: str | None = None) -> None:
+        """Build the session timer value with its optional caption."""
         super().__init__()
         self.set_hexpand(True)
+        self.add_css_class("session-timer")
 
         if caption is None:
             box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-            box.set_margin_top(16)
-            box.set_margin_bottom(16)
+            box.set_margin_top(8)
+            box.set_margin_bottom(8)
             box.set_margin_start(4)
             box.set_margin_end(4)
             box.set_halign(Gtk.Align.CENTER)
@@ -30,15 +32,15 @@ class SessionTimer(Gtk.Frame):
             box.append(self.value)
         else:
             box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
-            box.set_margin_top(8)
-            box.set_margin_bottom(8)
+            box.set_margin_top(2)
+            box.set_margin_bottom(2)
             box.set_margin_start(4)
             box.set_margin_end(4)
 
             label = Gtk.Label(label=caption, xalign=0.0)
             label.add_css_class("dim-label")
             self.value = Gtk.Label(label="00:00", xalign=0.0)
-            self.value.add_css_class("title-1")
+            self.value.add_css_class("title-2")
             self.value.add_css_class("numeric")
             box.append(label)
             box.append(self.value)
@@ -46,5 +48,5 @@ class SessionTimer(Gtk.Frame):
         self.set_child(box)
 
     def set_text(self, text: str) -> None:
-        """Update the displayed time."""
+        """Update the displayed value."""
         self.value.set_text(text)

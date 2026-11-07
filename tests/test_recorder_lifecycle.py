@@ -1,4 +1,6 @@
-# ruff: noqa: E402, PT009, RUF006, SLF001
+"""Recorder and sensor lifecycle checks without hardware or UI services."""
+
+# ruff: noqa: PT009, RUF006, SLF001
 
 import asyncio
 import threading
@@ -8,14 +10,6 @@ import unittest
 from collections.abc import Callable
 from datetime import UTC, datetime
 from unittest.mock import ANY, Mock, patch
-
-# Recorder only needs these modules for UI callbacks. Stub them so its
-# event-loop lifecycle can be tested on headless systems without GTK typelibs.
-import gi
-import gi.repository
-
-gi.require_versions = lambda _versions: None
-gi.repository.Adw = types.SimpleNamespace()
 
 from bleaksport import HeartRateSample, TrainerSample
 from fitness_tracker.core.environment import Environment

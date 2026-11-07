@@ -6,11 +6,13 @@ from typing import TYPE_CHECKING
 
 import gi
 
+from fitness_tracker.core.sensor_status import SensorKind
+
 if TYPE_CHECKING:
-    from fitness_tracker.core.sensor_status import SensorKind, SensorStatus
+    from fitness_tracker.core.sensor_status import SensorStatus
 
 gi.require_version("Gtk", "4.0")
-from gi.repository import Gtk  # noqa: E402  # ty:ignore[unresolved-import]
+from gi.repository import Gtk, Pango  # noqa: E402  # ty:ignore[unresolved-import]
 
 
 class MetricTile(Gtk.Frame):
@@ -23,46 +25,55 @@ class MetricTile(Gtk.Frame):
         *,
         sensor: SensorKind | None = None,
     ) -> None:
+        """Build a live metric value, caption, unit, and source-status indicator."""
         super().__init__()
         self.sensor = sensor
+        self._connected = False
+        self._last_text = "—"
         self.set_hexpand(True)
-        self.set_size_request(120, -1)
+        self.set_size_request(100, -1)
 
-        inner = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        inner = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         inner.set_margin_top(4)
         inner.set_margin_bottom(4)
-        inner.set_margin_start(4)
-        inner.set_margin_end(4)
+        inner.set_margin_start(8)
+        inner.set_margin_end(8)
+        inner.set_valign(Gtk.Align.CENTER)
 
-        content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
-        self.value = Gtk.Label(label="0")
-        self.value.add_css_class("title-1")
+        self.label = Gtk.Label(label=title, xalign=0.0)
+        self.label.add_css_class("caption")
+        self.label.set_ellipsize(Pango.EllipsizeMode.END)
+        self.label.set_max_width_chars(12)
+        self.label.set_hexpand(True)
+
+        self.value = Gtk.Label(label="—")
+        self.value.add_css_class("metric-value")
         self.value.add_css_class("numeric")
         self.value.set_xalign(0.0)
+        self.value.set_ellipsize(Pango.EllipsizeMode.END)
+        self.value.set_max_width_chars(7)
 
-        details = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-        self.label = Gtk.Label(label=title, xalign=0.0)
-        self.label.add_css_class("dim-label")
         self.unit = Gtk.Label(label=unit or "", xalign=0.0)
         self.unit.add_css_class("dim-label")
+        self.unit.add_css_class("caption")
+        self.unit.set_valign(Gtk.Align.CENTER)
         self.unit.set_visible(bool(unit))
+        details = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
         details.append(self.label)
         details.append(self.unit)
+        inner.append(details)
+        inner.append(self.value)
 
-        content.append(self.value)
-        content.append(details)
+        self.dot = Gtk.Label(label="○ Offline", xalign=0.0)
+        self.dot.add_css_class("metric-status")
 
-        self.dot = Gtk.Label(label="⚫")
-        self.dot.set_xalign(1.0)
-
-        inner.append(content)
-        inner.append(Gtk.Box(hexpand=True))
         inner.append(self.dot)
         self.set_child(inner)
 
     def set_value(self, text: str) -> None:
         """Update the displayed metric value."""
-        self.value.set_text(text)
+        self._last_text = text
+        self.value.set_text(text if self._connected or self.sensor is SensorKind.DISTANCE else "—")
 
     def set_unit(self, text: str) -> None:
         """Update and show or hide the metric unit."""
@@ -71,8 +82,19 @@ class MetricTile(Gtk.Frame):
 
     def set_status(self, *, connected: bool, tooltip: str | None = None) -> None:
         """Update the connection indicator and disconnected-value styling."""
-        self.dot.set_text("🟢" if connected else "⚫")
+        self._connected = connected
+        self.set_value(self._last_text)
+        self.dot.set_text("● Live" if connected else "○ Offline")
+        if connected:
+            self.dot.add_css_class("metric-live")
+        else:
+            self.dot.remove_css_class("metric-live")
         self.dot.set_tooltip_text(tooltip or None)
+        self.set_tooltip_text(tooltip or None)
+        self.dot.update_property(
+            [Gtk.AccessibleProperty.LABEL],
+            [tooltip or ("Sensor connected" if connected else "Sensor not connected")],
+        )
         opacity = 1.0 if connected else 0.55
         self.value.set_opacity(opacity)
         self.unit.set_opacity(opacity)

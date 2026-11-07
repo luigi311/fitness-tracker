@@ -61,6 +61,12 @@ class _HeadlessBox(_HeadlessWidget):
 
 
 class _HeadlessFlowBox(_HeadlessBox):
+    def set_min_children_per_line(self, _count: int) -> None:
+        """Accept minimum column hints without allocating a native GTK grid."""
+
+    def set_max_children_per_line(self, _count: int) -> None:
+        """Accept maximum column hints without allocating a native GTK grid."""
+
     def insert(self, child: object, _position: int) -> None:
         self.children.append(child)
 
@@ -198,6 +204,7 @@ def _load_headless_ui_classes(
         FlowBox=_HeadlessFlowBox,
         Label=_HeadlessLabel,
         SelectionMode=types.SimpleNamespace(NONE="none"),
+        ToggleButton=_HeadlessWidget,
     )
 
     monkeypatch.setattr(gi, "require_versions", lambda _versions: None)
@@ -261,11 +268,8 @@ class _LocationView:
     profile_ready = True
 
     def __init__(self) -> None:
-        self.statuses: list[str] = []
+        """Initialize the recorded session-state transitions."""
         self.states: list[SessionState] = []
-
-    def set_location_status(self, status: str) -> None:
-        self.statuses.append(status)
 
     def set_state(self, state: SessionState) -> None:
         self.states.append(state)
@@ -289,6 +293,7 @@ class _LocationRecorder:
 def _tracker_for_location_tests(
     tracker_page_ui: type,
 ) -> tuple[object, _LocationView, _LocationRecorder, list[str]]:
+    """Build an outdoor session controller with observable recorder and notice doubles."""
     view = _LocationView()
     recorder = _LocationRecorder()
     toasts: list[str] = []
@@ -302,7 +307,6 @@ def _tracker_for_location_tests(
     page.session_view = view
     page._session_state = SessionState.PREVIEW
     page._active_environment = Environment.OUTDOOR
-    page._location_had_tracking = False
     page._location_error_notified = False
     page._start_requested = False
     page._workout_session = None
@@ -329,7 +333,8 @@ def test_indoor_location_warning_copy_is_present(headless_ui_classes) -> None:
     assert "may reveal your home location" in indoor_row.subtitle
 
 
-def test_location_status_transitions_do_not_block_session_start(headless_ui_classes) -> None:
+def test_location_transitions_do_not_block_session_start(headless_ui_classes) -> None:
+    """Allow recording to start independently of the outdoor location lifecycle."""
     tracker_page_ui, _location_section, _session_view = headless_ui_classes
     page, view, recorder, toasts = _tracker_for_location_tests(tracker_page_ui)
 
@@ -348,6 +353,7 @@ def test_location_status_transitions_do_not_block_session_start(headless_ui_clas
 
 
 def test_outdoor_permission_error_notifies_once(headless_ui_classes) -> None:
+    """Report location permission failure once without changing session state."""
     tracker_page_ui, _location_section, _session_view = headless_ui_classes
     page, view, _recorder, toasts = _tracker_for_location_tests(tracker_page_ui)
 
@@ -360,66 +366,14 @@ def test_outdoor_permission_error_notifies_once(headless_ui_classes) -> None:
         page.on_location_state(state, None)  # ty:ignore[unresolved-attribute]
 
     assert toasts == ["Location permission denied"]
-    assert view.statuses[-1] == "Location unavailable"
-
-
-def test_location_status_visibility_follows_resolved_policy(headless_ui_classes) -> None:
-    tracker_page_ui, _location_section, _session_view = headless_ui_classes
-    page = tracker_page_ui.__new__(tracker_page_ui)
-    page.app = SimpleNamespace(
-        app_settings=SimpleNamespace(
-            location=SimpleNamespace(
-                record_outdoor_routes=True,
-                record_indoor_anchor=False,
-                indoor_accuracy="neighborhood",
-            ),
-        ),
-    )
-
-    class _CapturingSessionView:
-        def __init__(self, **kwargs: object) -> None:
-            self.location_enabled = kwargs["location_enabled"]
-
-    tracker_globals = tracker_page_ui._make_session_view.__globals__
-    original_session_view = tracker_globals["SessionView"]
-    tracker_globals["SessionView"] = _CapturingSessionView
-    try:
-        indoor_view = page._make_session_view(
-            SportTypesEnum.running,
-            Environment.INDOOR,
-            title="Run",
-            workout=False,
-        )
-        outdoor_view = page._make_session_view(
-            SportTypesEnum.running,
-            Environment.OUTDOOR,
-            title="Run",
-            workout=False,
-        )
-    finally:
-        tracker_globals["SessionView"] = original_session_view
-
-    assert indoor_view.location_enabled is False
-    assert outdoor_view.location_enabled is True
-
-
-def test_session_view_applies_location_status_visibility(headless_ui_classes) -> None:
-    _tracker_page_ui, _location_section, session_view = headless_ui_classes
-
-    def build_metric_strip(*, location_enabled: bool) -> bool:
-        view = session_view.__new__(session_view)
-        view.children = []
-        view._build_metric_strip(location_enabled=location_enabled)
-        return view.location_status.visible
-
-    assert build_metric_strip(location_enabled=False) is False
-    assert build_metric_strip(location_enabled=True) is True
+    assert view.states == []
 
 
 def test_stop_requires_configured_hold_duration_and_cancels_on_focus_loss(
     headless_ui_classes,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Require the full stop hold and cancel progress when focus leaves the action."""
     _tracker_page_ui, _location_section, session_view = headless_ui_classes
     now = [10.0]
     removed_sources: list[int] = []
@@ -431,6 +385,7 @@ def test_stop_requires_configured_hold_duration_and_cancels_on_focus_loss(
     view._on_stop = stop
     view._stop_hold_started_at = None
     view._stop_hold_source_id = None
+    view._stop_hold_geometry = lambda: (0, 0, 100, 48)
     view.btn_stop = button
     view._stop_progress = progress
     method_globals = session_view._begin_stop_hold.__globals__
@@ -469,6 +424,40 @@ def test_stop_requires_configured_hold_duration_and_cancels_on_focus_loss(
     stop.assert_called_once_with()
     assert progress.set_fraction.call_args.args == (1.0,)
     assert button.set_sensitive.call_args.args == (False,)
+
+
+@pytest.mark.parametrize(
+    "position",
+    [(True, -1, 24), (True, 101, 24), (True, 50, -1), (True, 50, 49), (False, 50, 24)],
+)
+def test_stop_cancels_outside_pressed_bounds_even_without_a_leave_event(
+    headless_ui_classes,
+    monkeypatch,
+    position,
+):
+    """Cancel holds outside the stop bounds even when pointer grabs suppress leave events."""
+    _, _, session_view = headless_ui_classes
+    now = [10.0]
+    view = session_view.__new__(session_view)
+    view._on_stop = Mock()
+    view._stop_hold_started_at = None
+    view._stop_hold_source_id = None
+    view._stop_hold_geometry = lambda: (0, 0, 100, 48)
+    view.btn_stop = Mock(get_width=lambda: 100, get_height=lambda: 48)
+    view._stop_progress = Mock()
+    gesture = Mock()
+    gesture.get_point.return_value = (True, 50, 24)
+    monkeypatch.setitem(session_view._begin_stop_hold.__globals__, "monotonic", lambda: now[0])
+    view._begin_stop_hold(gesture)
+    gesture.get_point.return_value = position
+    now[0] += 2
+
+    assert view._update_stop_hold() is False
+    assert view._stop_hold_started_at is None
+    view._stop_progress.set_fraction.assert_called_with(0.0)
+    gesture.get_point.return_value = (True, 50, 24)
+    view._end_stop_hold()
+    view._on_stop.assert_not_called()
 
 
 def test_tracker_averages_exclude_preview_pause_and_reset_each_step(headless_ui_classes) -> None:
@@ -594,6 +583,49 @@ def test_workout_unit_changes_refresh_remaining_and_next_without_advancing(
         assert page._session_state is session_state
 
 
+def test_step_position_follows_preview_automatic_progress_and_paused_navigation(
+    headless_ui_classes,
+):
+    """Update the displayed step through preview, progression, and paused navigation."""
+    from fitness_tracker.core.live_metrics import LiveMetrics  # noqa: PLC0415
+    from fitness_tracker.core.settings import PersonalSettings  # noqa: PLC0415
+    from fitness_tracker.core.units import UnitSystem  # noqa: PLC0415
+    from fitness_tracker.core.workout_session import WorkoutSession  # noqa: PLC0415
+    from fitness_tracker.workout_execution import (  # noqa: PLC0415
+        WorkoutDistanceAccumulator,
+        WorkoutExecution,
+    )
+    from workout_parser import TimeDuration, WorkoutStep  # noqa: PLC0415
+
+    tracker_type, _, _ = headless_ui_classes
+    page, _, _, _ = _tracker_for_location_tests(tracker_type)
+    page.app.recorder = None
+    page.app.unit_system = UnitSystem.METRIC
+    page.app.app_settings = SimpleNamespace(personal=PersonalSettings())
+    page.app.calculate_hr_zones = dict
+    page.app.show_workout_step_notification = Mock()
+    page.session_view = Mock(sport_type=SportTypesEnum.running)
+    page._live_metrics = LiveMetrics()
+    steps = [WorkoutStep(duration=TimeDuration(seconds=10)) for _ in range(3)]
+    page._workout_session = WorkoutSession(
+        workout=None,
+        steps=steps,
+        execution=WorkoutExecution(steps),
+        distance_accumulator=WorkoutDistanceAccumulator(),
+    )
+    page._update_workout_execution(0)
+    page.session_view.set_step_position.assert_called_with(1, len(steps))
+    page._session_state = SessionState.RUNNING
+    page._update_workout_execution(10)
+    page.session_view.set_step_position.assert_called_with(2, len(steps))
+    page._elapsed_display_s = 10
+    page._session_state = SessionState.PAUSED
+    page._skip_step(1)
+    page.session_view.set_step_position.assert_called_with(3, len(steps))
+    page._skip_step(-1)
+    page.session_view.set_step_position.assert_called_with(2, len(steps))
+
+
 @pytest.mark.usefixtures("headless_ui_classes")
 def test_workout_list_summaries_refresh_when_units_change(monkeypatch, tmp_path) -> None:
     from fitness_tracker.core.units import UnitSystem  # noqa: PLC0415
@@ -660,26 +692,6 @@ def test_independent_gps_and_bluetooth_samples_preserve_live_values(headless_ui_
     )
     page._update_live_motion_metrics(RunningSample(timestamp_ms=2000, speed_mps=0))
     assert page._live_metrics.speed_mps == 0
-
-
-def test_gps_metrics_keep_location_status_visible_with_routes_disabled(headless_ui_classes):
-    from fitness_tracker.core.settings import (  # noqa: PLC0415
-        AppSettings,
-        LocationSettings,
-        SensorSettings,
-    )
-
-    tracker_type, _, _ = headless_ui_classes
-    page = tracker_type.__new__(tracker_type)
-    page.app = SimpleNamespace(
-        app_settings=AppSettings(
-            location=LocationSettings(record_outdoor_routes=False),
-            running_sensors=SensorSettings(speed_source="gps"),
-        ),
-    )
-    assert page._location_enabled_for_environment(Environment.OUTDOOR, SportTypesEnum.running)
-    assert not page._location_enabled_for_environment(Environment.OUTDOOR, SportTypesEnum.biking)
-    assert not page._location_enabled_for_environment(Environment.INDOOR, SportTypesEnum.running)
 
 
 def test_new_session_drops_old_values_before_merging_gps_samples(headless_ui_classes):

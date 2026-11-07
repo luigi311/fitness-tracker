@@ -55,6 +55,22 @@ After installing the project with `uv sync`, the canonical application command i
 
 * **Settings Page**: Configure your settings and upload/download your sessions/workouts
 
+The session dashboard adapts to the window's logical size and aspect ratio. Tall
+phone windows stack guidance above a two-column metric grid; near-square windows
+put the gauge beside step details above a three-column grid. Landscape windows
+put guidance and metrics side by side. This supports compositor scaling as well
+as rotation, including the Comet's 1080×1240 panel at different scale factors.
+Recording actions stay visible while secondary content scrolls. Trainer
+adjustments appear directly when they fit and use expandable controls on compact
+layouts. Incline adjustments remain available in their expandable control.
+
+Workout guidance shows the current reading against its target band in the gauge.
+Every metric includes a visible Live or Offline source status, and disconnected
+target sensors hide the gauge reading and needle.
+
+For the layout policy and native GTK verification commands, see
+[responsive UI notes](docs/responsive-ui.md).
+
 PR CI captures before/after images for six pages across Librem 5, Mecha Comet,
 and tablet layouts. See [PR screenshot generation](docs/pr-ui-screenshots.md).
 

@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from math import ceil
 from typing import TYPE_CHECKING
 
 import gi
 import numpy as np
 from matplotlib.backends.backend_gtk4agg import FigureCanvasGTK4Agg as FigureCanvas
 from matplotlib.figure import Figure
+from matplotlib.ticker import MultipleLocator
 
 from fitness_tracker.core.zones import hex_to_rgb
 
@@ -57,6 +59,8 @@ class LiveChart:
         resting_hr: float,
         max_hr: float,
     ) -> None:
+        """Create the live heart-rate and power chart with shared theme styling."""
+        self._display_scale = 1.0
         self.figure = Figure(figsize=(6, 3), dpi=96)
         self.hr_axes = self.figure.add_subplot(111)
         self.power_axes = self.hr_axes.twinx()
@@ -71,7 +75,33 @@ class LiveChart:
         (self.line_hr,) = self.hr_axes.plot([], [], lw=2, zorder=2)
         self.canvas = FigureCanvas(self.figure)
         self.canvas.set_vexpand(True)
+        self.canvas.set_focusable(False)
+        self.canvas.set_focus_on_click(False)
+        self.canvas.connect("resize", self._on_resize)
+        self.figure.subplots_adjust(left=0.15, right=0.85, bottom=0.22, top=0.94)
         self.refresh_theme(theme, zones, resting_hr=resting_hr, max_hr=max_hr)
+
+    def _on_resize(self, _canvas: Gtk.Widget, width: int, height: int) -> None:
+        """Reserve label space on resize without a layout solver on every redraw."""
+        self.figure.subplots_adjust(
+            left=min(0.25, 44 * self._display_scale / max(1, width)),
+            right=1 - min(0.25, 42 * self._display_scale / max(1, width)),
+            bottom=min(0.4, 48 * self._display_scale / max(1, height)),
+            top=1 - min(0.15, 12 * self._display_scale / max(1, height)),
+        )
+
+    def set_display_scale(self, scale: float) -> None:
+        """Keep chart labels as readable as the surrounding session text."""
+        self._display_scale = scale
+        for axes in (self.hr_axes, self.power_axes):
+            axes.tick_params(labelsize=10 * scale, pad=3.5 * scale)
+            for axis in (axes.xaxis, axes.yaxis):
+                axis.label.set_fontsize(10 * scale)
+                axis.labelpad = 4 * scale
+        for line in (self.line_hr, self.line_pw):
+            line.set_linewidth(2 * scale)
+        self._on_resize(self.canvas, self.canvas.get_width(), self.canvas.get_height())
+        self.canvas.draw_idle()
 
     def refresh_theme(
         self,
@@ -122,17 +152,51 @@ class LiveChart:
         self.power_axes.set_ylim(0, 500)
         for spine in self.power_axes.spines.values():
             spine.set_alpha(0.35)
-        self.canvas.draw_idle()
+        self.set_display_scale(self._display_scale)
 
 
 class CompareChart:
     """Matplotlib surface used for activity comparison."""
 
     def __init__(self) -> None:
-        self.figure = Figure(figsize=(6, 3), dpi=96, constrained_layout=True)
+        """Create a resizable chart surface for selected activity series."""
+        self._display_scale = 1.0
+        self.figure = Figure(figsize=(6, 3), dpi=96)
         self.axes = self.figure.add_subplot(111)
         self.canvas = FigureCanvas(self.figure)
         self.canvas.set_vexpand(True)
+        self.canvas.set_hexpand(True)
+        self.canvas.set_focusable(False)
+        self.canvas.set_focus_on_click(False)
+        self.canvas.connect("resize", self._on_resize)
+        self._on_resize(self.canvas, 600, 300)
+
+    def _on_resize(self, _canvas: Gtk.Widget, width: int, height: int) -> None:
+        """Fit axis labels and elapsed-time ticks to the available chart area."""
+        scale = self._display_scale
+        self.figure.subplots_adjust(
+            left=min(0.4, 64 * scale / max(1, width)),
+            right=1 - min(0.25, 32 * scale / max(1, width)),
+            bottom=min(0.45, 50 * scale / max(1, height)),
+            top=1 - min(0.15, 18 * scale / max(1, height)),
+        )
+        ticks = max(2, min(6, int(width / (100 * scale))))
+        interval = max(1, self.axes.get_xlim()[1]) / (ticks - 1)
+        steps = (1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600)
+        step = next((step for step in steps if step >= interval), 3600 * ceil(interval / 3600))
+        self.axes.xaxis.set_major_locator(MultipleLocator(step))
+
+    def set_display_scale(self, scale: float) -> None:
+        """Scale axes with the history density and reserve label space on resize."""
+        self._display_scale = scale
+        self.axes.tick_params(labelsize=10 * scale, pad=3.5 * scale)
+        for axis in (self.axes.xaxis, self.axes.yaxis):
+            axis.label.set_fontsize(10 * scale)
+            axis.labelpad = 4 * scale
+        for line in self.axes.lines:
+            line.set_linewidth(2 * scale)
+        self._on_resize(self.canvas, self.canvas.get_width(), self.canvas.get_height())
+        self.canvas.draw_idle()
 
     def style(self, theme: ChartTheme, *, zones: ZoneThresholds | None = None) -> None:
         """Apply the shared style to the comparison axes."""

@@ -13,7 +13,7 @@ from fitness_tracker.workouts import discover_workouts, format_workout_summary
 
 gi.require_versions({"Gtk": "4.0", "Adw": "1"})
 
-from gi.repository import Adw, Gdk, GLib, Gtk  # noqa: E402  # ty:ignore[unresolved-import]
+from gi.repository import Adw, Gdk, GLib, GObject, Gtk  # noqa: E402  # ty:ignore[unresolved-import]
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -61,21 +61,16 @@ def _make_badge(text: str, style_class: str) -> Gtk.Label:
     return lbl
 
 
-class _EnvCard(Gtk.Box):
-    """
-    A selectable environment card showing icon, name, and feature badges.
-
-    The outer box carries the border/background CSS and click gesture.
-    An inner box provides the content padding so margins never interfere
-    with border rendering — this is what was causing the sticky highlight.
-    """
+class _EnvCard(Gtk.ToggleButton):
+    """A keyboard-accessible environment toggle with an icon, name, and badges."""
 
     def __init__(
         self,
         environment: Environment,
         on_clicked: Callable[[Environment], None],
     ) -> None:
-        super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        """Build a selectable environment card with its icon and capability badges."""
+        super().__init__()
         self.environment = environment
 
         self.add_css_class("env-card")
@@ -83,17 +78,18 @@ class _EnvCard(Gtk.Box):
         self.set_cursor(Gdk.Cursor.new_from_name("pointer"))
 
         # Inner box holds the actual content with padding
-        inner = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        inner = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
         for m in ("top", "bottom"):
-            getattr(inner, f"set_margin_{m}")(12)
+            getattr(inner, f"set_margin_{m}")(6)
 
         for m in ("start", "end"):
             getattr(inner, f"set_margin_{m}")(4)
 
         inner.set_halign(Gtk.Align.CENTER)
-        self.append(inner)
+        self.set_child(inner)
 
         spec = _ENV_SPECS[environment]
+        self.update_property([Gtk.AccessibleProperty.LABEL], [spec.label])
         self._icon_lbl = Gtk.Label(label=spec.icon)
         self._icon_lbl.add_css_class("env-icon")
         inner.append(self._icon_lbl)
@@ -106,9 +102,7 @@ class _EnvCard(Gtk.Box):
         self._badge_box.set_halign(Gtk.Align.CENTER)
         inner.append(self._badge_box)
 
-        gesture = Gtk.GestureClick.new()
-        gesture.connect("released", lambda *_: on_clicked(environment))
-        self.add_controller(gesture)
+        self.connect("clicked", lambda *_: on_clicked(environment))
 
     def update_badges(self, sport_type: SportTypesEnum) -> None:
         for child in list(self._badge_box):
@@ -119,6 +113,8 @@ class _EnvCard(Gtk.Box):
             self._badge_box.append(_make_badge(badge.label, badge.css_class))
 
     def set_selected(self, *, selected: bool) -> None:
+        """Update the card selection state and its visual treatment."""
+        self.set_active(selected)
         # Always remove both classes first, unconditionally.
         self.remove_css_class("env-card-selected")
         self._name_lbl.remove_css_class("env-name-selected")
@@ -137,6 +133,7 @@ _CSS = b"""
     border-radius: 12px;
     background: transparent;
     border: 2px solid alpha(@borders, 0.6);
+    padding: 2px 4px;
 }
 .env-card-selected {
     border: 2px solid @accent_color;
@@ -195,9 +192,17 @@ _CSS = b"""
 }
 
 /* ---- Workout list ---- */
-.workout-frame > list > row {
-    padding: 4px 0;
+.workout-frame row {
+    padding: 0;
 }
+.mode-select.mini-setup { font-size: 0.666667em; }
+.mode-select.mini-setup button { min-height: 32px; padding: 0 6px; }
+.mode-select.mini-setup .env-card { padding: 1px 3px; }
+.mode-select.mini-setup .env-icon { font-size: 15px; }
+.mode-select.mini-setup .env-name { font-size: 9px; }
+.mode-select.mini-setup .badge { font-size: 7px; padding: 1px 5px; }
+.mode-select.mini-setup .section-label { font-size: 8px; }
+.mode-select.mini-setup .start-free-btn { font-size: 10px; padding: 0 6px; }
 """
 
 
@@ -238,10 +243,12 @@ class ModeSelectView(Gtk.Box):
         *,
         unit_system: UnitSystem,
     ) -> None:
-        super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        """Build adaptive sport, environment, and workout selection controls."""
+        super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         _ensure_css()
+        self.add_css_class("mode-select")
         for m in ("top", "bottom"):
-            getattr(self, f"set_margin_{m}")(12)
+            getattr(self, f"set_margin_{m}")(6)
 
         for m in ("start", "end"):
             getattr(self, f"set_margin_{m}")(4)
@@ -257,14 +264,79 @@ class ModeSelectView(Gtk.Box):
         self.sport_type: SportTypesEnum = SportTypesEnum.running
         self._selected_env = Environment.INDOOR
 
-        self.append(self._build_sport_switch())
+        self._setup = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        self._setup_pane = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        self._setup_pane.set_hexpand(True)
+        self._library = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        self._library.set_hexpand(True)
+        self._library.set_vexpand(True)
+        setup_scroll = Gtk.ScrolledWindow()
+        setup_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        setup_scroll.set_propagate_natural_height(True)
+        setup_scroll.set_child(self._setup)
+        setup_scroll.set_hexpand(True)
+        self._setup_pane.append(setup_scroll)
+        body = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        body.append(self._setup_pane)
+        body.append(self._library)
+        adaptive = Adw.BreakpointBin()
+        adaptive.set_size_request(200, 160)
+        adaptive.set_vexpand(True)
+        adaptive.set_child(body)
+        self.append(adaptive)
+        wide = Adw.Breakpoint.new(
+            Adw.BreakpointCondition.parse(
+                "min-width: 720sp or (min-width: 600sp and max-height: 440sp)",
+            ),
+        )
+        wide.add_setter(body, "orientation", Gtk.Orientation.HORIZONTAL)
+        wide.add_setter(body, "homogeneous", value=True)
+        wide.add_setter(setup_scroll, "vexpand", value=True)
+        adaptive.add_breakpoint(wide)
+
+        self._setup.append(self._build_sport_switch())
         self._build_environment_selector()
         self._build_start_button()
         self._build_workout_panel()
+        self._build_compact_breakpoints(adaptive, body, setup_scroll)
 
         # Defer initial population until after the widget is realized so the
         # CSS provider has been fully cascaded before set_selected() runs.
         self.connect("realize", lambda *_: self.refresh())
+
+    def _build_compact_breakpoints(
+        self,
+        adaptive: Adw.BreakpointBin,
+        body: Gtk.Box,
+        setup_scroll: Gtk.ScrolledWindow,
+    ) -> None:
+        """Keep environment selection and workout starts usable at 3x density."""
+        for condition, landscape in (
+            ("max-width: 279px", False),
+            ("min-width: 400px and max-width: 599px and max-height: 280px", True),
+        ):
+            compact = Adw.Breakpoint.new(Adw.BreakpointCondition.parse(condition))
+            compact.add_setter(
+                self,
+                "css-classes",
+                GObject.Value(GObject.TYPE_STRV, ["mode-select", "mini-setup"]),
+            )
+            for box in (body, self._setup, self._setup_pane, self._library):
+                compact.add_setter(box, "spacing", 5)
+            compact.add_setter(self, "margin-top", 4)
+            compact.add_setter(self, "margin-bottom", 4)
+            for button in (self._btn_run, self._btn_cycle):
+                compact.add_setter(button, "height-request", 32)
+            for card in self._env_cards.values():
+                inner = card.get_child()
+                compact.add_setter(inner, "spacing", 3)
+                compact.add_setter(inner, "margin-top", 4)
+                compact.add_setter(inner, "margin-bottom", 4)
+            if landscape:
+                compact.add_setter(body, "orientation", Gtk.Orientation.HORIZONTAL)
+                compact.add_setter(body, "homogeneous", value=True)
+                compact.add_setter(setup_scroll, "vexpand", value=True)
+            adaptive.add_breakpoint(compact)
 
     def _build_sport_switch(self) -> Gtk.Box:
         """Build the Run/Bike segmented switcher."""
@@ -274,9 +346,11 @@ class ModeSelectView(Gtk.Box):
 
         self._btn_run = Gtk.ToggleButton.new_with_label("Run")
         self._btn_cycle = Gtk.ToggleButton.new_with_label("Bike")
+        self._btn_cycle.set_group(self._btn_run)
         for b in (self._btn_run, self._btn_cycle):
             b.add_css_class("flat")
             b.set_hexpand(True)
+            b.set_size_request(-1, 48)
 
         self._btn_run.set_active(True)
         self._btn_run.connect("toggled", self._on_mode_toggled, SportTypesEnum.running)
@@ -291,7 +365,7 @@ class ModeSelectView(Gtk.Box):
         env_label = Gtk.Label(label="Environment")
         env_label.add_css_class("section-label")
         env_label.set_xalign(0)
-        self.append(env_label)
+        self._setup.append(env_label)
 
         card_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
         card_row.set_halign(Gtk.Align.FILL)
@@ -302,7 +376,7 @@ class ModeSelectView(Gtk.Box):
             self._env_cards[environment] = card
             card_row.append(card)
 
-        self.append(card_row)
+        self._setup.append(card_row)
 
     def _build_start_button(self) -> None:
         """Build the free-session start button."""
@@ -310,14 +384,14 @@ class ModeSelectView(Gtk.Box):
         self._btn_start_free.add_css_class("suggested-action")
         self._btn_start_free.add_css_class("start-free-btn")
         self._btn_start_free.connect("clicked", self._on_start_free_clicked)
-        self.append(self._btn_start_free)
+        self._setup_pane.append(self._btn_start_free)
 
     def _build_workout_panel(self) -> None:
         """Build the workout list and its scrolling frame."""
         workouts_label = Gtk.Label(label="Workouts")
         workouts_label.add_css_class("section-label")
         workouts_label.set_xalign(0)
-        self.append(workouts_label)
+        self._library.append(workouts_label)
 
         self._list = Gtk.ListBox()
         self._list.set_selection_mode(Gtk.SelectionMode.NONE)
@@ -330,7 +404,7 @@ class ModeSelectView(Gtk.Box):
         frame = Gtk.Frame()
         frame.add_css_class("workout-frame")
         frame.set_child(sc)
-        self.append(frame)
+        self._library.append(frame)
 
     def refresh(self) -> None:
         """Re-scan workouts dir and repopulate without duplicating UI."""

@@ -9,7 +9,7 @@ import cairo
 import gi
 
 gi.require_versions({"Gtk": "4.0", "Adw": "1"})
-from gi.repository import Gdk, Gtk, Pango, PangoCairo  # noqa: E402  # ty:ignore[unresolved-import]
+from gi.repository import Gdk, GObject, Gtk, Pango, PangoCairo  # noqa: E402  # ty:ignore[unresolved-import]
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -17,9 +17,11 @@ if TYPE_CHECKING:
     from cairo import Context
 
 
-_GAUGE_REFERENCE_HEIGHT = 200
 _GAUGE_CONTENT_HEIGHT = 125
 _GAUGE_BOTTOM_PADDING = 15
+_GAUGE_LABEL_BOTTOM_PADDING = 4
+_GAUGE_LABEL_CLEARANCE = 6
+_GAUGE_LABEL_FIT_ATTEMPTS = 4
 
 
 class InclineControl(Gtk.Frame):
@@ -28,12 +30,14 @@ class InclineControl(Gtk.Frame):
     MIN_PCT = -20.0
     MAX_PCT = 20.0
     STEP = 1.0
+    summary = GObject.Property(type=str, default="Incline controls")
 
     def __init__(
         self,
         on_change: Callable[[float], None],
         initial_value: float = 0.0,
     ) -> None:
+        """Build bounded incline adjustments and their target summary."""
         super().__init__()
         self._value = self._clamp_value(initial_value)
         self._on_change = on_change
@@ -52,9 +56,9 @@ class InclineControl(Gtk.Frame):
         row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
 
         self._btn_down = Gtk.Button(label="-")
-        self._btn_down.add_css_class("destructive-action")
         self._btn_down.set_hexpand(True)
-        self._btn_down.set_size_request(-1, 72)
+        self._btn_down.set_size_request(48, 48)
+        self._btn_down.set_tooltip_text("Decrease incline")
         self._btn_down.get_child().add_css_class("title-1")
         self._btn_down.connect("clicked", lambda *_: self._change(-self.STEP))
 
@@ -78,7 +82,8 @@ class InclineControl(Gtk.Frame):
         self._btn_up = Gtk.Button(label="+")
         self._btn_up.add_css_class("suggested-action")
         self._btn_up.set_hexpand(True)
-        self._btn_up.set_size_request(-1, 72)
+        self._btn_up.set_size_request(48, 48)
+        self._btn_up.set_tooltip_text("Increase incline")
         self._btn_up.get_child().add_css_class("title-1")
         self._btn_up.connect("clicked", lambda *_: self._change(+self.STEP))
 
@@ -89,14 +94,21 @@ class InclineControl(Gtk.Frame):
         self.set_child(outer)
         self._refresh()
 
+    @property
+    def touch_buttons(self) -> tuple[Gtk.Button, ...]:
+        """Return the controls whose touch targets follow the session density."""
+        return self._btn_down, self._btn_up
+
     def _change(self, delta: float) -> None:
         self._value = self._clamp_value(round(self._value + delta, 1))
         self._refresh()
         self._on_change(self._value)
 
     def _refresh(self) -> None:
+        """Update the incline value, summary, and available adjustment actions."""
         sign = "+" if self._value > 0 else ""
         self._lbl_value.set_text(f"{sign}{self._value:.1f}")
+        self.summary = f"Incline · {sign}{self._value:.1f} %"
         self._btn_down.set_sensitive(self._value > self.MIN_PCT)
         self._btn_up.set_sensitive(self._value < self.MAX_PCT)
 
@@ -113,9 +125,13 @@ class InclineControl(Gtk.Frame):
 class TargetGauge(Gtk.DrawingArea):
     """Draw a target band and current-value needle for workout guidance."""
 
+    label_scale = GObject.Property(type=float, default=1.0, minimum=0.5, maximum=2.0)
+    size_scale = GObject.Property(type=float, default=1.0, minimum=0.5, maximum=1.0)
+
     def __init__(self) -> None:
+        """Initialize the target band, current reading, and gauge drawing surface."""
         super().__init__()
-        self.set_content_width(320)
+        self.set_content_width(160)
         self.set_content_height(_GAUGE_CONTENT_HEIGHT)
         self.add_css_class("frame")
         self._value = 0.0
@@ -126,19 +142,23 @@ class TargetGauge(Gtk.DrawingArea):
         self._tgt_mid = 0.0
         self._dom_min = 0.0
         self._dom_max = 1.0
+        self._available = False
+        self.connect("notify::label-scale", lambda *_: self.queue_draw())
+        self.connect("notify::size-scale", lambda *_: self.queue_draw())
         self.set_draw_func(self._on_draw)
 
-    def band_status(self) -> str:
-        """Return the current relationship to the target band."""
-        if self._tgt_mid <= 0:
-            return "in"
-        in_band = self._tgt_lo <= self._value <= self._tgt_hi
-        if in_band:
-            return "in"
-        near = 0.1 * self._tgt_mid
-        if self._value < self._tgt_lo:
-            return "near" if (self._tgt_lo - self._value) <= near else "low"
-        return "near" if (self._value - self._tgt_hi) <= near else "high"
+    def set_available(self, available: bool) -> None:  # noqa: FBT001
+        """Hide the current reading and needle while its source is disconnected."""
+        if self._available != available:
+            self._available = available
+            self.queue_draw()
+
+    def clear_target(self) -> None:
+        """Clear guidance left behind by a preceding targeted workout step."""
+        self._tgt_lo = self._tgt_mid = self._tgt_hi = 0.0
+        self._headline = "—"
+        self._subline = "No target"
+        self.queue_draw()
 
     def set_state(
         self,
@@ -212,7 +232,7 @@ class TargetGauge(Gtk.DrawingArea):
         )
         ctx.stroke()
 
-        ctx.set_line_width(2.6)
+        ctx.set_line_width(2.6 * min(1.0, self.label_scale))
         ctx.set_source_rgba(grid.red, grid.green, grid.blue, grid.alpha)
         for fraction in (0.5, 1.0, 1.5):
             angle = self._angle_for(self._tgt_mid * fraction, start, end)
@@ -248,7 +268,8 @@ class TargetGauge(Gtk.DrawingArea):
         else:
             needle_color = (0.95, 0.35, 0.35, 1.0)
 
-        ctx.set_line_width(6.0)
+        geometry_scale = min(1.0, self.label_scale)
+        ctx.set_line_width(6.0 * geometry_scale)
         ctx.set_source_rgba(0, 0, 0, 0.25)
         outer_x = center_x + math.cos(angle) * (radius + bar_width * 0.05 + 1.0)
         outer_y = center_y + math.sin(angle) * (radius + bar_width * 0.05 + 1.0)
@@ -258,7 +279,7 @@ class TargetGauge(Gtk.DrawingArea):
         ctx.line_to(outer_x, outer_y)
         ctx.stroke()
 
-        ctx.set_line_width(4.6)
+        ctx.set_line_width(4.6 * geometry_scale)
         ctx.set_source_rgba(*needle_color)
         outer_x = center_x + math.cos(angle) * (radius + bar_width * 0.05)
         outer_y = center_y + math.sin(angle) * (radius + bar_width * 0.05)
@@ -268,6 +289,51 @@ class TargetGauge(Gtk.DrawingArea):
         ctx.line_to(outer_x, outer_y)
         ctx.stroke()
 
+    def _fit_gauge_labels(
+        self,
+        area: Gtk.DrawingArea,
+        *,
+        radius: float,
+        bar_width: float,
+    ) -> tuple[Pango.Layout, Pango.Layout, float]:
+        """Fit both lines inside the arc, leaving room for its stroke and needle."""
+        headline = area.create_pango_layout(self._headline if self._available else "—")
+        subline = area.create_pango_layout(self._subline)
+        font_scale = self.label_scale * min(1.25, radius / (100 * min(1.0, self.label_scale)))
+        for layout, points, weight in (
+            (headline, 20, Pango.Weight.BOLD),
+            (subline, 12, Pango.Weight.NORMAL),
+        ):
+            font = area.get_pango_context().get_font_description().copy()
+            font.set_size(max(Pango.SCALE, int(points * font_scale * Pango.SCALE)))
+            font.set_weight(weight)
+            layout.set_font_description(font)
+
+        geometry_scale = min(1.0, self.label_scale)
+        gap = max(2.0 * geometry_scale, min(6.0 * geometry_scale, radius * 0.04))
+        inner_radius = max(1.0, radius - bar_width * 0.8 - _GAUGE_LABEL_CLEARANCE * geometry_scale)
+        for _ in range(_GAUGE_LABEL_FIT_ATTEMPTS):
+            headline_width, headline_height = headline.get_pixel_size()
+            subline_width, subline_height = subline.get_pixel_size()
+            # The top corners are farthest from the center when both lines
+            # sit above the baseline. A rectangular widget-width check lets
+            # these corners cross the curved target band.
+            required_radius = math.hypot(
+                max(headline_width, subline_width) / 2,
+                headline_height
+                + subline_height
+                + gap
+                + _GAUGE_LABEL_BOTTOM_PADDING * geometry_scale,
+            )
+            if required_radius <= inner_radius:
+                break
+            scale = 0.98 * inner_radius / required_radius
+            for layout in (headline, subline):
+                font = layout.get_font_description().copy()
+                font.set_size(max(Pango.SCALE, int(font.get_size() * scale)))
+                layout.set_font_description(font)
+        return headline, subline, gap
+
     def _draw_gauge_labels(
         self,
         area: Gtk.DrawingArea,
@@ -276,37 +342,31 @@ class TargetGauge(Gtk.DrawingArea):
         center_x: float,
         center_y: float,
         radius: float,
+        bar_width: float,
         fg: Gdk.RGBA,
     ) -> None:
         """Draw the headline and target subline inside the gauge."""
-        layout = area.create_pango_layout(self._headline)
-        description = (
-            layout.get_font_description() or area.get_pango_context().get_font_description()
+        layout, subline, gap = self._fit_gauge_labels(
+            area,
+            radius=radius,
+            bar_width=bar_width,
         )
-        description = description.copy()
-        description.set_size(int(22 * Pango.SCALE))
-        description.set_weight(Pango.Weight.BOLD)
-        layout.set_font_description(description)
         text_width, text_height = layout.get_pixel_size()
-        ctx.set_source_rgba(fg.red, fg.green, fg.blue, 0.95)
-        ctx.move_to(
-            center_x - text_width / 2.0,
-            center_y - radius * 0.42 - text_height / 2.0,
-        )
-        PangoCairo.show_layout(ctx, layout)
-
-        subline = area.create_pango_layout(self._subline)
-        sub_description = (
-            subline.get_font_description() or area.get_pango_context().get_font_description()
-        )
-        sub_description = sub_description.copy()
-        sub_description.set_size(int(13 * Pango.SCALE))
-        subline.set_font_description(sub_description)
         sub_width, sub_height = subline.get_pixel_size()
+        label_top = (
+            center_y
+            - text_height
+            - sub_height
+            - gap
+            - _GAUGE_LABEL_BOTTOM_PADDING * min(1.0, self.label_scale)
+        )
+        ctx.set_source_rgba(fg.red, fg.green, fg.blue, 0.95)
+        ctx.move_to(center_x - text_width / 2.0, label_top)
+        PangoCairo.show_layout(ctx, layout)
         ctx.set_source_rgba(fg.red, fg.green, fg.blue, 0.8)
         ctx.move_to(
             center_x - sub_width / 2.0,
-            center_y - radius * 0.14 - sub_height / 2.0,
+            label_top + text_height + gap,
         )
         PangoCairo.show_layout(ctx, subline)
 
@@ -317,10 +377,38 @@ class TargetGauge(Gtk.DrawingArea):
         width: int,
         height: int,
     ) -> None:
-        center_x, center_y = width / 2.0, height - _GAUGE_BOTTOM_PADDING
-        # Keep the original gauge radius while removing unused container height.
-        radius = min(width, _GAUGE_REFERENCE_HEIGHT) * 0.44
-        bar_width = max(10.0, radius * 0.14)
+        """Draw centered target guidance with text fitted inside the gauge arc."""
+        geometry_scale = min(1.0, self.label_scale)
+        bottom_padding = _GAUGE_BOTTOM_PADDING * geometry_scale
+        radius = (
+            min(
+                width * 0.44,
+                (height - bottom_padding - 8 * geometry_scale) / 1.05,
+            )
+            * self.size_scale
+        )
+        bar_width = max(10.0 * geometry_scale, radius * 0.14)
+        drawing = cairo.RecordingSurface(cairo.CONTENT_COLOR_ALPHA, None)
+        self._draw_contents(area, cairo.Context(drawing), radius=radius, bar_width=bar_width)
+        left, top, ink_width, ink_height = drawing.ink_extents()
+        ctx.save()
+        ctx.translate(
+            (width - ink_width) / 2 - left,
+            (height - ink_height) / 2 - top,
+        )
+        ctx.set_source_surface(drawing, 0, 0)
+        ctx.paint()
+        ctx.restore()
+
+    def _draw_contents(
+        self,
+        area: Gtk.DrawingArea,
+        ctx: Context,
+        *,
+        radius: float,
+        bar_width: float,
+    ) -> None:
+        """Record the complete gauge so its painted bounds can be centered."""
         ctx.set_antialias(cairo.Antialias.GRAY)
         ctx.set_line_cap(cairo.LineCap.ROUND)
         ctx.set_line_join(cairo.LineJoin.ROUND)
@@ -338,8 +426,8 @@ class TargetGauge(Gtk.DrawingArea):
 
         self._draw_target_band(
             ctx,
-            center_x=center_x,
-            center_y=center_y,
+            center_x=0,
+            center_y=0,
             radius=radius,
             bar_width=bar_width,
             start=start,
@@ -347,20 +435,22 @@ class TargetGauge(Gtk.DrawingArea):
             dim=dim,
             grid=grid,
         )
-        self._draw_needle(
-            ctx,
-            center_x=center_x,
-            center_y=center_y,
-            radius=radius,
-            bar_width=bar_width,
-            start=start,
-            end=end,
-        )
+        if self._available and self._tgt_mid > 0:
+            self._draw_needle(
+                ctx,
+                center_x=0,
+                center_y=0,
+                radius=radius,
+                bar_width=bar_width,
+                start=start,
+                end=end,
+            )
         self._draw_gauge_labels(
             area,
             ctx,
-            center_x=center_x,
-            center_y=center_y,
+            center_x=0,
+            center_y=0,
             radius=radius,
+            bar_width=bar_width,
             fg=fg,
         )

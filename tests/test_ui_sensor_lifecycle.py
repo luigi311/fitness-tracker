@@ -1,8 +1,8 @@
-# ruff: noqa: E402, PT009, SLF001
+"""Headless application lifecycle checks with test-scoped UI dependencies."""
 
-import importlib
+# ruff: noqa: PT009, SLF001
+
 import queue
-import sys
 import tempfile
 import threading
 import types
@@ -10,25 +10,17 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-import gi
-import gi.repository
-
-_MISSING = object()
-_GI_NAMES = ("Adw", "Gdk", "Gio", "GLib", "Gtk")
-_STUB_MODULE_NAMES = (
-    "pebble_bridge",
-    "fitness_tracker.ui.pages.history",
-    "fitness_tracker.ui.pages.settings",
-    "fitness_tracker.ui.pages.tracker",
+from fitness_tracker.core.sensor_profile import SensorProfile
+from fitness_tracker.core.sports import SportTypesEnum
+from fitness_tracker.hardware.location import PortalAccuracy
+from fitness_tracker.hardware.recorder import FinalizationClaim, FinalizationStatus
+from fitness_tracker.services.jobs import BackgroundJobRunner
+from fitness_tracker.ui import app as app_module
+from fitness_tracker.ui.app import (
+    FitnessAppUI,
+    _SensorProfileApplyError,
+    _SensorProfileRequest,
 )
-_original_require_versions = gi.require_versions
-gi.require_versions = lambda _versions: None
-_original_gi_attributes = {name: getattr(gi.repository, name, _MISSING) for name in _GI_NAMES}
-_original_stub_modules = {name: sys.modules.get(name, _MISSING) for name in _STUB_MODULE_NAMES}
-
-
-class _Application:
-    pass
 
 
 class _GLib:
@@ -82,54 +74,6 @@ class _ToastOverlay:
         self.toasts.append(toast)
 
 
-gi.repository.Adw = types.SimpleNamespace(Application=_Application, Toast=_Toast)
-gi.repository.Gdk = types.SimpleNamespace()
-gi.repository.Gio = types.SimpleNamespace(Notification=_Notification)
-gi.repository.GLib = _GLib
-gi.repository.Gtk = types.SimpleNamespace()
-
-pebble_bridge = types.ModuleType("pebble_bridge")
-pebble_bridge.PebbleBridge = object
-sys.modules["pebble_bridge"] = pebble_bridge
-
-ui_history = types.ModuleType("fitness_tracker.ui.pages.history")
-ui_history.HistoryPageUI = object
-sys.modules[ui_history.__name__] = ui_history
-
-ui_settings = types.ModuleType("fitness_tracker.ui.pages.settings")
-ui_settings.SettingsPageUI = object
-sys.modules[ui_settings.__name__] = ui_settings
-
-ui_tracker = types.ModuleType("fitness_tracker.ui.pages.tracker")
-ui_tracker.TrackerPageUI = object
-sys.modules[ui_tracker.__name__] = ui_tracker
-
-try:
-    importlib.import_module("fitness_tracker.ui.app")
-finally:
-    gi.require_versions = _original_require_versions
-    for name, original in _original_gi_attributes.items():
-        if original is _MISSING:
-            delattr(gi.repository, name)
-        else:
-            setattr(gi.repository, name, original)
-    for name, original in _original_stub_modules.items():
-        if original is _MISSING:
-            sys.modules.pop(name, None)
-        else:
-            sys.modules[name] = original
-from fitness_tracker.core.sensor_profile import SensorProfile
-from fitness_tracker.core.sports import SportTypesEnum
-from fitness_tracker.hardware.location import PortalAccuracy
-from fitness_tracker.hardware.recorder import FinalizationClaim, FinalizationStatus
-from fitness_tracker.services.jobs import BackgroundJobRunner
-from fitness_tracker.ui.app import (
-    FitnessAppUI,
-    _SensorProfileApplyError,
-    _SensorProfileRequest,
-)
-
-
 class _CurrentRecorder:
     def __init__(self, *, result=True):
         self.result = result
@@ -164,6 +108,15 @@ class _CurrentRecorder:
 
 class SensorSettingsLifecycleTests(unittest.TestCase):
     def setUp(self):
+        """Scope application UI doubles to one test and reset its queued callbacks."""
+        ui_dependencies = patch.multiple(
+            app_module,
+            GLib=_GLib,
+            Adw=types.SimpleNamespace(Toast=_Toast),
+            Gio=types.SimpleNamespace(Notification=_Notification),
+        )
+        ui_dependencies.start()
+        self.addCleanup(ui_dependencies.stop)
         while not _GLib.callbacks.empty():
             _GLib.callbacks.get_nowait()
         self.temp_dir = tempfile.TemporaryDirectory()
@@ -207,7 +160,8 @@ class SensorSettingsLifecycleTests(unittest.TestCase):
     def _run_idle(self):
         _GLib.callbacks.get(timeout=2)()
 
-    def test_workout_step_notification_uses_toast_and_desktop_notification(self):
+    def test_workout_step_notification_uses_desktop_notification_without_toast(self):
+        """Notify background users and update the watch without an in-app step toast."""
         app = FitnessAppUI.__new__(FitnessAppUI)
         toasts = []
         notifications = []
@@ -224,7 +178,8 @@ class SensorSettingsLifecycleTests(unittest.TestCase):
         app.show_workout_step_notification(2, 5, "Target: 150 - 175 W")
 
         self.assertEqual(pebble_steps, [1])
-        self.assertEqual(toasts, ["Workout step 2 of 5: Target: 150 - 175 W"])
+        self.assertEqual(toasts, [])
+        self.assertEqual(len(notifications), 1)
         self.assertEqual(notifications[0][0], "workout-step-change")
         self.assertEqual(notifications[0][1].title, "Workout step 2 of 5")
         self.assertEqual(notifications[0][1].body, "Target: 150 - 175 W")
@@ -245,6 +200,7 @@ class SensorSettingsLifecycleTests(unittest.TestCase):
         self.assertEqual(pebble_steps, [0])
 
     def test_workout_step_desktop_notification_is_suppressed_in_foreground(self):
+        """Keep foreground step changes silent while updating the watch position."""
         app = FitnessAppUI.__new__(FitnessAppUI)
         toasts = []
         pebble_steps = []
@@ -260,7 +216,7 @@ class SensorSettingsLifecycleTests(unittest.TestCase):
         app.show_workout_step_notification(2, 5, "Target: 150 - 175 W")
 
         self.assertEqual(pebble_steps, [1])
-        self.assertEqual(toasts, ["Workout step 2 of 5: Target: 150 - 175 W"])
+        self.assertEqual(toasts, [])
 
     def test_changed_pebble_settings_restart_bridge_for_active_recording(self):
         app = FitnessAppUI.__new__(FitnessAppUI)
