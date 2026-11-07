@@ -52,6 +52,7 @@ class MetricTile(Gtk.Frame):
         self.value.set_xalign(0.0)
         self.value.set_ellipsize(Pango.EllipsizeMode.END)
         self.value.set_max_width_chars(7)
+        self.value.set_hexpand(True)
 
         self.unit = Gtk.Label(label=unit or "", xalign=0.0)
         self.unit.add_css_class("dim-label")
@@ -62,13 +63,25 @@ class MetricTile(Gtk.Frame):
         details.append(self.label)
         details.append(self.unit)
         inner.append(details)
-        inner.append(self.value)
-
-        self.dot = Gtk.Label(label="○ Offline", xalign=0.0)
+        self.dot = Gtk.Label(label="○ Dead", xalign=0.0)
         self.dot.add_css_class("metric-status")
-
-        inner.append(self.dot)
+        reading = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        self._reading = reading
+        reading.append(self.value)
+        reading.append(self.dot)
+        inner.append(reading)
         self.set_child(inner)
+        self.set_status(connected=False)
+
+    def set_status_inline(self, *, inline: bool) -> None:
+        """Place connection text beside portrait values and below wider-layout values."""
+        self._reading.set_orientation(
+            Gtk.Orientation.HORIZONTAL if inline else Gtk.Orientation.VERTICAL,
+        )
+        self._reading.set_spacing(4 if inline else 0)
+        self.dot.set_valign(Gtk.Align.CENTER if inline else Gtk.Align.FILL)
+        self.get_child().set_margin_start(4 if inline else 8)
+        self.get_child().set_margin_end(4 if inline else 8)
 
     def set_value(self, text: str) -> None:
         """Update the displayed metric value."""
@@ -84,7 +97,7 @@ class MetricTile(Gtk.Frame):
         """Update the connection indicator and disconnected-value styling."""
         self._connected = connected
         self.set_value(self._last_text)
-        self.dot.set_text("● Live" if connected else "○ Offline")
+        self.dot.set_text("● Live" if connected else "○ Dead")
         if connected:
             self.dot.add_css_class("metric-live")
         else:

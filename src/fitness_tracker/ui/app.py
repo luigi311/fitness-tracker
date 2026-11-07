@@ -33,30 +33,15 @@ from fitness_tracker.services.jobs import (
 from fitness_tracker.ui.pages.history import HistoryPageUI
 from fitness_tracker.ui.pages.settings import SettingsPageUI
 from fitness_tracker.ui.pages.tracker import TrackerPageUI
+from fitness_tracker.ui.widgets.scaled_view import ScaledView
 
 gi.require_versions({"Gtk": "4.0", "Adw": "1"})
 
-from gi.repository import Adw, Gdk, Gio, GLib, GObject, Gtk  # noqa: E402  # ty:ignore[unresolved-import]
+from gi.repository import Adw, Gdk, Gio, GLib, Gtk  # noqa: E402  # ty:ignore[unresolved-import]
 
 _NAVIGATION_CSS = b"""
-.roomy-navigation { font-size: 2em; }
-.roomy-navigation viewswitcher box.narrow { font-size: 1em; }
-.roomy-navigation button { min-height: 80px; }
-.roomy-navigation image { -gtk-icon-size: 32px; }
-.reduced-navigation { font-size: 0.8em; }
-.reduced-navigation viewswitcher box.narrow { font-size: 0.75em; }
-.reduced-navigation viewswitcher box.narrow { padding-top: 3px; }
-.reduced-navigation viewswitcher label { min-height: 14px; }
-.reduced-navigation actionbar > revealer > box { padding-top: 5px; padding-bottom: 5px; }
-.reduced-navigation button { min-width: 0; min-height: 32px; padding: 0 6px; }
-.reduced-navigation image { -gtk-icon-size: 13px; }
-.mini-navigation { font-size: 0.666667em; }
-.mini-navigation viewswitcher box.narrow { font-size: 0.75em; }
-.mini-navigation viewswitcher box.narrow { padding-top: 3px; }
-.mini-navigation viewswitcher label { min-height: 12px; padding-bottom: 1px; }
-.mini-navigation actionbar > revealer > box { padding-top: 4px; padding-bottom: 4px; }
-.mini-navigation button { min-width: 0; min-height: 28px; padding: 0 4px; }
-.mini-navigation image { -gtk-icon-size: 11px; }
+.consistent-header { min-height: 32px; padding: 0; }
+.consistent-header windowcontrols button { min-height: 32px; min-width: 32px; padding: 0; }
 """
 
 
@@ -792,7 +777,8 @@ class FitnessAppUI(Adw.Application):
         self.window.set_size_request(200, 180)
         self.window.set_resizable(True)
         self.toast_overlay = Adw.ToastOverlay()
-        self.window.set_content(self.toast_overlay)
+        self._scaled_view = ScaledView(self.toast_overlay)
+        self.window.set_content(self._scaled_view)
 
         toolbar_view = Adw.ToolbarView()
         self.toast_overlay.set_child(toolbar_view)
@@ -802,9 +788,6 @@ class FitnessAppUI(Adw.Application):
         header_bar.set_show_title(True)
 
         self.header_revealer = Gtk.Revealer()
-        self.header_revealer.set_transition_type(Gtk.RevealerTransitionType.SLIDE_DOWN)
-        self.header_revealer.set_reveal_child(False)  # default to hidden (mobile)
-
         self.header_revealer.set_child(header_bar)
         toolbar_view.add_top_bar(self.header_revealer)
 
@@ -851,52 +834,13 @@ class FitnessAppUI(Adw.Application):
         header_bar: "Adw.HeaderBar",
         switcher_bar: "Adw.ViewSwitcherBar",
     ) -> None:
-        """Keep navigation at the bottom and scale it with the session density."""
+        """Reclaim header space while keeping navigation at the bottom at every zoom."""
         header_bar.set_title_widget(None)
+        header_bar.add_css_class("consistent-header")
         self.header_revealer.set_visible(False)
+        self.header_revealer.set_reveal_child(False)
+        self.header_revealer.set_transition_type(Gtk.RevealerTransitionType.NONE)
         switcher_bar.set_reveal(True)
-        cond = Adw.BreakpointCondition.parse("min-width: 700sp and min-height: 560sp")
-        bp = Adw.Breakpoint.new(cond)
-        bp.add_setter(self.header_revealer, "reveal-child", value=True)
-        bp.add_setter(self.header_revealer, "visible", value=True)
-        self.window.add_breakpoint(bp)
-        roomy = Adw.Breakpoint.new(
-            Adw.BreakpointCondition.parse(
-                "min-width: 900px and min-height: 900px and max-aspect-ratio: 13/10",
-            ),
-        )
-        roomy.add_setter(self.header_revealer, "reveal-child", value=True)
-        roomy.add_setter(self.header_revealer, "visible", value=True)
-        roomy.add_setter(
-            switcher_bar,
-            "css-classes",
-            GObject.Value(GObject.TYPE_STRV, ["roomy-navigation"]),
-        )
-        self.window.add_breakpoint(roomy)
-        for condition, css_class in (
-            (
-                "min-width: 420px and max-width: 519px and min-height: 300px and max-height: 600px",
-                "reduced-navigation",
-            ),
-            (
-                (
-                    "(max-width: 279px) or "
-                    "(min-width: 400px and max-width: 599px and max-height: 280px "
-                    "and min-aspect-ratio: 8/5)"
-                ),
-                "mini-navigation",
-            ),
-        ):
-            compact = Adw.Breakpoint.new(Adw.BreakpointCondition.parse(condition))
-            compact.add_setter(self.header_revealer, "reveal-child", value=False)
-            compact.add_setter(self.header_revealer, "visible", value=False)
-            compact.add_setter(switcher_bar, "reveal", value=True)
-            compact.add_setter(
-                switcher_bar,
-                "css-classes",
-                GObject.Value(GObject.TYPE_STRV, [css_class]),
-            )
-            self.window.add_breakpoint(compact)
 
     def refresh_hr_zones(self) -> None:
         """Rebuild cached heart-rate zones after personal settings change."""
