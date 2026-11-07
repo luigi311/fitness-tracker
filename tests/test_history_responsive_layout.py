@@ -12,6 +12,7 @@ from unittest.mock import patch
 import gi
 import pytest
 from fitness_tracker.core.units import UnitSystem
+from fitness_tracker.services.history_query import CompareChartData
 
 from test_responsive_layout import assert_inside, descendant_labels, save_screenshot, settle
 
@@ -361,3 +362,59 @@ def test_light_theme_keeps_comparison_and_selection_visible(history_app):
     finally:
         manager.set_color_scheme(Adw.ColorScheme.FORCE_DARK)
         wait_for(lambda: page._compare_job is None)
+
+
+def test_selected_activities_without_metric_data_do_not_prompt_for_selection(history_app):
+    """Distinguish missing metric data from an empty comparison selection."""
+    page = history_app.history
+    select_pair(page)
+    page._render_compare_chart(
+        CompareChartData(
+            generation=page._compare_generation,
+            metric="power",
+            series=(),
+            max_time_s=0,
+        ),
+    )
+    assert page._compare_plot.get_visible_child_name() == "message"
+    assert "No data" in page._compare_message.get_text()
+    assert page._legend_menu.get_label() == f"{COMPARE_COUNT} selected"
+    for box in (page._legend_inline_box, page._legend_popup_box):
+        assert box.get_first_child() is None
+    page.selected_ids.clear()
+    page._set_compare_legend([])
+    for box in (page._legend_inline_box, page._legend_popup_box):
+        assert "Select activities" in box.get_first_child().get_text()
+
+
+@pytest.mark.parametrize(("width", "height"), [(540, 620), (1080, 1240)])
+@pytest.mark.parametrize("dpi_scale", [None, 1.25, 1.5])
+def test_compare_data_refresh_preserves_dpi_adjusted_chart_scale(
+    history_app,
+    width,
+    height,
+    dpi_scale,
+):
+    """Keep data renders and layout updates at the same text and line scale."""
+    page = history_app.history
+    settings = Gtk.Settings.get_default()
+    original_dpi = settings.get_property("gtk-xft-dpi")
+    try:
+        settings.set_property("gtk-xft-dpi", round(96 * 1024 * dpi_scale) if dpi_scale else -1)
+        resize(history_app, width, height)
+        page.stack.set_visible_child_name("compare")
+        select_pair(page)
+        expected = page.layout.density * (dpi_scale or 1)
+        for metric in ("speed", "hr"):
+            page.cmp_metric_combo.set_active_id(metric)
+            wait_for(lambda: page._compare_job is None)
+            assert page._cmp_chart._display_scale == pytest.approx(expected)
+            assert page._cmp_ax.xaxis.label.get_fontsize() == pytest.approx(10 * expected)
+            assert all(
+                line.get_linewidth() == pytest.approx(2 * expected) for line in page._cmp_ax.lines
+            )
+            page.layout._on_layout_changed()
+            assert page._cmp_chart._display_scale == pytest.approx(expected)
+    finally:
+        settings.set_property("gtk-xft-dpi", original_dpi)
+        settle()

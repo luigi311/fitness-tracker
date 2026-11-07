@@ -12,6 +12,7 @@ class SessionTimer(Gtk.Frame):
     """Display a session value with an optional caption."""
 
     def __init__(self, caption: str | None = None) -> None:
+        """Build the session timer value with its optional caption."""
         super().__init__()
         self.set_hexpand(True)
         self.add_css_class("session-timer")

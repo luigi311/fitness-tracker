@@ -37,6 +37,7 @@ class InclineControl(Gtk.Frame):
         on_change: Callable[[float], None],
         initial_value: float = 0.0,
     ) -> None:
+        """Build bounded incline adjustments and their target summary."""
         super().__init__()
         self._value = self._clamp_value(initial_value)
         self._on_change = on_change
@@ -104,6 +105,7 @@ class InclineControl(Gtk.Frame):
         self._on_change(self._value)
 
     def _refresh(self) -> None:
+        """Update the incline value, summary, and available adjustment actions."""
         sign = "+" if self._value > 0 else ""
         self._lbl_value.set_text(f"{sign}{self._value:.1f}")
         self.summary = f"Incline · {sign}{self._value:.1f} %"
@@ -127,6 +129,7 @@ class TargetGauge(Gtk.DrawingArea):
     size_scale = GObject.Property(type=float, default=1.0, minimum=0.5, maximum=1.0)
 
     def __init__(self) -> None:
+        """Initialize the target band, current reading, and gauge drawing surface."""
         super().__init__()
         self.set_content_width(160)
         self.set_content_height(_GAUGE_CONTENT_HEIGHT)
@@ -374,6 +377,7 @@ class TargetGauge(Gtk.DrawingArea):
         width: int,
         height: int,
     ) -> None:
+        """Draw centered target guidance with text fitted inside the gauge arc."""
         geometry_scale = min(1.0, self.label_scale)
         bottom_padding = _GAUGE_BOTTOM_PADDING * geometry_scale
         radius = (

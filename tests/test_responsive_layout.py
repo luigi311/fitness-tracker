@@ -16,7 +16,7 @@ import os
 import time
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import cairo
 import gi
@@ -32,6 +32,8 @@ from fitness_tracker.core.sports import SportTypesEnum
 from fitness_tracker.core.trainer_mode import TrainerMode
 from fitness_tracker.core.units import UnitSystem
 from fitness_tracker.core.zones import ChartTheme, HeartRateZones
+from fitness_tracker.hardware.recorder import FinalizationClaim, FinalizationStatus
+from fitness_tracker.services.jobs import DuplicateJobError, JobRunnerShutdownError
 
 gi.require_versions({"Gtk": "4.0", "Adw": "1", "Graphene": "1.0"})
 from fitness_tracker.ui.pages.mode import ModeSelectView  # noqa: E402
@@ -527,6 +529,61 @@ def test_navigation_away_cancels_stop_hold(app_stub):
         settle()
 
 
+def test_session_font_handlers_disconnect_and_reconnect_on_remap(app_stub, monkeypatch):
+    """Release global font callbacks while hidden and refresh on every remap."""
+    updates = []
+    original = SessionView._on_adjustments_font_changed
+
+    def track_updates(view, *args):
+        """Record delivery without replacing the font-measurement behavior."""
+        updates.append(view)
+        original(view, *args)
+
+    monkeypatch.setattr(SessionView, "_on_adjustments_font_changed", track_updates)
+    settings = Gtk.Settings.get_default()
+    original_dpi = settings.get_property("gtk-xft-dpi")
+    view, _callbacks = make_session(app_stub, "trainer")
+    assert not view._settings_handler_ids
+    window = show_view(view, 432, 496)
+    stack = window.get_child().get_content()
+    watched_settings = ("gtk-xft-dpi", "gtk-font-name")
+    try:
+        for _ in range(3):
+            handlers = tuple(view._settings_handler_ids)
+            assert len(handlers) == len(watched_settings)
+            assert all(settings.handler_is_connected(handler) for handler in handlers)
+            stack.set_visible_child_name("history")
+            settle()
+            assert not view._settings_handler_ids
+            assert view._adjustments_layout_source_id is None
+            assert not any(settings.handler_is_connected(handler) for handler in handlers)
+            updates.clear()
+            settings.set_property("gtk-xft-dpi", round(96 * 1024 * 1.5))
+            for setting in watched_settings:
+                settings.notify(setting)
+            settle()
+            assert not updates
+            stack.set_visible_child_name("tracker")
+            settle()
+            settle()
+            assert updates
+            assert not view._adjustments_inline
+            for setting in watched_settings:
+                updates.clear()
+                settings.notify(setting)
+                assert updates == [view]
+                settle()
+    finally:
+        window.destroy()
+        settle()
+        updates.clear()
+        settings.set_property("gtk-xft-dpi", original_dpi)
+        settings.notify("gtk-font-name")
+        settle()
+        assert not view._settings_handler_ids
+        assert not updates
+
+
 def test_full_application_shell_fits_short_landscape(app_stub, monkeypatch, tmp_path):
     from fitness_tracker.ui.app import FitnessAppUI  # noqa: PLC0415
 
@@ -680,6 +737,70 @@ def test_real_application_setup_fits_librem_three_x(shell_app):
         save_screenshot(app.window, f"real-librem-three-x-setup-{width}x{height}")
 
 
+@pytest.mark.parametrize("submission_error", [None, DuplicateJobError, JobRunnerShutdownError])
+@pytest.mark.parametrize("neutralization_fails", [False, True])
+def test_finalization_notices_use_application_overlay_during_teardown(
+    shell_app,
+    submission_error,
+    neutralization_fails,
+):
+    """Keep stop cleanup and retry notices alive after their session is removed."""
+    app = shell_app
+    tracker = app.tracker
+    view, _callbacks = make_session(app, "trainer")
+    tracker.session_view = view
+    tracker._workout_session = object()
+    tracker._active_environment = Environment.TRAINER
+    tracker._session_state = SessionState.RUNNING
+    tracker._start_requested = True
+    tracker.nav.push(Adw.NavigationPage.new(view, "Workout"))
+    settle()
+    recorder = Mock(finalization_pending=True)
+    recorder.begin_finalization.return_value = FinalizationClaim(
+        FinalizationStatus.STARTED if submission_error else FinalizationStatus.ALREADY_RUNNING,
+        7,
+    )
+    if neutralization_fails:
+        recorder.neutralize_trainer.side_effect = RuntimeError("trainer disconnected")
+    app.recorder = recorder
+    app.pebble_bridge = Mock()
+    for attribute in ("_timer_source_id", "_chart_timer_id", "_test_source"):
+        setattr(tracker, attribute, GLib.timeout_add(60_000, lambda: True))
+    try:
+        with (
+            patch.object(app.jobs, "submit", side_effect=submission_error),
+            patch.object(app.toast_overlay, "add_toast") as app_toasts,
+            patch.object(view, "add_toast") as session_toasts,
+        ):
+            tracker._stop_run_and_back()
+            assert app_toasts.call_count == (2 if neutralization_fails else 1)
+            session_toasts.assert_not_called()
+            titles = [call.args[0].get_title() for call in app_toasts.call_args_list]
+            expected = (
+                "Activity finalization is pending"
+                if submission_error
+                else "Activity finalization is already running"
+            )
+            assert titles[0] == expected
+        recorder.neutralize_trainer.assert_called_once_with()
+        app.pebble_bridge.stop.assert_called_once_with(wait=False)
+        if submission_error:
+            recorder.abort_finalization.assert_called_once_with(7)
+            assert app._pending_finalizations == [recorder]
+        assert tracker.session_view is None
+        assert tracker._workout_session is None
+        assert tracker._active_environment is None
+        assert tracker._session_state is None
+        assert not tracker._start_requested
+        assert tracker.nav.get_visible_page() is tracker.mode_page
+        for attribute in ("_timer_source_id", "_chart_timer_id", "_test_source"):
+            assert getattr(tracker, attribute) is None
+    finally:
+        app.recorder = None
+        app.pebble_bridge = None
+        app._pending_finalizations.clear()
+
+
 def test_session_toasts_leave_recording_and_step_buttons_hit_testable(shell_app):
     app = shell_app
     view, _callbacks = make_session(app, "workout")
@@ -689,11 +810,11 @@ def test_session_toasts_leave_recording_and_step_buttons_hit_testable(shell_app)
         for width, height in ((360, 720), (720, 360), (432, 496), (240, 480), (480, 240)):
             app.window.set_default_size(width, height)
             settle()
-            app.show_workout_step_notification(2, 8, "Target: 200 - 230 W")
+            app.show_toast("Waiting for distance sensor")
             settle()
             settle()
             assert any(
-                label.get_mapped() and label.get_text() == "Workout step 2 of 8"
+                label.get_mapped() and label.get_text() == "Waiting for distance sensor"
                 for label in descendant_labels(view._toast_overlay)
             )
             for button in (view.btn_stop, view.btn_start, view.btn_prev, view.btn_next):

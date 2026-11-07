@@ -59,6 +59,7 @@ class LiveChart:
         resting_hr: float,
         max_hr: float,
     ) -> None:
+        """Create the live heart-rate and power chart with shared theme styling."""
         self._display_scale = 1.0
         self.figure = Figure(figsize=(6, 3), dpi=96)
         self.hr_axes = self.figure.add_subplot(111)
@@ -158,6 +159,7 @@ class CompareChart:
     """Matplotlib surface used for activity comparison."""
 
     def __init__(self) -> None:
+        """Create a resizable chart surface for selected activity series."""
         self._display_scale = 1.0
         self.figure = Figure(figsize=(6, 3), dpi=96)
         self.axes = self.figure.add_subplot(111)
@@ -170,6 +172,7 @@ class CompareChart:
         self._on_resize(self.canvas, 600, 300)
 
     def _on_resize(self, _canvas: Gtk.Widget, width: int, height: int) -> None:
+        """Fit axis labels and elapsed-time ticks to the available chart area."""
         scale = self._display_scale
         self.figure.subplots_adjust(
             left=min(0.4, 64 * scale / max(1, width)),

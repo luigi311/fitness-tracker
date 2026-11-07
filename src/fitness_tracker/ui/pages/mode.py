@@ -69,6 +69,7 @@ class _EnvCard(Gtk.ToggleButton):
         environment: Environment,
         on_clicked: Callable[[Environment], None],
     ) -> None:
+        """Build a selectable environment card with its icon and capability badges."""
         super().__init__()
         self.environment = environment
 
@@ -112,6 +113,7 @@ class _EnvCard(Gtk.ToggleButton):
             self._badge_box.append(_make_badge(badge.label, badge.css_class))
 
     def set_selected(self, *, selected: bool) -> None:
+        """Update the card selection state and its visual treatment."""
         self.set_active(selected)
         # Always remove both classes first, unconditionally.
         self.remove_css_class("env-card-selected")
@@ -241,6 +243,7 @@ class ModeSelectView(Gtk.Box):
         *,
         unit_system: UnitSystem,
     ) -> None:
+        """Build adaptive sport, environment, and workout selection controls."""
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         _ensure_css()
         self.add_css_class("mode-select")

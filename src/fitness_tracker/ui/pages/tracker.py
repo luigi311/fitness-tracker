@@ -75,6 +75,7 @@ class TrackerPageUI:
     """Coordinate the active session page, sensors, guidance, and navigation."""
 
     def __init__(self, app: FitnessAppUI) -> None:
+        """Initialize session state, sensor buffers, timers, and navigation references."""
         self.app = app
 
         # buffers (ms + values)
@@ -352,6 +353,7 @@ class TrackerPageUI:
         sport_type: SportTypesEnum = SportTypesEnum.running,
         environment: Environment = Environment.INDOOR,
     ) -> None:
+        """Preview a free session and prepare its sensors without recording."""
         self._workout_session = None
         self._start_requested = False
         self._active_environment = environment
@@ -402,6 +404,7 @@ class TrackerPageUI:
         sport_type: SportTypesEnum = SportTypesEnum.running,
         environment: Environment = Environment.INDOOR,
     ) -> None:
+        """Preview workout guidance and prepare the matching session sensors."""
         session = self._workout_session
         if session is None:
             return
@@ -562,6 +565,7 @@ class TrackerPageUI:
         return self._active_environment
 
     def _stop_run_and_back(self) -> None:
+        """Neutralize equipment, release session state, and finalize the recording."""
         recorder = self.app.recorder
         trainer_session = (
             self.session_view is not None and self.session_view.capabilities.trainer_targets
@@ -588,6 +592,9 @@ class TrackerPageUI:
                 GLib.source_remove(self._chart_timer_id)
                 self._chart_timer_id = None
 
+        # Finalization notices must outlive the session page being removed.
+        self.session_view = None
+
         # Always stop recording after attempting trainer neutralization.
         if recorder:
             self.app.schedule_finalization(recorder)
@@ -599,7 +606,6 @@ class TrackerPageUI:
             self._test_source = None
 
         # release page refs and go home
-        self.session_view = None
         self._workout_session = None
         self._active_environment = None
 

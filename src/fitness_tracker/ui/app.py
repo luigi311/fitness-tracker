@@ -768,6 +768,7 @@ class FitnessAppUI(Adw.Application):
         self.window.present()
 
     def _build_ui(self) -> None:
+        """Build the application shell, pages, navigation, and adaptive rules."""
         prov = Gtk.CssProvider()
         prov.load_from_data(
             b"""

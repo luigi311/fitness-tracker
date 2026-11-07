@@ -60,6 +60,7 @@ class TrainerTargetControl(Gtk.Frame):
         available_modes: tuple[TrainerMode, ...],
         unit_system: UnitSystem = UnitSystem.IMPERIAL,
     ) -> None:
+        """Build trainer mode choices, target adjustments, and their summary."""
         super().__init__()
         self._on_change, self._unit_system = on_change, UnitSystem(unit_system)
         self._validate_modes(available_modes)
@@ -248,6 +249,7 @@ class TrainerTargetControl(Gtk.Frame):
         self._refresh()
 
     def _refresh(self) -> None:
+        """Update the active trainer value, summary, and adjustment limits."""
         config = self.MODES[self._mode]
         value = self._values[self._mode]
         value_text = f"{value:.{config.decimals}f}"

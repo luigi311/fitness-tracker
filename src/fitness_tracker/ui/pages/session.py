@@ -141,13 +141,13 @@ class SessionView(Gtk.Box):
         capabilities: SessionCapabilities,
         workout: bool,
     ) -> None:
+        """Build persistent guidance, metrics, and controls for one session."""
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         self.app = app
         self.sport_type = sport_type
         self.capabilities = capabilities
-        self._workout_visible = False
+        self._workout_visible = self._profile_ready = False
         self._state = SessionState.PREVIEW
-        self._profile_ready = False
         self._sensor_status = SensorStatus()
         self._target_domain = TargetDomain.NONE
         self._target_difference = ""
@@ -728,15 +728,31 @@ class SessionView(Gtk.Box):
             self._scroller.get_vadjustment(),
         ):
             adjustment.connect("changed", self._queue_adjustments_layout)
-        self.connect("map", self._on_adjustments_font_changed)
-        self.connect("unmap", self._cancel_adjustments_layout)
+        self._settings_handler_ids: list[int] = []
+        self.connect("map", self._on_adjustments_mapped)
+        self.connect("unmap", self._on_adjustments_unmapped)
+
+    def _on_adjustments_mapped(self, *_args: object) -> None:
+        """Watch font settings while visible and refresh remapped controls."""
+        if not self._settings_handler_ids:
+            settings = self.get_settings()
+            self._settings_handler_ids = [
+                settings.connect_object(
+                    f"notify::{setting}",
+                    SessionView._on_adjustments_font_changed,
+                    self,
+                )
+                for setting in ("gtk-xft-dpi", "gtk-font-name")
+            ]
+        self._on_adjustments_font_changed()
+
+    def _on_adjustments_unmapped(self, *_args: object) -> None:
+        """Release global settings callbacks and pending work when hidden."""
+        self._cancel_adjustments_layout()
         settings = self.get_settings()
-        for setting in ("gtk-xft-dpi", "gtk-font-name"):
-            settings.connect_object(
-                f"notify::{setting}",
-                SessionView._on_adjustments_font_changed,
-                self,
-            )
+        for handler_id in self._settings_handler_ids:
+            settings.disconnect(handler_id)
+        self._settings_handler_ids.clear()
 
     def _on_adjustments_font_changed(self, *_args: object) -> None:
         """Refresh hidden GTK font metrics before deciding whether controls fit."""
@@ -930,6 +946,7 @@ class SessionView(Gtk.Box):
         return max(1, width), max(1, height)
 
     def _metric_grid_height(self, columns: int, width: int) -> int:
+        """Measure the metric grid height for a proposed column count and width."""
         tile_width = max(1, (width - (columns - 1) * self.metrics.get_column_spacing()) // columns)
         children = list(self.metrics)
         tile_height = max(

@@ -108,6 +108,7 @@ class HistoryPageUI:
     """Render activity history, summaries, comparisons, and exports."""
 
     def __init__(self, app: FitnessAppUI) -> None:
+        """Initialize history selection, chart state, and display preferences."""
         self.app = app
 
         # State
@@ -214,6 +215,7 @@ class HistoryPageUI:
         self.sort_combo.connect("changed", self._on_sort_changed)
 
         def control_pair(label_text: str, widget: Gtk.Widget) -> Gtk.Widget:
+            """Group an accessible choice control with its caption."""
             row = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
             label = Gtk.Label(label=label_text, xalign=0)
             label.add_css_class("caption")
@@ -288,6 +290,7 @@ class HistoryPageUI:
 
     @staticmethod
     def _legend_scroller(child: Gtk.Widget) -> Gtk.ScrolledWindow:
+        """Keep comparison identities readable within a bounded scroll area."""
         scroller = Gtk.ScrolledWindow()
         scroller.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         scroller.set_min_content_height(64)
@@ -322,6 +325,7 @@ class HistoryPageUI:
 
     # ---- Summary header (totals) ----
     def _build_summary_header(self) -> Gtk.Widget:
+        """Build the activity count and aggregate metrics for the current view."""
         frame = Gtk.Frame()
         body = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         for side in ("top", "bottom", "start", "end"):
@@ -363,6 +367,7 @@ class HistoryPageUI:
 
     # ---- Event handlers ----
     def _on_filter_changed(self, combo: HistoryChoice) -> None:
+        """Reload history when a valid activity filter is selected."""
         choice = combo.get_active_id()
         if choice is None:
             return
@@ -370,6 +375,7 @@ class HistoryPageUI:
         GLib.idle_add(self._reload_everything)
 
     def _on_sort_changed(self, combo: HistoryChoice) -> None:
+        """Reorder displayed activities using the selected sort choice."""
         choice = combo.get_active_id()
         if choice is None:
             return
@@ -377,6 +383,7 @@ class HistoryPageUI:
         GLib.idle_add(self._resort_and_rebind)
 
     def _on_cmp_metric_changed(self, combo: HistoryChoice) -> None:
+        """Rebuild comparison data for the selected metric."""
         if self._updating_cmp_metric_combo:
             return
         choice = combo.get_active_id()
@@ -498,6 +505,7 @@ class HistoryPageUI:
 
     # ---- Bind summary ----
     def _bind_summary(self, rows: list[ActivityStatsRow]) -> None:
+        """Show aggregates for selected activities or the entire filtered view."""
         if self.lbl_scope is None:
             return
         subset = (
@@ -669,6 +677,7 @@ class HistoryPageUI:
         stats: ActivityStatsRow,
         heart_rate_series: list[tuple[int, int]],
     ) -> Gtk.ListBoxRow:
+        """Build an activity card with metrics, comparison selection, and export."""
         sport = SportTypesEnum(stats.sport_type_id)
         row = Gtk.ListBoxRow()
         frame = Gtk.Frame()
@@ -728,6 +737,7 @@ class HistoryPageUI:
             self._compare_job = None
 
     def _redraw_compare_chart(self) -> None:
+        """Request comparison data for the current selection and metric."""
         if self._cmp_ax is None or self._cmp_canvas is None:
             return
         ax = self._cmp_ax
@@ -801,6 +811,7 @@ class HistoryPageUI:
         )
 
     def _render_compare_message(self, message: str) -> None:
+        """Replace the comparison plot with an explanatory message."""
         self._compare_message.set_text(message)
         self._compare_plot.set_visible_child_name("message")
         self._set_compare_legend([])
@@ -822,13 +833,14 @@ class HistoryPageUI:
                 )
                 label.update_property([Gtk.AccessibleProperty.LABEL], [title])
                 box.append(label)
-            if not items:
+            if not items and count == 0:
                 label = Gtk.Label(label="Select activities on the Activities tab.", wrap=True)
                 label.set_wrap_mode(Pango.WrapMode.WORD_CHAR)
                 label.set_max_width_chars(24)
                 box.append(label)
 
     def _render_compare_chart(self, data: CompareChartData) -> None:
+        """Render prepared series with external legends and consistent scaling."""
         if self._cmp_ax is None or self._cmp_canvas is None or self._cmp_chart is None:
             return
         ax = self._cmp_ax
@@ -868,7 +880,7 @@ class HistoryPageUI:
 
         if data.metric == "pace":
             ax.invert_yaxis()
-        self._cmp_chart.set_display_scale(self.layout.density)
+        self._cmp_chart.set_display_scale(self.layout.chart_display_scale)
         canvas.draw_idle()
 
     # Export

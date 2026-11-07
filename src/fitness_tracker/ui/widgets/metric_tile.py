@@ -25,6 +25,7 @@ class MetricTile(Gtk.Frame):
         *,
         sensor: SensorKind | None = None,
     ) -> None:
+        """Build a live metric value, caption, unit, and source-status indicator."""
         super().__init__()
         self.sensor = sensor
         self._connected = False

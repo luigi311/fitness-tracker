@@ -39,6 +39,7 @@ _CSS = b"""
 
 @cache
 def _ensure_css() -> None:
+    """Install the adaptive history styles once for the current display."""
     provider = Gtk.CssProvider()
     provider.load_from_data(_CSS)
     Gtk.StyleContext.add_provider_for_display(
@@ -54,6 +55,7 @@ class HistoryChoice(Gtk.DropDown):
     __gsignals__: ClassVar = {"changed": (GObject.SignalFlags.RUN_LAST, None, ())}
 
     def __init__(self) -> None:
+        """Create a choice control with stable IDs and separate popup labels."""
         super().__init__(model=Gtk.StringList.new([]))
         self._ids: list[str] = []
         self.set_hexpand(True)
@@ -63,9 +65,11 @@ class HistoryChoice(Gtk.DropDown):
 
     @staticmethod
     def _factory(*, popup: bool) -> Gtk.SignalListItemFactory:
+        """Build label factories for compact selections or wrapped popup entries."""
         factory = Gtk.SignalListItemFactory()
 
         def setup(_factory: object, item: Gtk.ListItem) -> None:
+            """Create the label used to display one choice."""
             label = Gtk.Label(xalign=0)
             label.set_max_width_chars(28 if popup else 18)
             if popup:
@@ -76,6 +80,7 @@ class HistoryChoice(Gtk.DropDown):
             item.set_child(label)
 
         def bind(_factory: object, item: Gtk.ListItem) -> None:
+            """Populate a choice label from its current string item."""
             item.get_child().set_text(item.get_item().get_string())
 
         factory.connect("setup", setup)
@@ -117,6 +122,7 @@ class HistoryLayout(Gtk.Box):
         legend_menu: Gtk.MenuButton,
         chart: CompareChart,
     ) -> None:
+        """Arrange persistent history widgets and install adaptive layout rules."""
         super().__init__(orientation=Gtk.Orientation.VERTICAL)
         _ensure_css()
         self.sidebar, self.activities, self.summary_metrics = sidebar, activities, summary_metrics
@@ -152,6 +158,7 @@ class HistoryLayout(Gtk.Box):
         )
 
     def _build_modes(self) -> None:
+        """Add linked controls for switching between activities and comparison."""
         modes = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
         modes.add_css_class("linked")
         modes.set_halign(Gtk.Align.CENTER)
@@ -169,6 +176,7 @@ class HistoryLayout(Gtk.Box):
         self.body.append(modes)
 
     def _build_activities(self) -> None:
+        """Prepare shared or independent scrollers for the activity list."""
         self.activity_panes = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         self.activity_content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         self.activity_content.append(self.sidebar)
@@ -186,6 +194,7 @@ class HistoryLayout(Gtk.Box):
             adjustment.connect("changed", self._on_width_changed)
 
     def _build_comparison(self, frame: Gtk.Frame) -> None:
+        """Place comparison controls and the chart in adaptive panes."""
         self.compare_panes = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         self.compare_panes.append(self.compare_controls)
         self.compare_panes.append(frame)
@@ -194,6 +203,7 @@ class HistoryLayout(Gtk.Box):
 
     @staticmethod
     def _scroller(child: Gtk.Widget | None) -> Gtk.ScrolledWindow:
+        """Create a vertically scrolling container that can shrink horizontally."""
         scroller = Gtk.ScrolledWindow()
         scroller.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         scroller.set_hexpand(True)
@@ -202,6 +212,7 @@ class HistoryLayout(Gtk.Box):
         return scroller
 
     def _build_breakpoints(self) -> None:
+        """Choose panel placement and density from the available logical size."""
         rules = [
             ("min-width: 560px and min-aspect-ratio: 6/5", None, True),
             ("min-width: 900px and min-height: 800px and max-aspect-ratio: 3/2", "roomy", False),
@@ -253,10 +264,12 @@ class HistoryLayout(Gtk.Box):
         self._adaptive.connect("notify::current-breakpoint", self._on_layout_changed)
 
     def _on_page_changed(self, *_args: object) -> None:
+        """Keep the mode buttons synchronized with the visible history page."""
         comparing = self.stack.get_visible_child_name() == "compare"
         (self.btn_compare if comparing else self.btn_activities).set_active(True)
 
     def _on_width_changed(self, *_args: object) -> None:
+        """Choose summary columns that fit the current pane and density."""
         columns = (
             2 if self._landscape else (4 if self._adaptive.get_width() >= 480 * self.density else 2)
         )
@@ -264,6 +277,7 @@ class HistoryLayout(Gtk.Box):
         self.summary_metrics.set_max_children_per_line(columns)
 
     def _on_layout_changed(self, *_args: object) -> None:
+        """Apply density, pane placement, and DPI-aware chart sizing."""
         scale = next(
             (
                 value
@@ -302,11 +316,17 @@ class HistoryLayout(Gtk.Box):
         self.legend.set_size_request(-1, round(64 * scale))
         self.legend_menu.set_visible(not landscape)
         self.chart.canvas.set_size_request(round(140 * scale), round(160 * scale))
-        dpi = self.get_settings().get_property("gtk-xft-dpi")
-        self.chart.set_display_scale(scale * (dpi / (96 * 1024) if dpi > 0 else 1))
+        self.chart.set_display_scale(self.chart_display_scale)
         self._on_width_changed()
 
+    @property
+    def chart_display_scale(self) -> float:
+        """Combine the layout density with GTK's current text scaling."""
+        dpi = self.get_settings().get_property("gtk-xft-dpi")
+        return self.density * (dpi / (96 * 1024) if dpi > 0 else 1)
+
     def _move_activity_list(self, *, landscape: bool) -> None:
+        """Reparent the existing list while preserving its approximate scroll position."""
         old = self.list_scroll if self._landscape else self.activity_scroll
         offset = (
             0
@@ -323,6 +343,7 @@ class HistoryLayout(Gtk.Box):
         self.list_scroll.set_visible(landscape)
 
         def restore() -> bool:
+            """Restore the list position after its new container is allocated."""
             target = self.list_scroll if landscape else self.activity_scroll
             offset = (
                 self.sidebar.get_height() + self.activity_content.get_spacing()
