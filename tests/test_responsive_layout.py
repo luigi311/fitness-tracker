@@ -398,7 +398,16 @@ def test_session_allocations(app_stub, width, height, kind):
             # must all be visible together, including the tight Comet layout.
             essential = [view.metrics]
             if kind != "free":
-                essential.extend([view.gauge, view.timer_remaining, view.step_position])
+                essential.extend(
+                    [
+                        view.gauge,
+                        view.timer_remaining,
+                        view.step_position,
+                        view.title_label,
+                        view.lbl_target,
+                        view.lbl_next,
+                    ],
+                )
             for widget in essential:
                 assert_inside(widget, view._scroller)
         assert not callbacks.mock_calls
@@ -1099,8 +1108,11 @@ def test_portrait_trainer_shows_bias_and_all_readings(app_stub, width, height):
         assert view._controls.get_orientation() is Gtk.Orientation.VERTICAL
         assert view.metrics.get_max_children_per_line() == 2  # noqa: PLR2004
         for widget in (
+            view.title_label,
             view.gauge,
             view._step_details,
+            view.lbl_target,
+            view.lbl_next,
             view.metrics,
             control,
             *control.touch_buttons,

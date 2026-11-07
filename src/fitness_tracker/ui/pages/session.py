@@ -232,8 +232,8 @@ class SessionView(Gtk.Box):
         self._footer.set_css_classes(
             ["session-footer"] + (["horizontal"] if horizontal_footer else []),
         )
-        self.title_label.set_visible(square)
-        self.lbl_next.set_visible(square)
+        self.title_label.set_visible(True)
+        self.lbl_next.set_visible(True)
         self._time_values.set_max_children_per_line(2)
         self.gauge_height = 80 if self.landscape else 100
         self.gauge.set_content_width(110)

@@ -70,7 +70,10 @@ value. Enlarged text can scroll those same panels.
 
 Workouts show Elapsed, Remaining, and Step (for example `5/15`). The counter follows
 the executable step sequence through preview, automatic progression, and previous
-or next navigation. Free sessions hide workout readouts. Step changes retain the
+or next navigation. The workout heading, current target, and next-step preview
+remain visible in every aspect layout, using the height reclaimed from the title
+bar. Longer previews wrap; enlarged text can scroll without moving the panels.
+Free sessions hide workout readouts. Step changes retain the
 full desktop notification without an in-app step toast. Other session notices stay
 above the recording footer.
 
