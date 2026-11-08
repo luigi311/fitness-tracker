@@ -27,7 +27,9 @@ window. The remaining axis extends to fill the available area. The `ScaledView`
 GTK container allocates the existing application in those reference coordinates
 and applies one uniform transform to it. Text, gauge drawing, chart axes, spacing,
 controls and bottom navigation therefore scale together. Native popover
-contents receive the same transform within their own surfaces. Charts render
+contents receive the same transform within their own surfaces. GTK's native
+shadow bounds remain outside that transform, and popup sizes are prepared before
+presentation so Wayland always receives positive content dimensions. Charts render
 at the combined native and interface scale to keep their backing images sharp.
 
 For example, a 720×1440 Librem display provides approximately 720×1440 logical
@@ -47,7 +49,9 @@ Accessibility font enlargement remains independent of display zoom. It enlarges
 text within the chosen arrangement; content can scroll horizontally or vertically
 rather than moving equipment controls to another panel. Recording actions remain
 outside that scroll area. Previous/Next remain in the recording footer. Portrait
-uses two footer rows; balanced and landscape use one row. Global Tracker, History,
+workouts use two footer rows; free sessions, balanced and landscape use one row.
+Portrait free-session charts expand into the remaining content space.
+Global Tracker, History,
 and Settings navigation stays at the bottom. The in-app title bar stays hidden in
 every arrangement, reclaiming its height without depending on display zoom.
 
@@ -58,9 +62,9 @@ restart recording, reset step timers, change trainer targets, or invoke controls
 Trainer bias and selected modes survive movement between panels. Trainer modes,
 trainer adjustments, and incline controls remain directly available in every
 arrangement. Mode choices use up to three columns in portrait and two in other
-arrangements; enlarged text can use
-fewer columns inside the same panel. Compact mode-button padding, portrait
-metric-tile margins, and vertical gaps retain two
+arrangements; enlarged text can use fewer columns inside the same panel. Mode
+buttons keep keyboard focus while their grid reflows for text or zoom changes.
+Compact mode-button padding, portrait metric-tile margins, and vertical gaps retain two
 metric columns, all six readings, and the full equipment panel. Portrait shows
 source indicators and Live/Dead text beside each number. Square and landscape
 layouts keep that information underneath the value. All sessions order metrics as
@@ -98,8 +102,12 @@ navigation below. Portrait places filters, totals, and cards in one scroll area.
 Landscape places filters and totals beside an independently scrolling list.
 Selection, filters, sorting, unit conversion, asynchronous queries, and export
 retain their behavior across reflow. Comparison controls and legends sit beside
-the plot in landscape and use the selected-activities menu in portrait. Chart
+the plot in landscape and use the selected-activities menu in portrait. Its popup
+fits the longest activity name, capped at the window width with small side margins;
+longer names wrap within it. Chart
 margins update on resize rather than performing a layout calculation every redraw.
+Popup discovery skips unmapped page contents so a hidden History list does not
+add work to recording updates; its popups adopt the shared scale when shown.
 
 Activity setup keeps its keyboard-accessible sport and environment selectors and
 the original house, tree, and lightning icons. Its free-session action stays
@@ -114,6 +122,13 @@ importing GTK, so environments without a display skip those modules:
 xvfb-run -a env FITNESS_TRACKER_GTK_TESTS=1 uv run pytest tests/test_responsive_layout.py tests/test_history_responsive_layout.py
 ```
 
+Also run the comparison-activities popup check in a Wayland session (or under a
+headless Wayland compositor). Xvfb does not validate Wayland popup geometry:
+
+```sh
+GDK_BACKEND=wayland FITNESS_TRACKER_GTK_TESTS=1 uv run pytest tests/test_history_responsive_layout.py -k comparison_activity_popup
+```
+
 Pure policy tests cover every integer display percentage from 100% through 300%,
 aspect boundaries, and allocation rounding. Native tests check actual transformed
 allocations across 100%, 115%, 125%, 150%, 175%, 200%, 250%, and 300%; fonts, touch
@@ -126,3 +141,5 @@ Set `FITNESS_TRACKER_SCREENSHOTS=/tmp/fitness-layouts` to save sample native ren
 To exercise real pointer cancellation on an isolated X server, also set
 `FITNESS_TRACKER_XINPUT_TESTS=1`; this requires X11 and XTEST libraries. These desktop
 checks do not replace physical-device testing.
+Device checks should include Settings with the on-screen keyboard open, Wayland
+popup placement, fractional compositor scaling, and touch and rendering performance.

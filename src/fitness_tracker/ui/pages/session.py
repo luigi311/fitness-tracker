@@ -225,11 +225,11 @@ class SessionView(Gtk.Box):
         self.metrics.set_max_children_per_line(self.metric_columns)
         self.metrics.set_row_spacing(2 if portrait_equipment else 4)
         self.metrics.set_vexpand(not portrait)
-        self._readings.set_vexpand(not portrait)
+        self._readings.set_vexpand(not portrait or not self._workout_visible)
         self._controls.set_orientation(
             Gtk.Orientation.VERTICAL if portrait else Gtk.Orientation.HORIZONTAL,
         )
-        horizontal_footer = not portrait
+        horizontal_footer = not portrait or not self._workout_visible
         self._footer.set_css_classes(
             ["session-footer"] + (["horizontal"] if horizontal_footer else []),
         )

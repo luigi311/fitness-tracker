@@ -141,19 +141,16 @@ class TrainerTargetControl(Gtk.Frame):
             self._layout_modes()
 
     def _layout_modes(self) -> None:
-        """Keep visible mode buttons in a measured grid with no empty cells."""
-        for child in list(self._mode_grid):
-            self._mode_grid.remove(child)
+        """Move mode buttons in place so reflow retains keyboard focus."""
+        manager = self._mode_grid.get_layout_manager()
         index = 0
         for button in self._mode_buttons.values():
             if button.get_visible():
-                self._mode_grid.attach(
-                    button,
-                    index % self._mode_columns,
-                    index // self._mode_columns,
-                    1,
-                    1,
-                )
+                if button.get_parent() is None:
+                    self._mode_grid.attach(button, 0, 0, 1, 1)
+                placement = manager.get_layout_child(button)
+                placement.set_column(index % self._mode_columns)
+                placement.set_row(index // self._mode_columns)
                 index += 1
 
     def _build_adjustment_row(self) -> Gtk.Box:
