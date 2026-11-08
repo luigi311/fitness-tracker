@@ -13,6 +13,7 @@ import ctypes.util
 import json
 import math
 import os
+from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
@@ -44,7 +45,7 @@ gi.require_versions({"Gtk": "4.0", "Adw": "1", "Graphene": "1.0"})
 from fitness_tracker.ui.pages.mode import ModeSelectView
 from fitness_tracker.ui.pages.session import SessionView
 from fitness_tracker.ui.widgets import session_controls as session_controls_module
-from fitness_tracker.ui.widgets.scaled_view import ScaledView
+from fitness_tracker.ui.widgets.scaled_view import ContentWidthPopover, ScaledView
 from gi.repository import Adw, Gio, GLib, Graphene, Gtk  # ty:ignore[unresolved-import]
 
 MIN_TOUCH_HEIGHT = 48
@@ -384,6 +385,63 @@ def test_popup_width_ignores_size_requests_set_before_interface_scaling(app_stub
             settle()
         assert widths[0] == pytest.approx(widths[1], abs=1)
     finally:
+        window.destroy()
+        settle()
+
+
+@pytest.mark.parametrize(
+    "cap_offset",
+    [None, -1, 0, 1],
+    ids=["zero", "below-floor", "floor", "above"],
+)
+@pytest.mark.parametrize("initially_open", [False, True])
+def test_content_width_popup_respects_cap_without_invalid_native_geometry(
+    app_stub,
+    cap_offset,
+    *,
+    initially_open,
+):
+    """Close unusably narrow popups, preserve safe minima, and reopen after recovery."""
+    del app_stub
+    button = Gtk.MenuButton(label="Activities")
+    popup = ContentWidthPopover(child=Gtk.Label(label="x", wrap=True))
+    button.set_popover(popup)
+    window = show_view(button, 360, 720)
+    scaled = window.get_child()
+    original = scaled.layout_frame
+    manager = popup.get_layout_manager()
+    chrome = manager.chrome_size(Gtk.Orientation.HORIZONTAL)
+    floor = chrome + 1
+    cap = 0 if cap_offset is None else floor + cap_offset
+    try:
+        if initially_open:
+            button.popup()
+            settle()
+            assert popup.get_mapped()
+        scaled.layout_frame = replace(original, scale=max(0.25, cap) / (original.width - 24))
+        scaled._prepare_popup(popup)
+        assert manager.max_width == cap
+        minimum, natural, *_ = manager.measure(popup, Gtk.Orientation.HORIZONTAL, -1)
+        assert minimum <= natural <= cap
+        button.popup()
+        if cap < floor:
+            assert not popup.get_visible()
+            assert not popup.get_mapped()
+            assert not button.get_active()
+        else:
+            assert minimum >= floor
+            assert popup.get_visible()
+        window.get_display().sync()
+        popup.popdown()
+        scaled.layout_frame = original
+        window.set_default_size(240, 480)
+        settle()
+        button.popup()
+        settle()
+        assert popup.get_mapped()
+        assert popup.get_surface().get_width() > chrome
+    finally:
+        scaled.layout_frame = original
         window.destroy()
         settle()
 

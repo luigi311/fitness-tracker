@@ -33,6 +33,7 @@ from fitness_tracker.services.history_query import (
 from fitness_tracker.services.jobs import CancellationToken, DuplicateJobError, JobHandle
 from fitness_tracker.ui.widgets.chart import CompareChart, Sparkline, style_axes
 from fitness_tracker.ui.widgets.history_layout import HistoryChoice, HistoryLayout
+from fitness_tracker.ui.widgets.scaled_view import ContentWidthPopover
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -257,8 +258,7 @@ class HistoryPageUI:
         row.append(self.cmp_metric_combo)
         self._legend_menu = Gtk.MenuButton(label="0 selected")
         self._legend_menu.set_tooltip_text("Activities and line colors in this comparison")
-        popover = Gtk.Popover()
-        popover.add_css_class("content-width-popup")
+        popover = ContentWidthPopover()
         self._legend_popup_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         popup_scroller = self._legend_scroller(self._legend_popup_box)
         popup_scroller.set_propagate_natural_width(True)

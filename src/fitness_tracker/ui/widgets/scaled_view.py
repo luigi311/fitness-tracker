@@ -80,8 +80,8 @@ class _PopupLayout(Gtk.LayoutManager):
         minimum = chrome + ceil(minimum * self.scale)
         natural = chrome + ceil(natural * self.scale)
         if orientation is Gtk.Orientation.HORIZONTAL and self.max_width is not None:
-            minimum = min(minimum, self.max_width)
-            natural = min(natural, self.max_width)
+            minimum = min(max(chrome + 1, minimum), self.max_width)
+            natural = min(max(minimum, natural), self.max_width)
         return minimum, natural, -1, -1
 
     def chrome_size(self, orientation: Gtk.Orientation) -> int:
@@ -106,6 +106,22 @@ class _PopupLayout(Gtk.LayoutManager):
             -1,
             Gsk.Transform.new().scale(self.scale, self.scale),
         )
+
+
+class ContentWidthPopover(Gtk.Popover):
+    """Keep popups closed when native chrome cannot fit within the window."""
+
+    def do_show(self) -> None:
+        """Reject sizes without positive native content and allow later retries."""
+        manager = self.get_layout_manager()
+        if (
+            isinstance(manager, _PopupLayout)
+            and manager.max_width is not None
+            and manager.max_width < manager.chrome_size(Gtk.Orientation.HORIZONTAL) + 1
+        ):
+            self.emit("closed")
+            return
+        Gtk.Popover.do_show(self)
 
 
 class _AspectLayout(Gtk.LayoutManager):
@@ -225,11 +241,11 @@ class ScaledView(Gtk.Box):
             if anchor is not None
             else -1
         )
-        if anchor is not None and popup.has_css_class("content-width-popup"):
-            maximum = max(
-                chrome + 1,
-                round((self.layout_frame.width - 24) * self.layout_frame.scale),
-            )
+        if anchor is not None and isinstance(popup, ContentWidthPopover):
+            maximum = max(0, round((self.layout_frame.width - 24) * self.layout_frame.scale))
+            if maximum < chrome + 1:
+                # No positive Wayland content size fits; close instead of exceeding the cap.
+                popup.popdown()
             if manager.max_width != maximum:
                 manager.max_width = maximum
                 manager.layout_changed()
