@@ -32,10 +32,27 @@ def _ensure_popup_css() -> None:
 class _PopupLayout(Gtk.LayoutManager):
     """Measure native popup contents at the same uniform scale as the window."""
 
-    def __init__(self, scale: float) -> None:
+    def __init__(self, widget: Gtk.Popover, scale: float) -> None:
         """Keep native popup structure intact for GTK-owned dropdowns and menus."""
         super().__init__()
         self.scale = scale
+        self.max_width: int | None = None
+        # Capture native shadow bounds before replacing GTK's layout. Dropdowns
+        # can preset a size request; exclude that request from the measurement.
+        requested_size = widget.get_size_request()
+        widget.set_size_request(-1, -1)
+        try:
+            child = widget.get_first_child()
+            self._chrome = {
+                orientation: max(
+                    0,
+                    Gtk.Popover.do_measure(widget, orientation, -1)[0]
+                    - child.measure(orientation, -1)[0],
+                )
+                for orientation in (Gtk.Orientation.HORIZONTAL, Gtk.Orientation.VERTICAL)
+            }
+        finally:
+            widget.set_size_request(*requested_size)
 
     def set_scale(self, scale: float) -> None:
         """Remeasure a native popup when its parent interface changes zoom."""
@@ -51,11 +68,25 @@ class _PopupLayout(Gtk.LayoutManager):
     ) -> tuple[int, int, int, int]:
         """Expose scaled content minima to GTK's native popup sizing."""
         child = widget.get_first_child()
-        minimum, natural, _min_base, _nat_base = child.measure(
-            orientation,
-            round(for_size / self.scale) if for_size >= 0 else -1,
-        )
-        return ceil(minimum * self.scale), ceil(natural * self.scale), -1, -1
+        chrome = self.chrome_size(orientation)
+        if for_size >= 0:
+            other = (
+                Gtk.Orientation.VERTICAL
+                if orientation is Gtk.Orientation.HORIZONTAL
+                else Gtk.Orientation.HORIZONTAL
+            )
+            for_size = max(0, round((for_size - self.chrome_size(other)) / self.scale))
+        minimum, natural, _min_base, _nat_base = child.measure(orientation, for_size)
+        minimum = chrome + ceil(minimum * self.scale)
+        natural = chrome + ceil(natural * self.scale)
+        if orientation is Gtk.Orientation.HORIZONTAL and self.max_width is not None:
+            minimum = min(minimum, self.max_width)
+            natural = min(natural, self.max_width)
+        return minimum, natural, -1, -1
+
+    def chrome_size(self, orientation: Gtk.Orientation) -> int:
+        """Retain the native chrome measured before replacing GTK's layout."""
+        return self._chrome[orientation]
 
     def do_allocate(
         self,
@@ -164,20 +195,20 @@ class ScaledView(Gtk.Box):
             if isinstance(widget, Gtk.Popover):
                 manager = widget.get_layout_manager()
                 if not isinstance(manager, _PopupLayout):
-                    manager = _PopupLayout(self.layout_frame.scale)
-                    widget.set_layout_manager(manager)
                     widget.set_has_arrow(False)
                     widget.add_css_class("consistent-popup")
+                    manager = _PopupLayout(widget, self.layout_frame.scale)
+                    widget.set_layout_manager(manager)
                     widget.connect("map", self.queue_popup_sync)
                 manager.set_scale(self.layout_frame.scale)
-                if widget.get_mapped():
-                    self._prepare_popup(widget)
+                self._prepare_popup(widget)
                 continue
-            pending.extend(widget)
+            if widget.get_mapped():
+                pending.extend(widget)
         return GLib.SOURCE_REMOVE
 
     def _prepare_popup(self, popup: Gtk.Popover) -> None:
-        """Size a popup to its painted anchor rather than the reference allocation."""
+        """Prepare anchor width and native bounds before a popup can be presented."""
         manager = popup.get_layout_manager()
         if not isinstance(manager, _PopupLayout):
             return
@@ -188,7 +219,27 @@ class ScaledView(Gtk.Box):
             (Gtk.MenuButton, Gtk.DropDown, Gtk.ComboBox),
         ):
             anchor = anchor.get_parent()
-        popup.set_size_request(
-            round(anchor.get_width() * self.layout_frame.scale) if anchor is not None else -1,
-            -1,
+        chrome = manager.chrome_size(Gtk.Orientation.HORIZONTAL)
+        width = (
+            round(anchor.get_width() * self.layout_frame.scale) + chrome
+            if anchor is not None
+            else -1
         )
+        if anchor is not None and popup.has_css_class("content-width-popup"):
+            maximum = max(
+                chrome + 1,
+                round((self.layout_frame.width - 24) * self.layout_frame.scale),
+            )
+            if manager.max_width != maximum:
+                manager.max_width = maximum
+                manager.layout_changed()
+            width = -1
+            success, bounds = self.compute_bounds(anchor)
+            if success:
+                pointing = Gdk.Rectangle()
+                pointing.x = round(bounds.get_x() + bounds.get_width() / 2)
+                pointing.y = 0
+                pointing.width = 1
+                pointing.height = max(1, anchor.get_height())
+                popup.set_pointing_to(pointing)
+        popup.set_size_request(width, -1)

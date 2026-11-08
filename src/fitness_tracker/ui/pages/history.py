@@ -258,8 +258,11 @@ class HistoryPageUI:
         self._legend_menu = Gtk.MenuButton(label="0 selected")
         self._legend_menu.set_tooltip_text("Activities and line colors in this comparison")
         popover = Gtk.Popover()
+        popover.add_css_class("content-width-popup")
         self._legend_popup_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
-        popover.set_child(self._legend_scroller(self._legend_popup_box))
+        popup_scroller = self._legend_scroller(self._legend_popup_box)
+        popup_scroller.set_propagate_natural_width(True)
+        popover.set_child(popup_scroller)
         self._legend_menu.set_popover(popover)
         row.append(self._legend_menu)
         controls.append(row)
@@ -827,7 +830,8 @@ class HistoryPageUI:
             for title, color in items:
                 label = Gtk.Label(xalign=0, wrap=True)
                 label.set_wrap_mode(Pango.WrapMode.WORD_CHAR)
-                label.set_max_width_chars(28)
+                if box is self._legend_inline_box:
+                    label.set_max_width_chars(28)
                 label.set_markup(
                     f'<span foreground="{color}">━</span> {GLib.markup_escape_text(title)}',
                 )

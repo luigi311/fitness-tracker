@@ -141,6 +141,127 @@ def select_pair(page):
     wait_for(lambda: page._compare_job is None and len(page._compare_legend_items) == COMPARE_COUNT)
 
 
+@pytest.mark.parametrize(("width", "height"), [(240, 480), (360, 720), (432, 496), (800, 1280)])
+@pytest.mark.parametrize("selected", [False, True])
+def test_comparison_activity_popup_opens_without_losing_selection(
+    history_app,
+    width,
+    height,
+    *,
+    selected,
+):
+    """Open the real legend on X11 and Wayland, including before its first allocation."""
+    app = history_app
+    page = app.history
+    resize(app, width, height)
+    if selected:
+        select_pair(page)
+    page.stack.set_visible_child_name("compare")
+    settle()
+    selection = set(page.selected_ids)
+    legend = list(page._compare_legend_items)
+    popup = page._legend_menu.get_popover()
+    try:
+        for _ in range(2):
+            page._legend_menu.popup()
+            settle()
+            assert popup.get_mapped()
+            assert popup.get_surface().get_width() > 0
+            assert popup.get_surface().get_height() > 0
+            labels = [label.get_text() for label in descendant_labels(popup) if label.get_mapped()]
+            for title, _color in legend:
+                assert any(title in label for label in labels)
+            if not selected:
+                assert "Select activities on the Activities tab." in labels
+            assert page.selected_ids == selection
+            assert page._compare_legend_items == legend
+            page._legend_menu.popdown()
+            settle()
+    finally:
+        page._legend_menu.popdown()
+        settle()
+
+
+@pytest.mark.parametrize(("width", "height"), [(240, 480), (432, 496), (800, 1280)])
+def test_comparison_popup_fits_window_and_wraps_full_activity_names(history_app, width, height):
+    """Wrap complete long names without extending beyond the window."""
+    app = history_app
+    page = app.history
+    resize(app, width, height)
+    select_pair(page)
+    page.stack.set_visible_child_name("compare")
+    settle()
+    previous_legend = list(page._compare_legend_items)
+    names = (
+        "Saturday morning long endurance ride through the foothills — 90 minute progression",
+        "Recovery run along the river with an extended warmup and relaxed cooldown",
+    )
+    page._set_compare_legend(list(zip(names, ("#0099ff", "#ff9900"), strict=True)))
+    popup = page._legend_menu.get_popover()
+    minimum_width_fraction = 0.85
+    try:
+        page._legend_menu.popup()
+        settle()
+        assert popup.get_mapped()
+        surface = popup.get_surface()
+        assert surface.get_width() >= app.window.get_width() * minimum_width_fraction
+        assert surface.get_position_x() >= -1
+        assert (
+            surface.get_position_x() + surface.get_width()
+            <= app.window.get_surface().get_width() + 1
+        )
+        labels = list(descendant_labels(page._legend_popup_box))
+        assert len(labels) == len(names)
+        for label, name in zip(labels, names, strict=True):
+            assert label.get_mapped()
+            assert label.get_text().endswith(name)
+            assert not label.get_layout().is_ellipsized()
+        assert len(page.selected_ids) == COMPARE_COUNT
+    finally:
+        page._legend_menu.popdown()
+        page._set_compare_legend(previous_legend)
+        settle()
+
+
+@pytest.mark.parametrize(("width", "height"), [(240, 480), (432, 496), (800, 1280), (720, 1440)])
+def test_comparison_popup_width_follows_activity_names(history_app, width, height):
+    """Grow and shrink the same popup to fit names on one line when space allows."""
+    app = history_app
+    page = app.history
+    resize(app, width, height)
+    select_pair(page)
+    page.stack.set_visible_child_name("compare")
+    settle()
+    previous_legend = list(page._compare_legend_items)
+    popup = page._legend_menu.get_popover()
+    widths = []
+    maximum_width_fraction = 0.8
+    try:
+        for names in (
+            ("Morning ride", "Evening run"),
+            ("Morning ride through the park", "Evening run by the river"),
+            ("Ride", "Run"),
+        ):
+            page._set_compare_legend(list(zip(names, ("#0099ff", "#ff9900"), strict=True)))
+            page._legend_menu.popup()
+            settle()
+            assert popup.get_mapped()
+            widths.append(popup.get_surface().get_width())
+            for label, name in zip(descendant_labels(page._legend_popup_box), names, strict=True):
+                assert label.get_text().endswith(name)
+                assert label.get_layout().get_line_count() == 1
+                assert not label.get_layout().is_ellipsized()
+            page._legend_menu.popdown()
+            settle()
+        assert widths[2] < widths[0] < widths[1]
+        assert widths[0] < app.window.get_width() * maximum_width_fraction
+        assert len(page.selected_ids) == COMPARE_COUNT
+    finally:
+        page._legend_menu.popdown()
+        page._set_compare_legend(previous_legend)
+        settle()
+
+
 @pytest.mark.parametrize(("width", "height"), VIEWPORTS)
 @pytest.mark.parametrize("tab", ["activities", "compare"])
 def test_populated_history_fits_all_supported_sizes(history_app, width, height, tab):

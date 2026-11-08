@@ -358,6 +358,101 @@ def test_native_popup_matches_the_scaled_interface(app_stub):
         settle()
 
 
+@pytest.mark.parametrize(("width", "height"), [(240, 480), (720, 1440)])
+def test_popup_width_ignores_size_requests_set_before_interface_scaling(app_stub, width, height):
+    """Keep identical popup content and anchors consistent despite native preset sizes."""
+    del app_stub
+    box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+    buttons = []
+    for requested_width in (-1, 360):
+        button = Gtk.MenuButton(label="Options")
+        popup = Gtk.Popover(child=Gtk.Button(label="Select this option"))
+        popup.set_size_request(requested_width, -1)
+        button.set_popover(popup)
+        box.append(button)
+        buttons.append(button)
+    window = show_view(box, width, height)
+    widths = []
+    try:
+        for button in buttons:
+            button.popup()
+            settle()
+            popup = button.get_popover()
+            assert popup.get_mapped()
+            widths.append(popup.get_surface().get_width())
+            button.popdown()
+            settle()
+        assert widths[0] == pytest.approx(widths[1], abs=1)
+    finally:
+        window.destroy()
+        settle()
+
+
+def test_popup_discovery_skips_hidden_pages_and_scales_them_when_shown(app_stub):
+    """Keep hidden history-sized trees out of the recording update path."""
+    del app_stub
+    traversed = []
+
+    class CountedPage(Gtk.Box):
+        """Observe Python traversal without adding timing-sensitive assertions."""
+
+        def __iter__(self):
+            traversed.append(self)
+            return super().__iter__()
+
+    stack = Gtk.Stack()
+    stack.add_named(Gtk.Label(label="Recording"), "tracker")
+    hidden = CountedPage()
+    button = Gtk.MenuButton(label="History choices")
+    choice = Gtk.Button(label="Select this option")
+    popup = Gtk.Popover(child=choice)
+    button.set_popover(popup)
+    hidden.append(button)
+    stack.add_named(hidden, "history")
+    window = show_view(stack, 240, 480)
+    try:
+        traversed.clear()
+        window.get_child()._sync_popups()
+        assert not traversed
+        stack.set_visible_child_name("history")
+        settle()
+        button.popup()
+        settle()
+        assert traversed
+        assert popup.get_mapped()
+        success, bounds = choice.compute_bounds(popup)
+        assert success
+        assert bounds.get_height() == pytest.approx(
+            choice.get_allocation().height * window.get_child().layout_frame.scale,
+            abs=1,
+        )
+    finally:
+        window.destroy()
+        settle()
+
+
+@pytest.mark.parametrize(("width", "height"), [(360, 720), (800, 1280)])
+def test_portrait_free_chart_uses_available_space_without_an_empty_footer(
+    app_stub,
+    width,
+    height,
+):
+    """Retain a readable expanding chart and one action row in portrait free sessions."""
+    view, callbacks = make_session(app_stub, "free")
+    window = show_view(view, width, height, production_shell=True)
+    try:
+        assert_inside(view.live_chart.canvas, view._scroller)
+        assert_inside(view.btn_stop, window)
+        assert_inside(view.btn_start, window)
+        assert view.live_chart.canvas.get_height() > view._scroller.get_height() / 2
+        assert view._footer.get_height() == view._controls.get_height()
+        assert not view._workout_navigation.get_mapped()
+        assert not callbacks.mock_calls
+    finally:
+        window.destroy()
+        settle()
+
+
 @pytest.mark.parametrize(
     ("width", "height", "family"),
     [(800, 1000, LayoutFamily.SQUARE), (1350, 1000, LayoutFamily.SQUARE)],
@@ -1429,6 +1524,40 @@ def test_trainer_disclosure_adapts_to_text_size_without_resize(app_stub):
         settle()
 
 
+def test_trainer_mode_focus_survives_text_and_zoom_reflow(app_stub):
+    """Keep keyboard activation on the same mode through font and zoom changes."""
+    settings = Gtk.Settings.get_default()
+    original_dpi = settings.get_property("gtk-xft-dpi")
+    settings.set_property("gtk-xft-dpi", 96 * 1024)
+    view, callbacks = make_session(app_stub, "trainer")
+    window = show_view(view, 360, 720, production_shell=True)
+    control = view.trainer_target_control
+    button = control._mode_buttons[TrainerMode.POWER]
+    portrait_columns, enlarged_columns = 3, 2
+    try:
+        assert button.grab_focus()
+        assert window.get_focus() is button
+        assert control._mode_columns == portrait_columns
+        settings.set_property("gtk-xft-dpi", round(1.5 * 96 * 1024))
+        settle()
+        assert control._mode_columns == enlarged_columns
+        assert window.get_focus() is button
+        window.set_default_size(720, 1440)
+        settle()
+        assert window.get_focus() is button
+        assert not callbacks.mock_calls
+        assert button.activate()
+        for _ in range(5):
+            settle()
+            if callbacks.target.called:
+                break
+        callbacks.target.assert_called_once_with(TrainerMode.POWER, 100.0)
+    finally:
+        window.destroy()
+        settings.set_property("gtk-xft-dpi", original_dpi)
+        settle()
+
+
 @pytest.mark.parametrize("kind", SESSION_KINDS)
 @pytest.mark.parametrize(
     ("width", "height", "scale", "reference_width", "reference_height"),
@@ -1639,7 +1768,11 @@ def test_comet_chart_labels_match_dashboard_density(app_stub, width, height, sca
         settle()
         label = chart.hr_axes.xaxis.label
         assert label.get_fontsize() == CHART_REFERENCE_FONT_SIZE
-        assert chart.canvas.device_pixel_ratio == pytest.approx(scale, rel=0.01)
+        surface = window.get_surface()
+        native_scale = (
+            surface.get_scale() if hasattr(surface, "get_scale") else window.get_scale_factor()
+        )
+        assert chart.canvas.device_pixel_ratio == pytest.approx(scale * native_scale, rel=0.01)
         for tick in chart.hr_axes.get_xticklabels():
             assert tick.get_fontsize() == CHART_REFERENCE_FONT_SIZE
         bounds = label.get_window_extent(chart.canvas.get_renderer())
