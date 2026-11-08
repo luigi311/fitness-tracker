@@ -66,6 +66,38 @@
         type="desktop-id"
     >com.luigi311.fitness-tracker.desktop</launchable>
     <releases>
+        <release version="6.0.0" date="2026-11-07">
+            <url
+                type="details"
+            >https://github.com/luigi311/fitness-tracker/releases/tag/v6.0.0</url>
+            <description>
+                <p>
+                    Features
+                </p>
+                <ul>
+                    <li>Adapt tracker and History layouts to phones, tablets, desktops, display scaling, and rotation</li>
+                    <li>Use GPS for outdoor speed, pace, distance, and available altitude alongside Bluetooth sensors, independently of route recording</li>
+                    <li>Browse live sensor readings and step or session averages on the Pebble companion</li>
+                </ul>
+                <p>
+                    Improvements
+                </p>
+                <ul>
+                    <li>Keep recording actions and trainer controls accessible across screen sizes</li>
+                    <li>Show workout step position beside session timers and keep next-step guidance visible</li>
+                    <li>Improve Pebble readability, target guidance, step alerts, and lost-link detection</li>
+                </ul>
+                <p>
+                    Bug Fixes
+                </p>
+                <ul>
+                    <li>Respect selected metric or imperial units in workout distances</li>
+                    <li>Keep GPS metrics recording when route storage fails</li>
+                    <li>Verify Pebble watch readiness before reporting a successful connection</li>
+                    <li>Fix History comparison popup sizing and Wayland crashes</li>
+                </ul>
+            </description>
+        </release>
         <release version="5.1.1" date="2026-08-30">
             <url
                 type="details"
