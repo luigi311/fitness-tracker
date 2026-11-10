@@ -49,6 +49,13 @@ After installing the project with `uv sync`, the canonical application command i
 `uv run fitness-tracker [options]`. From a source checkout, `uv run python main.py
 [options]` is also supported and delegates to the same argument parser.
 
+Run `uv run fitness-tracker --test` to simulate missing sensors and include the
+bundled `Tempo intervals` workout under both Run and Bike. It lasts two minutes:
+a 20-second warm-up, three 20-second tempo efforts with 10-second recoveries,
+and a 10-second cool-down. Running uses pace targets; cycling uses power targets.
+The bundled workout is shown only in test mode and is not copied into your
+workout directories. An existing workout with the same name takes precedence.
+
 * **Tracker Page**: Used to start your session, select the sport and enviornment and then start a workout/freerun and then click start when ready
 
 * **History Page**: See previous sessions with filter for Last 7 Days, Last 30 Days, or All Time. Tick individual sessions and click compare to see more detailed graphs.

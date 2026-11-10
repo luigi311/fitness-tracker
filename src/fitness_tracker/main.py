@@ -77,7 +77,7 @@ def main() -> None:
     parser.add_argument(
         "--test",
         action="store_true",
-        help="Generate dummy data for missing sensors and show full UI.",
+        help="Simulate missing sensors and include the bundled Tempo intervals workout.",
     )
     parser.add_argument(
         "--debug-level",

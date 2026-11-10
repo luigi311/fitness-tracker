@@ -44,6 +44,9 @@ flatpak = [
 [project.scripts]
 fitness-tracker = "fitness_tracker.__main__:main"
 
+[tool.setuptools.package-data]
+"fitness_tracker.data" = ["workouts/*.json"]
+
 
 [tool.ruff]
 line-length = 100

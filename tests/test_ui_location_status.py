@@ -657,6 +657,7 @@ def test_workout_list_summaries_refresh_when_units_change(monkeypatch, tmp_path)
     view = module.ModeSelectView.__new__(module.ModeSelectView)
     view._workouts_running_dir = tmp_path
     view._unit_system = UnitSystem.IMPERIAL
+    view._test_mode = False
     view.sport_type = SportTypesEnum.running
     view._selected_env = Environment.INDOOR
     view._list = []

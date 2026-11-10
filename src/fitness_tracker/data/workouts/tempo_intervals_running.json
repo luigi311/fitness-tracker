@@ -1,0 +1,32 @@
+{
+  "name": "Tempo intervals",
+  "type": "Run",
+  "description": "Two-minute test workout: warm up, three short tempo efforts with recovery, then cool down.",
+  "steps": [
+    {
+      "text": "Warm up",
+      "duration": 20,
+      "_pace": { "start": 2.5, "end": 2.7777777777777777 }
+    },
+    {
+      "reps": 3,
+      "steps": [
+        {
+          "text": "Tempo",
+          "duration": 20,
+          "_pace": { "start": 3.3333333333333335, "end": 3.508771929824561 }
+        },
+        {
+          "text": "Recover",
+          "duration": 10,
+          "_pace": { "start": 2.5, "end": 2.7777777777777777 }
+        }
+      ]
+    },
+    {
+      "text": "Cool down",
+      "duration": 10,
+      "_pace": { "start": 2.2222222222222223, "end": 2.5 }
+    }
+  ]
+}
