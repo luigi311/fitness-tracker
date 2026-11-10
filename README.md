@@ -77,7 +77,7 @@ and tablet layouts. See [PR screenshot generation](docs/pr-ui-screenshots.md).
 ## Screenshots
 <p>
   <img src="docs/screenshots/tracker.png" width="360" alt="Tracker Page" />
-  <img src="docs/screenshots/freerun_running.png" width="360" alt="Freerun Trainer" />
+  <img src="docs/screenshots/freerun_running.png" width="360" alt="Running Free Run" />
 
   <img src="docs/screenshots/workout_running.png" width="360" alt="Workout Running" />
   <img src="docs/screenshots/workout_trainer.png" width="360" alt="Workout Trainer" />

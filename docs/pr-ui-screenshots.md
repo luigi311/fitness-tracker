@@ -121,4 +121,24 @@ The tests cover the matrix, artifact validation, same-repository and fork PR
 identity checks, stale runs, per-image and aggregate byte limits, comment image
 coverage, and local Git publication without network access or GitHub writes.
 
+## Refreshing documentation screenshots
+
+To replace the six documentation images, run the same native capture harness
+with its documentation preset:
+
+```sh
+dbus-run-session -- xvfb-run -a -s '-screen 0 1600x1600x24 -nolisten tcp' \
+  uv run --no-sync python scripts/ui_screenshots/capture.py \
+  --documentation --output docs/screenshots
+```
+
+This captures Tracker, a running Free Run, a running workout, a cycling trainer
+workout, History, and History comparison. Images use the existing filenames and
+the Librem 5 200% portrait viewport: 360×720 logical pixels, saved at 720×1440.
+They contain the application content without desktop or phone system bars, using
+the same isolated sample data and dark theme as PR captures. The documentation
+preset leaves the PR capture matrix unchanged. The README uses these files
+directly. AppStream image URLs remain pinned to the existing release and can be
+updated with the next release.
+
 [workflow-run]: https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#workflow_run

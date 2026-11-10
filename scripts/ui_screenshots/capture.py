@@ -28,6 +28,14 @@ if TYPE_CHECKING:
 MATRIX = json.loads(Path(__file__).with_name("matrix.json").read_text(encoding="utf-8"))
 ACTIVITY_COUNT = 2
 SAMPLE_SECONDS = tuple(range(0, 1201, 15))
+DOCUMENTATION_PAGES = {
+    "tracker": "tracker.png",
+    "free-run": "freerun_running.png",
+    "workout": "workout_running.png",
+    "workout-trainer": "workout_trainer.png",
+    "history": "history_average.png",
+    "history-comparison": "history_comparison.png",
+}
 
 
 def settle(seconds: float = 0.2) -> None:
@@ -103,7 +111,7 @@ def seed_data(app: FitnessAppUI) -> None:
         )
 
 
-def sample_session(app: FitnessAppUI, *, workout: bool) -> SessionView:
+def sample_session(app: FitnessAppUI, *, workout: bool, trainer: bool = False) -> SessionView:
     """Use production session construction and fixed live readings, without timers."""
     import numpy as np
     from fitness_tracker.core.environment import Environment
@@ -112,8 +120,8 @@ def sample_session(app: FitnessAppUI, *, workout: bool) -> SessionView:
     from fitness_tracker.core.sports import SportTypesEnum
 
     view = app.tracker._make_session_view(
-        SportTypesEnum.running,
-        Environment.INDOOR,
+        SportTypesEnum.biking if trainer else SportTypesEnum.running,
+        Environment.TRAINER if trainer else Environment.INDOOR,
         title="Tempo intervals" if workout else "Free Run",
         workout=workout,
     )
@@ -124,19 +132,21 @@ def sample_session(app: FitnessAppUI, *, workout: bool) -> SessionView:
     view.set_step_remaining_text("04:18")
     if workout and hasattr(view, "set_step_position"):
         view.set_step_position(5, 15)
-    view.set_target_text("Tempo · 4:45-5:00 /km")
+    view.set_target_text("Tempo · 200-230 W" if trainer else "Tempo · 4:45-5:00 /km")
     view.set_next_text("Next: Recover · 2 min")
     view.set_progress(0.47)
     view.set_statuses(SensorStatus(hr=True, speed=True, cadence=True, distance=True, power=True))
     view.set_metrics(
         bpm=158,
-        pace_mps=3.2,
+        pace_mps=8.2 if trainer else 3.2,
         cadence_spm=86,
-        speed_mps=3.2,
-        distance_m=3584,
-        power_watts=182,
+        speed_mps=8.2 if trainer else 3.2,
+        distance_m=9200 if trainer else 3584,
+        power_watts=215 if trainer else 182,
     )
-    if workout:
+    if trainer:
+        view.set_gauge_power(current_w=215, target_w_lo=200, target_w_mid=215, target_w_hi=230)
+    elif workout:
         view.set_gauge_pace(
             current_mps=3.2,
             current_pace_text="5:12",
@@ -188,8 +198,8 @@ def select_page(app: FitnessAppUI, page: str) -> None:
     from gi.repository import Adw
 
     app.stack.set_visible_child_name("tracker")
-    if page in {"workout", "free-run"}:
-        view = sample_session(app, workout=page == "workout")
+    if page in {"workout", "workout-trainer", "free-run"}:
+        view = sample_session(app, workout=page != "free-run", trainer=page == "workout-trainer")
         app.tracker.nav.push(Adw.NavigationPage.new(view, page))
     elif page in {"history", "history-comparison"}:
         app.stack.set_visible_child_name("history")
@@ -211,7 +221,13 @@ def select_page(app: FitnessAppUI, page: str) -> None:
         app.stack.set_visible_child_name("settings")
 
 
-def capture(output: Path, pages: list[str], viewports: list[dict]) -> None:
+def capture(
+    output: Path,
+    pages: list[str],
+    viewports: list[dict],
+    *,
+    documentation: bool = False,
+) -> None:
     """Render every selected page and allocation in the actual application shell."""
     import gi
 
@@ -261,10 +277,14 @@ def capture(output: Path, pages: list[str], viewports: list[dict]) -> None:
                 # focus so caret/selection state cannot create a false UI change.
                 app.window.set_focus(None)
                 settle(0.03)
-                destination = output / viewport["id"] / f"{page}.png"
+                destination = (
+                    output / DOCUMENTATION_PAGES[page]
+                    if documentation
+                    else output / viewport["id"] / f"{page}.png"
+                )
                 save_window(app.window, destination, viewport)
                 print(destination)
-            if page in {"workout", "free-run"}:
+            if page in {"workout", "workout-trainer", "free-run"}:
                 app.tracker.nav.pop()
                 settle()
     finally:
@@ -279,6 +299,11 @@ def main() -> None:
     """Parse optional local smoke-test selections and capture the matrix."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument(
+        "--documentation",
+        action="store_true",
+        help="Refresh the six README/AppStream images at 720x1440 (360x720 logical pixels).",
+    )
     parser.add_argument("--page", action="append", choices=[p["id"] for p in MATRIX["pages"]])
     parser.add_argument(
         "--viewport",
@@ -286,7 +311,13 @@ def main() -> None:
         choices=[v["id"] for v in MATRIX["viewports"]],
     )
     args = parser.parse_args()
+    if args.documentation and (args.page or args.viewport):
+        parser.error("--documentation captures a fixed set of pages and viewport")
     viewports = [v for v in MATRIX["viewports"] if not args.viewport or v["id"] in args.viewport]
+    pages = args.page or [p["id"] for p in MATRIX["pages"]]
+    if args.documentation:
+        pages = list(DOCUMENTATION_PAGES)
+        viewports = [v for v in MATRIX["viewports"] if v["id"] == "librem5-200-portrait"]
     with TemporaryDirectory(prefix="fitness-screenshot-data-") as directory:
         # Configure rendering before importing GTK or matplotlib, both of which
         # may otherwise read desktop preferences or the user's plotting config.
@@ -305,7 +336,7 @@ def main() -> None:
             MPLCONFIGDIR=f"{directory}/matplotlib",
         )
         time.tzset()
-        capture(args.output.resolve(), args.page or [p["id"] for p in MATRIX["pages"]], viewports)
+        capture(args.output.resolve(), pages, viewports, documentation=args.documentation)
 
 
 if __name__ == "__main__":
