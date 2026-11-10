@@ -1,4 +1,5 @@
 from datetime import date, datetime
+from importlib.resources import as_file, files
 from pathlib import Path
 
 from workout_parser import (
@@ -6,8 +7,10 @@ from workout_parser import (
     OpenDuration,
     TimeDuration,
     Workout,
+    load_workout,
 )
 
+from fitness_tracker.core.sports import SportTypesEnum
 from fitness_tracker.core.units import (
     DurationStyle,
     UnitSystem,
@@ -23,6 +26,17 @@ from fitness_tracker.workout_execution import WorkoutExecutionSnapshot
 
 AUTO_SUBDIRS = ("intervals_icu",)
 _WORKOUT_LOOKAHEAD_DAYS = 6
+_TEST_WORKOUT_FILES = {
+    SportTypesEnum.running: "tempo_intervals_running.json",
+    SportTypesEnum.biking: "tempo_intervals_cycling.json",
+}
+
+
+def load_test_workout(sport_type: SportTypesEnum) -> Workout:
+    """Load a bundled tempo workout without copying it into the user's library."""
+    resource = files("fitness_tracker.data").joinpath("workouts", _TEST_WORKOUT_FILES[sport_type])
+    with as_file(resource) as path:
+        return load_workout(path)
 
 
 def format_step_remaining(snapshot: WorkoutExecutionSnapshot, unit_system: UnitSystem) -> str:

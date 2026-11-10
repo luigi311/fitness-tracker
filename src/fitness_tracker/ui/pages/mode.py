@@ -11,7 +11,7 @@ from fitness_tracker.core.environment import Environment, EnvironmentSpec
 from fitness_tracker.core.layout import LayoutFamily
 from fitness_tracker.core.sports import SportTypesEnum
 from fitness_tracker.ui.layout import layout_frame, layout_owner
-from fitness_tracker.workouts import discover_workouts, format_workout_summary
+from fitness_tracker.workouts import discover_workouts, format_workout_summary, load_test_workout
 
 gi.require_versions({"Gtk": "4.0", "Adw": "1"})
 
@@ -236,6 +236,7 @@ class ModeSelectView(Gtk.Box):
         on_start_workout: Callable[..., None],
         *,
         unit_system: UnitSystem,
+        test_mode: bool = False,
     ) -> None:
         """Build adaptive sport, environment, and workout selection controls."""
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=0)
@@ -250,6 +251,7 @@ class ModeSelectView(Gtk.Box):
         self._workouts_running_dir = workouts_running_dir
         self._workouts_cycling_dir = workouts_cycling_dir
         self._unit_system = unit_system
+        self._test_mode = test_mode
 
         self._on_start_free = on_start_free
         self._on_start_workout = on_start_workout
@@ -451,6 +453,8 @@ class ModeSelectView(Gtk.Box):
                 continue
             self._entries.append((workout, sport))
 
+        self._add_test_workout()
+
         # clear all rows
         for row in list(self._list):
             self._list.remove(row)
@@ -495,6 +499,18 @@ class ModeSelectView(Gtk.Box):
             row.add_suffix(btn)
             row.set_activatable(False)
             self._list.append(row)
+
+    def _add_test_workout(self) -> None:
+        """Include the demo for either sport while preserving same-name user workouts."""
+        if not self._test_mode or self.sport_type not in {
+            SportTypesEnum.running,
+            SportTypesEnum.biking,
+        }:
+            return
+        workout = load_test_workout(self.sport_type)
+        if not any(existing.name == workout.name for existing, _ in self._entries):
+            sport = "run" if self.sport_type == SportTypesEnum.running else "cycle"
+            self._entries.append((workout, sport))
 
     # -----------------------------------------------------------------------
     # Signal handlers

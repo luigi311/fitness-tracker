@@ -1,0 +1,32 @@
+{
+  "name": "Tempo intervals",
+  "type": "Ride",
+  "description": "Two-minute test workout: warm up, three short tempo efforts with recovery, then cool down.",
+  "steps": [
+    {
+      "text": "Warm up",
+      "duration": 20,
+      "_power": { "start": 100, "end": 140 }
+    },
+    {
+      "reps": 3,
+      "steps": [
+        {
+          "text": "Tempo",
+          "duration": 20,
+          "_power": { "start": 200, "end": 230 }
+        },
+        {
+          "text": "Recover",
+          "duration": 10,
+          "_power": { "start": 100, "end": 130 }
+        }
+      ]
+    },
+    {
+      "text": "Cool down",
+      "duration": 10,
+      "_power": { "start": 80, "end": 100 }
+    }
+  ]
+}

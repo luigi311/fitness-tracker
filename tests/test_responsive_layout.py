@@ -714,6 +714,76 @@ def test_activity_setup_reflows_and_remains_accessible(app_stub, tmp_path, width
         settle()
 
 
+@pytest.mark.parametrize("sport_type", [SportTypesEnum.running, SportTypesEnum.biking])
+@pytest.mark.parametrize("test_mode", [False, True])
+def test_embedded_tempo_intervals_is_only_available_in_test_mode(
+    app_stub,
+    tmp_path,
+    sport_type,
+    test_mode,
+):
+    """Expose a playable bundled workout for either sport only in test mode."""
+    del app_stub
+    on_start = Mock()
+    view = ModeSelectView(
+        tmp_path / "running",
+        tmp_path / "cycling",
+        Mock(),
+        on_start,
+        unit_system=UnitSystem.METRIC,
+        test_mode=test_mode,
+    )
+    view.sport_type = sport_type
+    for _ in range(2):
+        view.refresh()
+        rows = list(view._list)
+        assert len(rows) == 1
+        assert rows[0].get_title() == ("Tempo intervals" if test_mode else "No workouts found")
+
+    assert not list(tmp_path.rglob("*.json"))
+    if test_mode:
+        button = next(
+            widget
+            for widget in descendants(rows[0], Gtk.Button)
+            if widget.get_label() == "Start Indoor"
+        )
+        button.emit("clicked")
+        on_start.assert_called_once_with(
+            view._entries[0][0],
+            sport_type=sport_type,
+            environment=Environment.INDOOR,
+        )
+
+
+@pytest.mark.parametrize("sport_type", [SportTypesEnum.running, SportTypesEnum.biking])
+def test_embedded_tempo_intervals_preserves_a_user_workout_with_the_same_name(
+    app_stub,
+    tmp_path,
+    sport_type,
+):
+    """Keep a user's workout and avoid duplicate bundled entries on refresh."""
+    del app_stub
+    (tmp_path / "custom.json").write_text(
+        json.dumps({"name": "Tempo intervals", "steps": [{"duration": 60}]}),
+        encoding="utf-8",
+    )
+    view = ModeSelectView(
+        tmp_path,
+        tmp_path,
+        Mock(),
+        Mock(),
+        unit_system=UnitSystem.METRIC,
+        test_mode=True,
+    )
+    view.sport_type = sport_type
+    for _ in range(2):
+        view.refresh()
+        rows = list(view._list)
+        assert len(rows) == 1
+        assert rows[0].get_title() == "Tempo intervals"
+        assert rows[0].get_subtitle() == "1 min"
+
+
 @pytest.mark.parametrize(
     ("width", "height", "visible_rows"),
     [(540, 620, 5), (620, 540, 4), (432, 496, 5), (496, 432, 4)],
@@ -958,6 +1028,15 @@ def shell_app(app_stub, monkeypatch, tmp_path):
         GLib.source_remove(app.tracker._status_timer_id)
         settings.set_property("gtk-enable-animations", animations)
         settle()
+
+
+def test_application_test_mode_includes_embedded_tempo_intervals_for_both_sports(shell_app):
+    """Forward the application's test flag to both sport libraries."""
+    view = shell_app.tracker.mode_view
+    for button in (view._btn_run, view._btn_cycle, view._btn_run):
+        button.set_active(True)
+        view.refresh()
+        assert [row.get_title() for row in view._list] == ["Tempo intervals"]
 
 
 @pytest.mark.parametrize("page", ["tracker", "history", "settings"])

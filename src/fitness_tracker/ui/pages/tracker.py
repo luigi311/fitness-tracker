@@ -146,6 +146,7 @@ class TrackerPageUI:
             on_start_free=self._show_free_from_mode,
             on_start_workout=self._start_workout,
             unit_system=self.app.unit_system,
+            test_mode=self.app.test_mode,
         )
         self.mode_page = Adw.NavigationPage.new(self.mode_view, "Choose Activity")
         nav.add(self.mode_page)
