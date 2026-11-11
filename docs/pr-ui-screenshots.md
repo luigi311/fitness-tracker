@@ -138,7 +138,7 @@ the Librem 5 200% portrait viewport: 360×720 logical pixels, saved at 720×1440
 They contain the application content without desktop or phone system bars, using
 the same isolated sample data and dark theme as PR captures. The documentation
 preset leaves the PR capture matrix unchanged. The README uses these files
-directly. AppStream image URLs remain pinned to the existing release and can be
-updated with the next release.
+directly. AppStream image URLs are pinned to `v6.1.0`. Update the tag when
+shipping new screenshots in a future release.
 
 [workflow-run]: https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#workflow_run
